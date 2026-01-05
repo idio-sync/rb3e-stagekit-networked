@@ -190,8 +190,8 @@ Stage Kit Event: Left=80 Right=80
 
 1. **RB3Enhanced**: Verify `EnableEvents=true` and `SendStagekit=true`
 2. **Serial Debug**: Look for "Stage Kit Event" messages
-3. **USB Connection**: Ensure Stage Kit is properly connected
-4. **Power**: Stage Kit may need more current than supplied
+3. **USB Connection**: Ensure Stage Kit light is properly connected
+4. **Power**: Stage Kit light may need more current than supplied
 
 ### Power Issues
 
@@ -214,10 +214,11 @@ Edit `main.cpp`:
 
 ### Multiple Stage Kits
 
-Current implementation supports one Stage Kit. For multiple:
+Current implementation supports one Stage Kit light per Pi Pico. For multiple:
 1. Modify `CFG_TUH_DEVICE_MAX` in `tusb_config.h`
 2. Track multiple device addresses in main loop
 3. Duplicate HID report sending for each device
+4. Use powered USB hub past 1st device so others get adequate power
 
 ### Power Monitoring
 
