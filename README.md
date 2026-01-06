@@ -11,13 +11,13 @@ This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It
 - Status Feedback: Onboard LED indicates connection status and heartbeat.
 - Dashboard Ready: Broadcasts telemetry for remote monitoring via a PC dashboard.
 
-# Hardware Requirements
+## Hardware Requirements
 - Raspberry Pi Pico W or Pico 2 W
 - Santroller-modded Stage Kit (Fatsco edition)
 - USB OTG Cable (Micro-USB to USB-A Female)
 - Power Supply: 5V 2A power supply recommended (connected via VBUS/Pin 40 on the Pico). Note: External power from a powered USB hub is highly recommended for maximum brightness.
 
-# Installation
+## Installation
 1. Prepare the Pico
 - Download the latest CircuitPython .uf2 file for your specific board (Pico W or Pico 2 W) from circuitpython.org.
 - Hold the BOOTSEL button on your Pico while plugging it into your computer.
@@ -39,7 +39,7 @@ WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 - Power on the Pico (and external power if used).
 - The Pico will automatically boot, connect to WiFi, and initialize the Stage Kit.
 
-# LED Status Codes
+## LED Status Codes
 
 The onboard LED on the Pico provides visual feedback:
 LED Pattern	Status
@@ -48,10 +48,9 @@ Triple Blink	Stage Kit USB Device Found
 Slow Blink (Heartbeat)	Online & Ready (Blinks every 2s)
 Solid Off	Power Off / Error
 
-# Desktop Dashboard (Optional)
+## Desktop Dashboard (Optional)
 
 Included in this repository is dashboard.py, a Python GUI for Windows/Linux/Mac that allows you to:
-
 - Auto-detect all Picos on the network.
 - Monitor signal strength (RSSI) and USB status.
 - Manually trigger Fog, Strobe, and Lights for testing.
@@ -61,7 +60,7 @@ To run the dashboard:
 - Run pip install tk (usually included with Python).
 - Launch with: python dashboard.py
 
-# Advanced Configuration
+### Advanced Configuration
 
 You can tweak the following variables at the top of code.py:
 - UDP_LISTEN_PORT: Default 21070 (Standard RB3E port).
