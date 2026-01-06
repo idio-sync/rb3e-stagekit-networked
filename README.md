@@ -1,5 +1,4 @@
 Raspberry Pi Pico W 2 - Stage Kit Controller
-CircuitPython version
 
 Receives lighting commands via WiFi (RB3Enhanced UDP packets)
 Controls Fatsco (Santroller) Stage Kit lights via USB
