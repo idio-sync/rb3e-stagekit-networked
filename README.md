@@ -1,7 +1,6 @@
 Raspberry Pi Pico W Fatsco Rock Band Stage Kit Controller
 
-Receives lighting commands via WiFi (RB3Enhanced UDP packets)
-Controls Fatsco (Santroller) Stage Kit lights via USB
+Receives lighting commands via WiFi (RB3Enhanced UDP packets) and controls Fatsco (Santroller) stage kit lights via USB
 
 Installation:
 1. Download CircuitPython for Pico W 2 from circuitpython.org
