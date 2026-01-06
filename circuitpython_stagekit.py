@@ -4,6 +4,7 @@ import time
 import struct
 import supervisor
 import microcontroller
+import gc
 
 # WiFi and networking
 import wifi
@@ -31,7 +32,7 @@ WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
 UDP_LISTEN_PORT = 21070  # RB3Enhanced default port
 SOURCE_IP_FILTER = None  # Set to specific IP string to filter, or None for any
 
-# Stage Kit USB IDs
+# Stage Kit USB IDs - can add more if needed
 SANTROLLER_VID = 0x1209
 SANTROLLER_PID = 0x2882
 SANTROLLER_STAGEKIT_BCD = 0x0900
@@ -55,7 +56,7 @@ SK_LED_RED = 0x80
 SK_ALL_OFF = 0xFF
 
 # Debug Settings
-DEBUG = True  # Set False to reduce serial output
+DEBUG = False  # Keeping disabled reduces response time of lighting
 
 # =============================================================================
 # Helper Functions
@@ -457,6 +458,9 @@ def main():
                         print("⚠ Failed to send command - Stage Kit disconnected?")
                 else:
                     debug_print("Stage Kit not connected - ignoring command")
+                    # If NO packet was received, do garbage collection now
+                    # This ensures the pause happens when nothing is happening
+                    gc.collect()
             
             # Small delay to prevent CPU spinning
             time.sleep(0.001)  # 1ms
