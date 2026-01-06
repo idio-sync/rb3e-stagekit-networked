@@ -5,6 +5,7 @@ import struct
 import supervisor
 import microcontroller
 import gc
+import json
 
 # WiFi and networking
 import wifi
@@ -27,6 +28,10 @@ except ImportError:
 # WiFi Settings
 WIFI_SSID = "YOUR_NETWORK_NAME"
 WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
+
+# Dashboard
+DASHBOARD_IP = "255.255.255.255"  # Broadcast address (sends to everyone on network)
+DASHBOARD_PORT = 21071
 
 # Network Settings
 UDP_LISTEN_PORT = 21070  # RB3Enhanced default port
@@ -79,6 +84,28 @@ def blink_led(times=3, delay=0.2):
         time.sleep(delay)
     
     led.deinit()
+
+def send_telemetry(socket, stage_kit_connected, wifi_rssi):
+    """Broadcasts status to the entire network"""
+    # Create a unique ID based on the MAC address so the dashboard can tell Picos apart
+    mac_id = get_mac_address()
+    
+    status = {
+        "id": mac_id,
+        "name": f"Pico {mac_id[-5:]}", # Friendly name like "Pico ab:12"
+        "usb_status": "Connected" if stage_kit_connected else "Disconnected",
+        "wifi_signal": wifi_rssi,
+        "uptime": time.monotonic()
+    }
+    
+    payload = json.dumps(status).encode('utf-8')
+    
+    try:
+        # Send to broadcast address
+        socket.sendto(payload, (DASHBOARD_IP, DASHBOARD_PORT))
+    except Exception as e:
+        # Broadcasts can sometimes fail if wifi is busy, safe to ignore
+        pass
 
 def get_mac_address():
     """Get MAC address for identification"""
@@ -437,6 +464,12 @@ def main():
                 # Print stats if debug enabled
                 if DEBUG:
                     network.print_stats()
+            
+            # Dashboard telemetry
+            if current_time - last_telemetry_time > 1.0: # Send every 1 second
+                rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
+                send_telemetry(network.socket, stage_kit.connected, rssi)
+                last_telemetry_time = current_time
             
             # Try to reconnect Stage Kit if disconnected
             if not stage_kit.connected:
