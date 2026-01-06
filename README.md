@@ -1,4 +1,4 @@
-### Raspberry Pi Pico W Rock Band Stage Kit Controller
+### Rock Band Networked Stage Kit Controller
 
 This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It listens for lighting commands over WiFi (from Rock Band 3 Enhanced via UDP) and translates them into USB commands for the Fatsco (Santroller) Stage Kit lights, effectively turning a wired Stage Kit light into a wireless networked device.
 
@@ -13,8 +13,8 @@ This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It
 
 ## Hardware Requirements
 - Raspberry Pi Pico W or Pico 2 W
-- Santroller-modded Stage Kit (Fatsco edition)
-- USB OTG Cable (Micro-USB to USB-A Female)
+- Fatsco Stage Kit light (strobe or LED array)
+- USB OTG Cable (Micro-USB to Micro-USB)
 - Power Supply: 5V 2A power supply recommended (connected via VBUS/Pin 40 on the Pico). Note: External power from a powered USB hub is highly recommended for maximum brightness.
 
 ## Installation
