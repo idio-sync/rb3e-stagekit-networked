@@ -464,6 +464,13 @@ def main():
             
             # Small delay to prevent CPU spinning
             time.sleep(0.001)  # 1ms
+
+    # Turn off lights if no data is being recieved
+    current_time = time.monotonic()
+    if current_time - last_packet_time > 5.0 and lights_are_active:
+        print("No data received for 5s - Safety clearing lights")
+        stage_kit.send_command(0x00, SK_ALL_OFF)
+        lights_are_active = False
     
     except KeyboardInterrupt:
         print("\n\nShutting down...")
