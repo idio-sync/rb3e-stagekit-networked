@@ -57,10 +57,9 @@ Included in this repository is dashboard.py, a Python GUI for Windows/Linux/Mac 
 - Manually trigger Fog, Strobe, and Lights for testing.
 
 To run the dashboard:
-
-    Install Python 3 on your computer.
-    Run pip install tk (usually included with Python).
-    Launch with: python dashboard.py
+- Install Python 3 on your computer.
+- Run pip install tk (usually included with Python).
+- Launch with: python dashboard.py
 
 Advanced Configuration
 
