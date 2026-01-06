@@ -25,9 +25,10 @@ This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It
 - The Pico will reboot and reappear as a drive named CIRCUITPY.
 
 2. Install the Code
-- Download the code.py file from this repository.
-- Open code.py in a text editor.
+- Download the circuitpython_stagekit.py file from this repository.
+- Open circuitpython_stagekit.py in a text editor.
 - Configure your WiFi (`WIFI_SSID/WIFI_PASSWORD`)
+- save as code.py
 - Save the file directly to the root of the CIRCUITPY drive.
 
 3. Connect Hardware
