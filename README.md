@@ -27,7 +27,7 @@ This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It
 2. Install the Code
 - Download the code.py file from this repository.
 - Open code.py in a text editor.
-- Configure your WiFi (WIFI_SSID/WIFI_PASSWORD)
+- Configure your WiFi (`WIFI_SSID/WIFI_PASSWORD`)
 - Save the file directly to the root of the CIRCUITPY drive.
 
 3. Connect Hardware
@@ -58,9 +58,9 @@ To run the dashboard:
 ### Advanced Configuration
 
 You can tweak the following variables at the top of code.py:
-- UDP_LISTEN_PORT: Default 21070 (Standard RB3E port).
-- SOURCE_IP_FILTER: Set to your PC's IP to ignore packets from other sources (Default: None).
-- DEBUG: Set to True to enable serial printing (impacts performance).
+- `UDP_LISTEN_PORT`: Default 21070 (Standard RB3E port).
+- `SOURCE_IP_FILTER`: Set to your PC's IP to ignore packets from other sources (Default: None).
+- `DEBUG`: Set to True to enable serial printing (impacts performance).
 
 Thanks:
 - TheFatBastid for the stage kit lights and his modified [fork of StageKitPied](https://github.com/TheFatBastid/StageKitPied)
