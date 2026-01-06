@@ -42,11 +42,10 @@ WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 ## LED Status Codes
 
 The onboard LED on the Pico provides visual feedback:
-LED Pattern	Status
-Fast Blinking	Connecting to WiFi...
-Triple Blink	Stage Kit USB Device Found
-Slow Blink (Heartbeat)	Online & Ready (Blinks every 2s)
-Solid Off	Power Off / Error
+- Fast Blinking: Connecting to WiFi...
+- Triple Blink: Stage Kit USB Device Found
+- Slow Blink (Heartbeat):	Online & Ready (Blinks every 2s)
+- Solid Off:	Power Off / Error
 
 ## Desktop Dashboard (Optional)
 
