@@ -79,9 +79,14 @@ class StageKitDashboard:
 
         # Basic Colors
         ttk.Label(main_frame, text="Full Color:").grid(row=2, column=0, sticky="e")
-        ttk.Button(main_frame, text="Blue", command=lambda: self.send_cmd(0xFF, 0x20)).grid(row=2, column=1, **btn_opts)
+
+        ttk.Button(main_frame, text="Green", command=lambda: self.send_cmd(0xFF, 0x40)).grid(row=2, column=1, **btn_opts)
         ttk.Button(main_frame, text="Red", command=lambda: self.send_cmd(0xFF, 0x80)).grid(row=2, column=2, **btn_opts)
-        ttk.Button(main_frame, text="ALL OFF", command=lambda: self.send_cmd(0x00, 0xFF)).grid(row=2, column=3, **btn_opts)
+        ttk.Button(main_frame, text="Blue", command=lambda: self.send_cmd(0xFF, 0x20)).grid(row=2, column=3, **btn_opts)
+        ttk.Button(main_frame, text="Yellow", command=lambda: self.send_cmd(0xFF, 0x60)).grid(row=2, column=4, **btn_opts)
+        
+        # Moved OFF to a new row or end of list
+        ttk.Button(main_frame, text="ALL OFF", command=lambda: self.send_cmd(0x00, 0xFF)).grid(row=2, column=5, **btn_opts)
 
         # === TAB 2: ADVANCED LED SEQUENCER ===
         tab_leds = ttk.Frame(tab_control)
