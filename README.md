@@ -1,4 +1,4 @@
-Raspberry Pi Pico W 2 - Stage Kit Controller
+Raspberry Pi Pico W Fatsco Rock Band Stage Kit Controller
 
 Receives lighting commands via WiFi (RB3Enhanced UDP packets)
 Controls Fatsco (Santroller) Stage Kit lights via USB
@@ -12,6 +12,6 @@ Installation:
 6. Pico will auto-reboot and start running
 
 Hardware:
-- Raspberry Pi Pico W 2
+- Raspberry Pi Pico W or W 2
 - 5V 2A power supply via VBUS (Pin 40) or micro USB
 - Santroller Stage Kit via USB OTG
