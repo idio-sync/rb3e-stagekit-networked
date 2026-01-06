@@ -411,6 +411,21 @@ def main():
     try:
         while True:
             current_time = time.monotonic()
+
+            # Check WiFi status
+            if not wifi.radio.connected:
+                print("⚠ WiFi lost! Reconnecting...")
+                # Attempt reconnect logic here (similar to connect_wifi)
+                # You may need to re-initialize the UDP socket after reconnecting
+                continue
+            
+            try:
+                packet_data = network.receive_packet()
+            except OSError as e:
+                # If the socket dies (e.g. erratic wifi), try to restart the listener
+                print(f"Socket error: {e}")
+                network.start() 
+                continue
             
             # Heartbeat LED (blink every 2 seconds to show it's alive)
             if current_time - last_status_print > 2.0:
