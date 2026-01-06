@@ -27,11 +27,7 @@ This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It
 2. Install the Code
 - Download the code.py file from this repository.
 - Open code.py in a text editor.
-- Configure your WiFi
-'''
-WIFI_SSID = "YOUR_WIFI_NAME"
-WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
-'''
+- Configure your WiFi (WIFI_SSID/WIFI_PASSWORD)
 - Save the file directly to the root of the CIRCUITPY drive.
 
 3. Connect Hardware
