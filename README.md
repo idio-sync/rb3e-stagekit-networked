@@ -14,3 +14,9 @@ Hardware:
 - Raspberry Pi Pico W or W 2
 - 5V 2A power supply via VBUS (Pin 40) or micro USB
 - Santroller Stage Kit via USB OTG
+
+Thanks:
+- TheFatBastid for the stage kit lights and his modified [fork of StageKitPied](https://github.com/TheFatBastid/StageKitPied)
+- Blasteroids for the original [StageKitPied](https://github.com/Blasteroids/StageKitPied) code
+- Everyone involved with [RB3Enhanced}(https://github.com/RBEnhanced/RB3Enhanced)
+- Harmonix (rip to a real one)
