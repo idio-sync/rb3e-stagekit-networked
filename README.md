@@ -1,19 +1,104 @@
-Raspberry Pi Pico W Fatsco Rock Band Stage Kit Controller
+Raspberry Pi Pico W Stage Kit Controller
 
-Receives lighting commands via WiFi (RB3Enhanced UDP packets) and controls Fatsco (Santroller) stage kit lights via USB
+This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It listens for lighting commands over WiFi (via UDP) and translates them into USB commands for the Fatsco (Santroller) Stage Kit lights, effectively turning your wired Stage Kit into a wireless networked device.
 
-Installation:
-1. Download CircuitPython for Pico W 2 from circuitpython.org
-2. Flash .uf2 file to Pico (hold BOOTSEL, drag file)
-3. Update WIFI_SSID and WIFI_PASSWORD in python file
-4. Edit the python file and save as code.py on CIRCUITPY drive
-5. Connect Stage Kit to Pico via USB OTG
-6. Pico will auto-reboot and start running
+Features
 
-Hardware:
-- Raspberry Pi Pico W or W 2
-- 5V 2A power supply via VBUS (Pin 40) or micro USB
-- Santroller Stage Kit via USB OTG
+    Wireless Control: Receives lighting data via standard RB3Enhanced UDP packets.
+
+    Santroller Support: Specifically designed for the Fatsco/Santroller custom USB protocol (0x1209/0x2882).
+
+    Full Effects: Supports Fog, Strobe, and all LED color arrays.
+
+    Auto-Reconnect: Automatically attempts to reconnect if WiFi or USB is disconnected.
+
+    Status Feedback: Onboard LED indicates connection status and heartbeat.
+
+    Dashboard Ready: Broadcasts telemetry for remote monitoring via a PC dashboard.
+
+Hardware Requirements
+
+    Raspberry Pi Pico W or Pico 2 W
+
+    Santroller-modded Stage Kit (Fatsco edition)
+
+    USB OTG Cable (Micro-USB to USB-A Female)
+
+    Power Supply:
+
+        5V 2A power supply recommended (connected via VBUS/Pin 40).
+
+        Note: The Pico W cannot power the Stage Kit solely from its micro-USB port if the Fog Machine is active. External power is highly recommended.
+
+Installation
+1. Prepare the Pico
+
+    Download the latest CircuitPython .uf2 file for your specific board (Pico W or Pico 2 W) from circuitpython.org.
+
+    Hold the BOOTSEL button on your Pico while plugging it into your computer.
+
+    Drag and drop the .uf2 file onto the RPI-RP2 drive that appears.
+
+    The Pico will reboot and reappear as a drive named CIRCUITPY.
+
+2. Install the Code
+
+    Download the code.py file from this repository.
+
+    Open code.py in a text editor.
+
+    Configure your WiFi:
+    Python
+
+    WIFI_SSID = "YOUR_WIFI_NAME"
+    WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
+
+    Save the file directly to the root of the CIRCUITPY drive.
+
+3. Connect Hardware
+
+    Connect the Stage Kit to the Pico's micro-USB port using the OTG adapter.
+
+    Power on the Pico (and external power if used).
+
+    The Pico will automatically boot, connect to WiFi, and initialize the Stage Kit.
+
+LED Status Codes
+
+The onboard LED on the Pico provides visual feedback:
+LED Pattern	Status
+Fast Blinking	Connecting to WiFi...
+Triple Blink	Stage Kit USB Device Found
+Slow Blink (Heartbeat)	Online & Ready (Blinks every 2s)
+Solid Off	Power Off / Error
+
+Desktop Dashboard (Optional)
+
+Included in this repository is dashboard.py, a Python GUI for Windows/Linux/Mac that allows you to:
+
+    Auto-detect all Picos on the network.
+
+    Monitor signal strength (RSSI) and USB status.
+
+    Manually trigger Fog, Strobe, and Lights for testing.
+
+To run the dashboard:
+
+    Install Python 3 on your computer.
+
+    Run pip install tk (usually included with Python).
+
+    Launch with: python dashboard.py
+
+Advanced Configuration
+
+You can tweak the following variables at the top of code.py:
+
+    UDP_LISTEN_PORT: Default 21070 (Standard RB3E port).
+
+    SOURCE_IP_FILTER: Set to your PC's IP to ignore packets from other sources (Default: None).
+
+    DEBUG: Set to False to disable serial printing (improves performance).
 
 Thanks:
 - TheFatBastid for the stage kit lights and his modified [fork of StageKitPied](https://github.com/TheFatBastid/StageKitPied)
