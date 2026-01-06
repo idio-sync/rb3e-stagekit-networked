@@ -1,8 +1,8 @@
-Raspberry Pi Pico W Stage Kit Controller
+### Raspberry Pi Pico W Stage Kit Controller
 
 This project runs on a Raspberry Pi Pico W (or Pico 2 W) using CircuitPython. It listens for lighting commands over WiFi (via UDP) and translates them into USB commands for the Fatsco (Santroller) Stage Kit lights, effectively turning your wired Stage Kit into a wireless networked device.
 
-Features
+## Features
 
 - Wireless Control: Receives lighting data via standard RB3Enhanced UDP packets.
 - Santroller Support: Specifically designed for the Fatsco/Santroller custom USB protocol (0x1209/0x2882).
@@ -11,13 +11,13 @@ Features
 - Status Feedback: Onboard LED indicates connection status and heartbeat.
 - Dashboard Ready: Broadcasts telemetry for remote monitoring via a PC dashboard.
 
-Hardware Requirements
--Raspberry Pi Pico W or Pico 2 W
+# Hardware Requirements
+- Raspberry Pi Pico W or Pico 2 W
 - Santroller-modded Stage Kit (Fatsco edition)
 - USB OTG Cable (Micro-USB to USB-A Female)
-- Power Supply: 5V 2A power supply recommended (connected via VBUS/Pin 40). Note: The Pico W cannot power the Stage Kit solely from its micro-USB port if the Fog Machine is active. External power is highly recommended.
+- Power Supply: 5V 2A power supply recommended (connected via VBUS/Pin 40 on the Pico). Note: External power from a powered USB hub is highly recommended for maximum brightness.
 
-Installation
+# Installation
 1. Prepare the Pico
 - Download the latest CircuitPython .uf2 file for your specific board (Pico W or Pico 2 W) from circuitpython.org.
 - Hold the BOOTSEL button on your Pico while plugging it into your computer.
@@ -39,7 +39,7 @@ WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 - Power on the Pico (and external power if used).
 - The Pico will automatically boot, connect to WiFi, and initialize the Stage Kit.
 
-LED Status Codes
+# LED Status Codes
 
 The onboard LED on the Pico provides visual feedback:
 LED Pattern	Status
@@ -48,7 +48,7 @@ Triple Blink	Stage Kit USB Device Found
 Slow Blink (Heartbeat)	Online & Ready (Blinks every 2s)
 Solid Off	Power Off / Error
 
-Desktop Dashboard (Optional)
+# Desktop Dashboard (Optional)
 
 Included in this repository is dashboard.py, a Python GUI for Windows/Linux/Mac that allows you to:
 
@@ -61,7 +61,7 @@ To run the dashboard:
 - Run pip install tk (usually included with Python).
 - Launch with: python dashboard.py
 
-Advanced Configuration
+# Advanced Configuration
 
 You can tweak the following variables at the top of code.py:
 - UDP_LISTEN_PORT: Default 21070 (Standard RB3E port).
