@@ -30,6 +30,7 @@ import os
 import sys
 import webbrowser
 import ctypes
+from collections import deque
 from typing import Optional, Tuple, Dict
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -563,7 +564,7 @@ class VLCPlayer:
     def __init__(self, gui_callback=None, song_database=None):
         self.vlc_path = self.find_vlc()
         self.current_process = None
-        self.played_videos = set()
+        self.played_videos = deque(maxlen=10)  # FIFO cache of recent video IDs
         self.gui_callback = gui_callback
         self.song_database = song_database
 
@@ -581,7 +582,7 @@ class VLCPlayer:
         try:
             subprocess.run(["vlc", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
             return "vlc"
-        except:
+        except Exception:
             pass
 
         for path in possible_paths:
@@ -600,7 +601,7 @@ class VLCPlayer:
                     self.gui_callback("VLC stopped")
             except subprocess.TimeoutExpired:
                 self.current_process.kill()
-            except:
+            except Exception:
                 pass
             finally:
                 self.current_process = None
@@ -671,9 +672,7 @@ class VLCPlayer:
                 vlc_cmd = [self.vlc_path, video_url]
                 self.current_process = subprocess.Popen(vlc_cmd)
 
-            self.played_videos.add(video_id)
-            if len(self.played_videos) > 10:
-                self.played_videos.pop()
+            self.played_videos.append(video_id)  # deque auto-removes oldest when full
 
             if self.gui_callback:
                 self.gui_callback(f"Playing: {artist} - {song}")
@@ -1276,7 +1275,7 @@ class AlbumArtManager:
 
             try:
                 draw.text((self.image_size[0]//2-5, self.image_size[1]//2-8), '?', fill='#666666')
-            except:
+            except Exception:
                 pass
 
             self.placeholder_image = ImageTk.PhotoImage(img)
@@ -1333,7 +1332,7 @@ class AlbumArtManager:
         except Exception:
             try:
                 os.remove(filepath)
-            except:
+            except Exception:
                 pass
             return None
 
@@ -1593,8 +1592,8 @@ class UnifiedRB3EListener:
             elif packet_type == RB3E_EVENT_STAGEKIT:
                 # Forward to Stage Kit handler
                 if self.stagekit_callback and len(data) >= 10:
-                    left_weight = data[8] if len(data) > 8 else 0
-                    right_weight = data[9] if len(data) > 9 else 0
+                    left_weight = data[8]
+                    right_weight = data[9]
                     self.stagekit_callback(left_weight, right_weight)
 
         except Exception as e:
@@ -1685,8 +1684,18 @@ class UnifiedRB3EListener:
         if delay > 0:
             if self.gui_callback:
                 self.gui_callback(f"Waiting {delay}s before starting video...")
-            time.sleep(delay)
+            # Use threading.Timer to avoid blocking the listener thread
+            timer = threading.Timer(delay, self._play_video_now,
+                                   args=(stream_url, video_id, artist, song, shortname))
+            timer.daemon = True
+            timer.start()
+        else:
+            self._play_video_now(stream_url, video_id, artist, song, shortname)
 
+    def _play_video_now(self, stream_url, video_id, artist, song, shortname):
+        """Actually play the video (called after delay if any)"""
+        if not self.vlc_player or not self.running:
+            return
         self.vlc_player.play_video(stream_url, video_id, artist, song,
                                    self.video_settings, shortname)
         self.pending_video = None
@@ -1767,6 +1776,7 @@ class RB3Dashboard:
             gui_callback=None  # Set later after log_message is available
         )
         self.scrobbler.enabled = self.settings.get('scrobble_enabled', False)
+        self.scrobble_timer_id = None  # Track scheduled scrobble to allow cancellation
 
         # Discord Rich Presence
         self.discord_presence = DiscordPresence(
@@ -2391,7 +2401,7 @@ class RB3Dashboard:
             try:
                 dt = datetime.fromisoformat(entry['timestamp'])
                 time_str = dt.strftime('%H:%M:%S')
-            except:
+            except Exception:
                 time_str = entry['timestamp'][:8]
 
             tag = 'oddrow' if i % 2 == 0 else 'evenrow'
@@ -2722,7 +2732,7 @@ class RB3Dashboard:
         """Get the index of the selected monitor (0 = primary/default)"""
         try:
             return self.monitor_combo.current()
-        except:
+        except Exception:
             return 0
 
     def on_song_update(self, song, artist):
@@ -2730,10 +2740,17 @@ class RB3Dashboard:
         self.root.after(0, lambda: self.song_var.set(song if song else "Waiting for game..."))
         self.root.after(0, lambda: self.artist_var.set(artist if artist else ""))
 
-        # Clear Discord presence when returning to menu (empty song/artist)
+        # Clear Discord presence and cancel pending scrobble when returning to menu
         if not song and not artist:
             if self.discord_presence and self.discord_presence.enabled:
                 self.discord_presence.clear_presence()
+            # Cancel any pending scrobble (song ended early)
+            if self.scrobble_timer_id:
+                try:
+                    self.root.after_cancel(self.scrobble_timer_id)
+                except Exception:
+                    pass
+                self.scrobble_timer_id = None
 
     def on_song_started(self, artist, song, shortname):
         """Called when a song actually starts playing (game state 0->1)"""
@@ -2757,6 +2774,14 @@ class RB3Dashboard:
         if self.scrobbler and self.scrobbler.enabled:
             self.scrobbler.update_now_playing(artist, song)
 
+            # Cancel any existing scrobble timer from previous song
+            if self.scrobble_timer_id:
+                try:
+                    self.root.after_cancel(self.scrobble_timer_id)
+                except Exception:
+                    pass
+                self.scrobble_timer_id = None
+
             # Schedule scrobble after appropriate time (4 min or 50%)
             duration = 0
             if self.song_database:
@@ -2767,9 +2792,11 @@ class RB3Dashboard:
             else:
                 scrobble_time = 240  # Default to 4 minutes
 
-            # Schedule the scrobble (convert to milliseconds)
-            self.root.after(int(scrobble_time * 1000),
-                           lambda a=artist, s=song: self._do_scrobble(a, s))
+            # Schedule the scrobble (convert to milliseconds) and store ID for cancellation
+            self.scrobble_timer_id = self.root.after(
+                int(scrobble_time * 1000),
+                lambda a=artist, s=song: self._do_scrobble(a, s)
+            )
 
         # Discord Rich Presence - update now playing
         if self.discord_presence and self.discord_presence.enabled:
