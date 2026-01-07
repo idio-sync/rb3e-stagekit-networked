@@ -1021,10 +1021,14 @@ class LastFmScrobbler:
 # =============================================================================
 
 class DiscordPresence:
-    """Discord Rich Presence integration"""
+    """Discord Rich Presence integration with auto-reconnect"""
 
     # Default Discord Application ID (users can create their own)
     DEFAULT_CLIENT_ID = "1234567890123456789"  # Placeholder - user should set their own
+
+    # Reconnection settings
+    MAX_RECONNECT_ATTEMPTS = 5
+    RECONNECT_DELAYS = [5, 10, 30, 60, 120]  # Backoff delays in seconds
 
     def __init__(self, client_id: str = None, gui_callback=None):
         self.client_id = client_id or self.DEFAULT_CLIENT_ID
@@ -1035,6 +1039,10 @@ class DiscordPresence:
         self.current_song = None
         self.current_artist = None
         self.start_time = None
+        # Reconnection state
+        self.reconnect_attempts = 0
+        self.last_reconnect_time = 0
+        self.reconnecting = False
 
     def connect(self) -> bool:
         """Connect to Discord"""
@@ -1052,14 +1060,86 @@ class DiscordPresence:
             self.rpc = Presence(self.client_id)
             self.rpc.connect()
             self.connected = True
+            self.reconnect_attempts = 0  # Reset on successful connection
             if self.gui_callback:
                 self.gui_callback("Discord Rich Presence connected")
             return True
         except Exception as e:
             self.connected = False
+            self.rpc = None
             if self.gui_callback:
                 self.gui_callback(f"Discord connection failed: {e}")
             return False
+
+    def _try_reconnect(self) -> bool:
+        """Attempt to reconnect to Discord with backoff"""
+        if self.reconnecting:
+            return False
+
+        if self.reconnect_attempts >= self.MAX_RECONNECT_ATTEMPTS:
+            # Check if enough time has passed to reset attempts
+            if time.time() - self.last_reconnect_time > 300:  # 5 minutes
+                self.reconnect_attempts = 0
+            else:
+                return False
+
+        # Check backoff delay
+        delay_index = min(self.reconnect_attempts, len(self.RECONNECT_DELAYS) - 1)
+        required_delay = self.RECONNECT_DELAYS[delay_index]
+        if time.time() - self.last_reconnect_time < required_delay:
+            return False
+
+        self.reconnecting = True
+        self.last_reconnect_time = time.time()
+        self.reconnect_attempts += 1
+
+        if self.gui_callback:
+            self.gui_callback(f"Discord: Attempting reconnect ({self.reconnect_attempts}/{self.MAX_RECONNECT_ATTEMPTS})...")
+
+        # Clean up old connection
+        if self.rpc:
+            try:
+                self.rpc.close()
+            except Exception:
+                pass
+            self.rpc = None
+
+        try:
+            self.rpc = Presence(self.client_id)
+            self.rpc.connect()
+            self.connected = True
+            self.reconnect_attempts = 0
+            self.reconnecting = False
+            if self.gui_callback:
+                self.gui_callback("Discord: Reconnected successfully")
+            # Restore presence if we had one
+            self._restore_presence()
+            return True
+        except Exception as e:
+            self.connected = False
+            self.rpc = None
+            self.reconnecting = False
+            if self.gui_callback:
+                self.gui_callback(f"Discord: Reconnect failed - {e}")
+            return False
+
+    def _restore_presence(self):
+        """Restore the last known presence after reconnection"""
+        if not self.connected or not self.rpc:
+            return
+        if self.current_song and self.current_artist:
+            try:
+                details = f"{self.current_song}"[:128]
+                state_text = f"by {self.current_artist}"[:128]
+                self.rpc.update(
+                    details=details,
+                    state=state_text,
+                    large_image="rb3",
+                    large_text="Rock Band 3",
+                    start=int(self.start_time) if self.start_time else None
+                )
+            except Exception:
+                pass
 
     def disconnect(self):
         """Disconnect from Discord"""
@@ -1076,14 +1156,21 @@ class DiscordPresence:
 
     def update_presence(self, artist: str, song: str, state: str = "Playing"):
         """Update Discord presence with current song"""
-        if not self.enabled or not self.connected or not self.rpc:
+        if not self.enabled:
             return
 
-        try:
-            self.current_artist = artist
-            self.current_song = song
-            self.start_time = time.time()
+        # Store the info even if not connected (for restore after reconnect)
+        self.current_artist = artist
+        self.current_song = song
+        self.start_time = time.time()
 
+        # Try to reconnect if not connected
+        if not self.connected or not self.rpc:
+            self._try_reconnect()
+            if not self.connected:
+                return
+
+        try:
             # Truncate if too long (Discord limits)
             details = f"{song}"[:128] if song else "Unknown Song"
             state_text = f"by {artist}"[:128] if artist else state
@@ -1100,26 +1187,38 @@ class DiscordPresence:
                 self.gui_callback(f"Discord: Now playing - {artist} - {song}")
 
         except Exception as e:
+            self.connected = False
             if self.gui_callback:
                 self.gui_callback(f"Discord update failed: {e}")
+            # Schedule reconnect attempt
+            self._try_reconnect()
 
     def clear_presence(self):
         """Clear Discord presence (when returning to menu)"""
+        # Clear stored state regardless of connection
+        self.current_song = None
+        self.current_artist = None
+        self.start_time = None
+
         if not self.connected or not self.rpc:
             return
 
         try:
             self.rpc.clear()
-            self.current_song = None
-            self.current_artist = None
-            self.start_time = None
         except Exception:
-            pass
+            self.connected = False
+            # Don't try to reconnect just to clear - will reconnect on next update
 
     def set_idle(self):
         """Set presence to idle/browsing state"""
-        if not self.enabled or not self.connected or not self.rpc:
+        if not self.enabled:
             return
+
+        # Try to reconnect if not connected
+        if not self.connected or not self.rpc:
+            self._try_reconnect()
+            if not self.connected:
+                return
 
         try:
             self.rpc.update(
@@ -1129,7 +1228,8 @@ class DiscordPresence:
                 large_text="Rock Band 3"
             )
         except Exception:
-            pass
+            self.connected = False
+            self._try_reconnect()
 
 
 # =============================================================================
