@@ -17,6 +17,7 @@ def install_if_missing(package_name, import_name):
 install_if_missing("google-api-python-client", "googleapiclient")
 install_if_missing("yt-dlp", "yt_dlp")
 install_if_missing("Pillow", "PIL")
+install_if_missing("pypresence", "pypresence")
 
 import socket
 import struct
@@ -45,6 +46,13 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
     print("PIL not available - album art will be disabled")
+
+try:
+    from pypresence import Presence
+    DISCORD_AVAILABLE = True
+except ImportError:
+    DISCORD_AVAILABLE = False
+    print("pypresence not available - Discord Rich Presence will be disabled")
 
 # --- CONFIGURATION ---
 TELEMETRY_PORT = 21071        # Port to listen for Pico telemetry
@@ -981,6 +989,122 @@ class LastFmScrobbler:
 
 
 # =============================================================================
+# DISCORD RICH PRESENCE
+# =============================================================================
+
+class DiscordPresence:
+    """Discord Rich Presence integration"""
+
+    # Default Discord Application ID (users can create their own)
+    DEFAULT_CLIENT_ID = "1234567890123456789"  # Placeholder - user should set their own
+
+    def __init__(self, client_id: str = None, gui_callback=None):
+        self.client_id = client_id or self.DEFAULT_CLIENT_ID
+        self.gui_callback = gui_callback
+        self.enabled = False
+        self.connected = False
+        self.rpc = None
+        self.current_song = None
+        self.current_artist = None
+        self.start_time = None
+
+    def connect(self) -> bool:
+        """Connect to Discord"""
+        if not DISCORD_AVAILABLE:
+            if self.gui_callback:
+                self.gui_callback("Discord Rich Presence not available (pypresence not installed)")
+            return False
+
+        if not self.client_id or self.client_id == self.DEFAULT_CLIENT_ID:
+            if self.gui_callback:
+                self.gui_callback("Discord: No valid Client ID configured")
+            return False
+
+        try:
+            self.rpc = Presence(self.client_id)
+            self.rpc.connect()
+            self.connected = True
+            if self.gui_callback:
+                self.gui_callback("Discord Rich Presence connected")
+            return True
+        except Exception as e:
+            self.connected = False
+            if self.gui_callback:
+                self.gui_callback(f"Discord connection failed: {e}")
+            return False
+
+    def disconnect(self):
+        """Disconnect from Discord"""
+        if self.rpc and self.connected:
+            try:
+                self.rpc.clear()
+                self.rpc.close()
+            except Exception:
+                pass
+            self.connected = False
+            self.rpc = None
+            if self.gui_callback:
+                self.gui_callback("Discord Rich Presence disconnected")
+
+    def update_presence(self, artist: str, song: str, state: str = "Playing"):
+        """Update Discord presence with current song"""
+        if not self.enabled or not self.connected or not self.rpc:
+            return
+
+        try:
+            self.current_artist = artist
+            self.current_song = song
+            self.start_time = time.time()
+
+            # Truncate if too long (Discord limits)
+            details = f"{song}"[:128] if song else "Unknown Song"
+            state_text = f"by {artist}"[:128] if artist else state
+
+            self.rpc.update(
+                details=details,
+                state=state_text,
+                large_image="rb3",  # Image key from Discord app
+                large_text="Rock Band 3",
+                start=int(self.start_time)
+            )
+
+            if self.gui_callback:
+                self.gui_callback(f"Discord: Now playing - {artist} - {song}")
+
+        except Exception as e:
+            if self.gui_callback:
+                self.gui_callback(f"Discord update failed: {e}")
+
+    def clear_presence(self):
+        """Clear Discord presence (when returning to menu)"""
+        if not self.connected or not self.rpc:
+            return
+
+        try:
+            self.rpc.clear()
+            self.current_song = None
+            self.current_artist = None
+            self.start_time = None
+        except Exception:
+            pass
+
+    def set_idle(self):
+        """Set presence to idle/browsing state"""
+        if not self.enabled or not self.connected or not self.rpc:
+            return
+
+        try:
+            self.rpc.update(
+                details="Browsing Songs",
+                state="In Menus",
+                large_image="rb3",
+                large_text="Rock Band 3"
+            )
+        except Exception:
+            pass
+
+
+# =============================================================================
 # SONG BROWSER
 # =============================================================================
 
@@ -1615,11 +1739,19 @@ class RB3Dashboard:
         )
         self.scrobbler.enabled = self.settings.get('scrobble_enabled', False)
 
+        # Discord Rich Presence
+        self.discord_presence = DiscordPresence(
+            client_id=self.settings.get('discord_client_id', ''),
+            gui_callback=None  # Set later after log_message is available
+        )
+        self.discord_presence.enabled = self.settings.get('discord_enabled', False)
+
         # Create UI
         self.create_widgets()
 
-        # Set scrobbler callback now that log_message exists
+        # Set callbacks now that log_message exists
         self.scrobbler.gui_callback = self.log_message
+        self.discord_presence.gui_callback = self.log_message
 
         # Auto-load database if path saved
         self.auto_load_database()
@@ -2388,6 +2520,26 @@ class RB3Dashboard:
         ttk.Button(export_frame, text="Export (JSON)",
                   command=lambda: self.export_history('json')).pack(side='left')
 
+        # Discord Rich Presence
+        discord_frame = ttk.LabelFrame(right_col, text="Discord Rich Presence", padding=10)
+        discord_frame.pack(fill='x', pady=5)
+
+        self.discord_enabled_var = tk.BooleanVar(value=self.settings.get('discord_enabled', False))
+        ttk.Checkbutton(discord_frame, text="Enable Discord Rich Presence",
+                       variable=self.discord_enabled_var).pack(anchor='w')
+
+        ttk.Label(discord_frame, text="Discord Application ID:").pack(anchor='w', pady=(5, 0))
+        self.discord_client_id_var = tk.StringVar(value=self.settings.get('discord_client_id', ''))
+        ttk.Entry(discord_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
+
+        discord_link = ttk.Label(discord_frame, text="discord.com/developers/applications",
+                                foreground='#6699cc', cursor='hand2', font=('TkDefaultFont', 8))
+        discord_link.pack(anchor='w')
+        discord_link.bind('<Button-1>', lambda e: webbrowser.open('https://discord.com/developers/applications'))
+
+        self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
+        self.discord_status_label.pack(anchor='w', pady=(5, 0))
+
         # Save button at bottom of right column
         ttk.Button(right_col, text="Save Settings",
                   command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
@@ -2507,6 +2659,11 @@ class RB3Dashboard:
         self.root.after(0, lambda: self.song_var.set(song if song else "Waiting for game..."))
         self.root.after(0, lambda: self.artist_var.set(artist if artist else ""))
 
+        # Clear Discord presence when returning to menu (empty song/artist)
+        if not song and not artist:
+            if self.discord_presence and self.discord_presence.enabled:
+                self.discord_presence.clear_presence()
+
     def on_song_started(self, artist, song, shortname):
         """Called when a song actually starts playing (game state 0->1)"""
         if not artist and not song:
@@ -2542,6 +2699,10 @@ class RB3Dashboard:
             # Schedule the scrobble (convert to milliseconds)
             self.root.after(int(scrobble_time * 1000),
                            lambda a=artist, s=song: self._do_scrobble(a, s))
+
+        # Discord Rich Presence - update now playing
+        if self.discord_presence and self.discord_presence.enabled:
+            self.discord_presence.update_presence(artist, song)
 
     def _do_scrobble(self, artist, song):
         """Perform the actual scrobble"""
@@ -2950,6 +3111,8 @@ class RB3Dashboard:
             'lastfm_api_secret': self.lastfm_secret_var.get().strip(),
             'lastfm_session_key': self.lastfm_session_var.get().strip(),
             'scrobble_enabled': self.scrobble_enabled_var.get(),
+            'discord_enabled': self.discord_enabled_var.get(),
+            'discord_client_id': self.discord_client_id_var.get().strip(),
             'history_enabled': self.history_enabled_var.get(),
             'stats_enabled': self.stats_enabled_var.get(),
             'video_enabled': self.video_enabled_var.get(),
@@ -2993,6 +3156,27 @@ class RB3Dashboard:
                 else:
                     self.lastfm_status_label.config(text="Not configured", foreground='gray')
 
+            # Update Discord presence
+            if self.discord_presence:
+                old_enabled = self.discord_presence.enabled
+                new_enabled = settings.get('discord_enabled', False)
+                new_client_id = settings.get('discord_client_id', '')
+
+                self.discord_presence.client_id = new_client_id
+                self.discord_presence.enabled = new_enabled
+
+                # Connect/disconnect as needed
+                if new_enabled and not old_enabled and new_client_id:
+                    if self.discord_presence.connect():
+                        self.discord_status_label.config(text="Connected", foreground='green')
+                    else:
+                        self.discord_status_label.config(text="Connection failed", foreground='red')
+                elif not new_enabled and old_enabled:
+                    self.discord_presence.disconnect()
+                    self.discord_status_label.config(text="Disabled", foreground='gray')
+                elif not new_client_id:
+                    self.discord_status_label.config(text="No Client ID", foreground='orange')
+
             # Update listener if running
             if self.listener:
                 video_settings = self.get_video_settings()
@@ -3014,6 +3198,8 @@ class RB3Dashboard:
             'lastfm_api_secret': '',
             'lastfm_session_key': '',
             'scrobble_enabled': False,
+            'discord_enabled': False,
+            'discord_client_id': '',
             'history_enabled': True,
             'stats_enabled': True,
             'video_enabled': False,
@@ -3043,6 +3229,10 @@ class RB3Dashboard:
         """Handle window close"""
         if self.is_running:
             self.stop_listener()
+
+        # Disconnect Discord presence
+        if self.discord_presence:
+            self.discord_presence.disconnect()
 
         try:
             settings = self.get_current_settings()
