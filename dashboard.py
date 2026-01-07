@@ -18,6 +18,7 @@ install_if_missing("google-api-python-client", "googleapiclient")
 install_if_missing("yt-dlp", "yt_dlp")
 install_if_missing("Pillow", "PIL")
 install_if_missing("pypresence", "pypresence")
+install_if_missing("screeninfo", "screeninfo")
 
 import socket
 import struct
@@ -53,6 +54,13 @@ try:
 except ImportError:
     DISCORD_AVAILABLE = False
     print("pypresence not available - Discord Rich Presence will be disabled")
+
+try:
+    from screeninfo import get_monitors
+    SCREENINFO_AVAILABLE = True
+except ImportError:
+    SCREENINFO_AVAILABLE = False
+    print("screeninfo not available - multi-monitor selection will be disabled")
 
 # --- CONFIGURATION ---
 TELEMETRY_PORT = 21071        # Port to listen for Pico telemetry
@@ -615,14 +623,35 @@ class VLCPlayer:
                 f"--meta-title={artist} - {song}"
             ]
 
+            # Monitor selection
+            monitor_index = settings.get('video_monitor', 0)
+            monitor_info = None
+            if SCREENINFO_AVAILABLE and monitor_index > 0:
+                try:
+                    monitors = get_monitors()
+                    if monitor_index <= len(monitors):
+                        monitor_info = monitors[monitor_index - 1]  # 1-indexed in settings
+                except Exception:
+                    pass
+
             if settings.get('fullscreen', True):
                 vlc_cmd.append("--fullscreen")
+                # Set fullscreen on specific monitor
+                if monitor_info:
+                    vlc_cmd.append(f"--qt-fullscreen-screennumber={monitor_index - 1}")
 
             if settings.get('muted', True):
                 vlc_cmd.append("--volume=0")
 
             if settings.get('always_on_top', True):
                 vlc_cmd.append("--video-on-top")
+
+            # Position window on selected monitor (for non-fullscreen or as hint)
+            if monitor_info:
+                vlc_cmd.extend([
+                    f"--video-x={monitor_info.x + 100}",
+                    f"--video-y={monitor_info.y + 100}",
+                ])
 
             if settings.get('force_best_quality', True):
                 vlc_cmd.extend([
@@ -2500,6 +2529,20 @@ class RB3Dashboard:
         ttk.Label(delay_frame, text="(-=early)",
                  font=('TkDefaultFont', 8), foreground='gray').pack(side='left', padx=(5, 0))
 
+        # Monitor selection
+        monitor_frame = ttk.Frame(video_frame)
+        monitor_frame.pack(fill='x', pady=(5, 0))
+        ttk.Label(monitor_frame, text="Video monitor:").pack(side='left')
+
+        self.monitor_var = tk.StringVar()
+        self.monitor_combo = ttk.Combobox(monitor_frame, textvariable=self.monitor_var,
+                                          state='readonly', width=20)
+        self.monitor_combo.pack(side='left', padx=(5, 0))
+        self.refresh_monitor_list()
+
+        ttk.Button(monitor_frame, text="↻", width=2,
+                  command=self.refresh_monitor_list).pack(side='left', padx=(3, 0))
+
         # History & Statistics
         history_frame = ttk.LabelFrame(right_col, text="History & Statistics", padding=10)
         history_frame.pack(fill='x', pady=5)
@@ -2653,6 +2696,34 @@ class RB3Dashboard:
             else:
                 self.lastfm_status_label.config(text="Auth failed", foreground='red')
                 messagebox.showerror("Error", "Failed to get session key. Please try again.")
+
+    def refresh_monitor_list(self):
+        """Refresh the list of available monitors"""
+        monitors = ["Primary (default)"]
+
+        if SCREENINFO_AVAILABLE:
+            try:
+                detected = get_monitors()
+                for i, m in enumerate(detected, 1):
+                    monitors.append(f"Monitor {i}: {m.width}x{m.height}")
+            except Exception:
+                pass
+
+        self.monitor_combo['values'] = monitors
+
+        # Set saved value or default
+        saved_index = self.settings.get('video_monitor', 0)
+        if saved_index < len(monitors):
+            self.monitor_combo.current(saved_index)
+        else:
+            self.monitor_combo.current(0)
+
+    def get_selected_monitor_index(self) -> int:
+        """Get the index of the selected monitor (0 = primary/default)"""
+        try:
+            return self.monitor_combo.current()
+        except:
+            return 0
 
     def on_song_update(self, song, artist):
         """Called when song/artist info updates"""
@@ -3096,6 +3167,7 @@ class RB3Dashboard:
             'sync_video_to_song': self.sync_var.get(),
             'auto_quit_on_menu': self.auto_quit_var.get(),
             'video_start_delay': self.delay_var.get(),
+            'video_monitor': self.get_selected_monitor_index(),
             'force_best_quality': True
         }
 
@@ -3122,6 +3194,7 @@ class RB3Dashboard:
             'sync_video_to_song': self.sync_var.get(),
             'auto_quit_on_menu': self.auto_quit_var.get(),
             'video_start_delay': self.delay_var.get(),
+            'video_monitor': self.get_selected_monitor_index(),
             'database_path': self.settings.get('database_path', '')
         }
 
@@ -3209,6 +3282,7 @@ class RB3Dashboard:
             'sync_video_to_song': True,
             'auto_quit_on_menu': True,
             'video_start_delay': 0.0,
+            'video_monitor': 0,
             'database_path': ''
         }
 
