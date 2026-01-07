@@ -790,9 +790,30 @@ class PlayStatistics:
     """Persistent play statistics stored in JSON"""
 
     def __init__(self, stats_path: str = None):
-        self.stats_path = stats_path or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'play_stats.json')
+        self.stats_path = stats_path or self._get_default_path()
         self.stats = self.load_stats()
+
+    def _get_default_path(self) -> str:
+        """Get default path for stats file in user's app data directory"""
+        try:
+            appdata_dir = os.environ.get('APPDATA')
+            if appdata_dir:
+                cache_dir = os.path.join(appdata_dir, 'RB3Dashboard')
+                os.makedirs(cache_dir, exist_ok=True)
+                return os.path.join(cache_dir, 'play_stats.json')
+        except Exception:
+            pass
+
+        try:
+            user_home = os.path.expanduser("~")
+            cache_dir = os.path.join(user_home, '.rb3dashboard')
+            os.makedirs(cache_dir, exist_ok=True)
+            return os.path.join(cache_dir, 'play_stats.json')
+        except Exception:
+            pass
+
+        # Fallback to script directory
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'play_stats.json')
 
     def load_stats(self) -> dict:
         """Load stats from file"""
