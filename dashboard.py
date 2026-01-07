@@ -17,8 +17,7 @@ def install_if_missing(package_name, import_name):
 install_if_missing("google-api-python-client", "googleapiclient")
 install_if_missing("yt-dlp", "yt_dlp")
 install_if_missing("Pillow", "PIL")
-install_if_missing("sv-ttk", "sv_ttk")
-install_if_missing("darkdetect", "darkdetect")
+install_if_missing("ttkthemes", "ttkthemes")
 
 import socket
 import struct
@@ -27,9 +26,10 @@ import hashlib
 import time
 import re
 import os
+import sys
 import webbrowser
-import sv_ttk
-import darkdetect
+import ctypes
+from ttkthemes import ThemedTk
 from typing import Optional, Tuple, Dict
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -1101,12 +1101,13 @@ class RB3Dashboard:
     """Main unified dashboard application"""
 
     def __init__(self):
-        self.root = tk.Tk()
+        # Use ThemedTk with equilux (dark theme) - faster than sv_ttk
+        self.root = ThemedTk(theme="equilux")
         self.root.title("RB3Enhanced Dashboard")
         self.root.geometry("850x700")
         self.root.resizable(True, True)
 
-        # Setup theme
+        # Setup theme colors and dark title bar
         self.setup_theme()
 
         # Application state
@@ -1149,48 +1150,40 @@ class RB3Dashboard:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def setup_theme(self):
-        """Setup theme once at startup"""
+        """Setup theme colors and Windows dark title bar"""
+        # Dark theme colors (equilux is already dark)
+        self.bg_color = '#464646'
+        self.fg_color = '#ffffff'
+        self.select_bg_color = '#5a5a5a'
+        self.alternate_bg_color = '#505050'
+        self.even_bg_color = '#464646'
+        self.text_bg_color = '#383838'
+        self.text_fg_color = '#ffffff'
+
+        # Configure Treeview style
+        style = ttk.Style()
+        style.configure("Larger.Treeview",
+                       font=('TkDefaultFont', 12),
+                       rowheight=70)
+
+        # Set dark title bar on Windows
+        self.set_dark_title_bar()
+
+    def set_dark_title_bar(self):
+        """Enable dark title bar on Windows 10/11"""
         try:
-            is_dark = darkdetect.isDark()
-
-            if is_dark:
-                sv_ttk.set_theme("dark")
-                self.bg_color = '#2b2b2b'
-                self.fg_color = '#ffffff'
-                self.select_bg_color = '#404040'
-                self.alternate_bg_color = '#3c3c3c'
-                self.even_bg_color = '#2b2b2b'
-                self.text_bg_color = '#1e1e1e'
-                self.text_fg_color = '#ffffff'
-            else:
-                sv_ttk.set_theme("light")
-                self.bg_color = '#ffffff'
-                self.fg_color = '#000000'
-                self.select_bg_color = '#0078d4'
-                self.alternate_bg_color = '#f9f9f9'
-                self.even_bg_color = '#ffffff'
-                self.text_bg_color = '#ffffff'
-                self.text_fg_color = '#000000'
-
-            self.root.configure(bg=self.bg_color)
-
-            style = ttk.Style()
-            style.configure("Larger.Treeview",
-                           font=('TkDefaultFont', 12),
-                           rowheight=70,
-                           background=self.bg_color,
-                           foreground=self.fg_color,
-                           fieldbackground=self.bg_color)
-
-            style.map("Larger.Treeview",
-                      background=[('selected', self.select_bg_color)])
-
-        except Exception as e:
-            print(f"Theme setup failed: {e}")
-            self.bg_color = '#ffffff'
-            self.fg_color = '#000000'
-            self.text_bg_color = '#ffffff'
-            self.text_fg_color = '#000000'
+            if sys.platform == 'win32':
+                self.root.update()
+                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE,
+                    ctypes.byref(ctypes.c_int(1)),
+                    ctypes.sizeof(ctypes.c_int)
+                )
+        except Exception:
+            pass  # Silently fail on non-Windows or older Windows
 
     def get_settings_path(self):
         """Get settings file path"""
