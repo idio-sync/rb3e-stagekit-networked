@@ -339,20 +339,30 @@ class YouTubeSearcher:
 
                     base_score = 0
 
+                    # Check if artist is present in title or channel (REQUIRED)
+                    artist_lower = clean_artist.lower()
+                    has_artist_in_title = artist_lower in video_title
+                    has_artist_in_channel = artist_lower in video_channel
+
+                    # Skip videos that don't have the artist name anywhere
+                    if not has_artist_in_title and not has_artist_in_channel:
+                        continue
+
                     # Check for official content (highest priority)
-                    is_official_channel = any(term in video_channel for term in ['official', 'records', 'vevo', clean_artist.lower()])
+                    is_official_channel = any(term in video_channel for term in ['official', 'records', 'vevo', artist_lower])
                     has_official_in_title = 'official' in video_title
 
                     # Check for live content (second priority)
                     is_live = 'live' in video_title
 
                     has_song_in_title = clean_song.lower() in video_title
-                    has_artist_in_title = clean_artist.lower() in video_title
 
-                    # Title/artist matching
+                    # Title/artist matching bonuses
                     if has_song_in_title and has_artist_in_title:
                         base_score += 30
-                    elif has_song_in_title or has_artist_in_title:
+                    elif has_song_in_title:
+                        base_score += 20
+                    elif has_artist_in_title:
                         base_score += 15
 
                     # Official content gets highest boost
