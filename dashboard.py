@@ -278,23 +278,103 @@ class YouTubeSearcher:
         else:
             return max(0, 20 - (diff - 60) // 10)
 
-    def clean_search_terms(self, artist: str, song: str) -> Tuple[str, str]:
-        """Clean up artist and song names for better search"""
-        clean_song = re.sub(r'\s*\([^)]*\)\s*', '', song)
-        clean_song = re.sub(r'\s*-\s*(Live|Acoustic|Demo|Remix).*', '', clean_song, flags=re.IGNORECASE)
-        clean_song = clean_song.strip()
+    def clean_search_terms(self, artist: str, song: str) -> Tuple[str, str, dict]:
+        """Clean up artist and song names for better search
 
-        clean_artist = re.split(r'\s+(?:feat\.|ft\.|featuring)\s+', artist, flags=re.IGNORECASE)[0]
+        Returns: (clean_artist, clean_song, song_attributes)
+        song_attributes contains flags like is_remix, is_acoustic, is_live, is_remaster
+        """
+        song_lower = song.lower()
+
+        # Detect song attributes before cleaning
+        song_attributes = {
+            'is_remix': 'remix' in song_lower,
+            'is_acoustic': 'acoustic' in song_lower,
+            'is_live': 'live' in song_lower,
+            'is_remaster': any(term in song_lower for term in ['remaster', 'reissue']),
+        }
+
+        # Remove parentheticals like (Remastered 2023), (Radio Edit), etc.
+        clean_song = re.sub(r'\s*\([^)]*\)\s*', ' ', song)
+        # Remove suffix variations like "- Live", "- Acoustic Version"
+        clean_song = re.sub(r'\s*-\s*(Live|Acoustic|Demo|Remix|Remaster).*$', '', clean_song, flags=re.IGNORECASE)
+        clean_song = ' '.join(clean_song.split()).strip()
+
+        # Remove featuring artists from artist name
+        clean_artist = re.split(r'\s+(?:feat\.|ft\.|featuring|&|and)\s+', artist, flags=re.IGNORECASE)[0]
         clean_artist = clean_artist.strip()
 
-        return clean_artist, clean_song
+        return clean_artist, clean_song, song_attributes
+
+    def normalize_artist_for_matching(self, artist: str) -> list:
+        """Return list of artist name variations for matching
+
+        Handles 'The' prefix and returns variations to check
+        """
+        artist_lower = artist.lower().strip()
+        variations = [artist_lower]
+
+        # Handle "The" prefix - check both with and without
+        if artist_lower.startswith('the '):
+            variations.append(artist_lower[4:])  # Without "The "
+        else:
+            variations.append('the ' + artist_lower)  # With "The "
+
+        return variations
+
+    def artist_matches(self, artist: str, text: str) -> bool:
+        """Check if artist name appears in text, handling variations
+
+        For short artist names (<=4 chars), requires word boundary matching
+        """
+        text_lower = text.lower()
+        variations = self.normalize_artist_for_matching(artist)
+
+        for variation in variations:
+            # For short names, require word boundaries to avoid false matches
+            if len(variation) <= 4:
+                # Use word boundary regex for short names
+                pattern = r'\b' + re.escape(variation) + r'\b'
+                if re.search(pattern, text_lower):
+                    return True
+            else:
+                if variation in text_lower:
+                    return True
+
+        return False
+
+    def is_unwanted_content(self, video_title: str, song_attributes: dict) -> bool:
+        """Check if video is unwanted content type (cover, karaoke, tutorial, etc.)"""
+        title_lower = video_title.lower()
+
+        # Always exclude these content types
+        unwanted_keywords = [
+            'cover', 'karaoke', 'tutorial', 'lesson', 'how to play',
+            'reaction', 'react', 'review', 'instrumental', 'backing track',
+            'drum cover', 'guitar cover', 'bass cover', 'piano cover',
+            'cover by', 'covered by', 'tribute', 'in the style of'
+        ]
+
+        for keyword in unwanted_keywords:
+            if keyword in title_lower:
+                return True
+
+        # Exclude remixes unless original song is a remix
+        if 'remix' in title_lower and not song_attributes.get('is_remix'):
+            return True
+
+        # Exclude acoustic versions unless original song is acoustic
+        if 'acoustic' in title_lower and not song_attributes.get('is_acoustic'):
+            return True
+
+        return False
 
     def search_video(self, artist: str, song: str) -> Optional[str]:
         """Search for video and return best match video ID"""
         if not self.youtube:
             return None
 
-        clean_artist, clean_song = self.clean_search_terms(artist, song)
+        clean_artist, clean_song, song_attributes = self.clean_search_terms(artist, song)
         search_key = f"{clean_artist.lower()} - {clean_song.lower()}"
 
         if search_key in self.search_cache:
@@ -314,6 +394,7 @@ class YouTubeSearcher:
 
             best_video_id = None
             best_score = -1
+            all_candidates = []  # Track all candidates for fallback
 
             for query in search_queries:
                 search_response = self.youtube.search().list(
@@ -333,29 +414,56 @@ class YouTubeSearcher:
 
                 for item in search_response['items']:
                     video_id = item['id']['videoId']
-                    video_title = item['snippet']['title'].lower()
-                    video_channel = item['snippet']['channelTitle'].lower()
+                    video_title = item['snippet']['title']
+                    video_title_lower = video_title.lower()
+                    video_channel = item['snippet']['channelTitle']
+                    video_channel_lower = video_channel.lower()
                     video_duration = video_durations.get(video_id)
 
-                    base_score = 0
+                    # Track all candidates for potential fallback
+                    all_candidates.append({
+                        'id': video_id,
+                        'title': video_title,
+                        'channel': video_channel
+                    })
 
-                    # Check if artist is present in title or channel (REQUIRED)
-                    artist_lower = clean_artist.lower()
-                    has_artist_in_title = artist_lower in video_title
-                    has_artist_in_channel = artist_lower in video_channel
+                    # REQUIRED: Artist must be present in title or channel
+                    has_artist_in_title = self.artist_matches(clean_artist, video_title)
+                    has_artist_in_channel = self.artist_matches(clean_artist, video_channel)
 
-                    # Skip videos that don't have the artist name anywhere
                     if not has_artist_in_title and not has_artist_in_channel:
                         continue
 
-                    # Check for official content (highest priority)
-                    is_official_channel = any(term in video_channel for term in ['official', 'records', 'vevo', artist_lower])
-                    has_official_in_title = 'official' in video_title
+                    # Skip unwanted content (covers, karaoke, tutorials, etc.)
+                    if self.is_unwanted_content(video_title, song_attributes):
+                        continue
 
-                    # Check for live content (second priority)
-                    is_live = 'live' in video_title
+                    # Hard-reject videos >2x expected duration (likely compilations/albums)
+                    if target_duration and video_duration:
+                        if video_duration > target_duration * 2:
+                            continue
 
-                    has_song_in_title = clean_song.lower() in video_title
+                    base_score = 0
+
+                    # Check for Topic channels (YouTube auto-generated, always official)
+                    is_topic_channel = '- topic' in video_channel_lower
+
+                    # Check for VEVO (always official)
+                    is_vevo = 'vevo' in video_channel_lower
+
+                    # Check for other official indicators
+                    is_official_channel = any(term in video_channel_lower for term in [
+                        'official', 'records', 'music', 'entertainment'
+                    ]) or self.artist_matches(clean_artist, video_channel)
+                    has_official_in_title = 'official' in video_title_lower
+
+                    # Check for lyric video
+                    is_lyric_video = 'lyric' in video_title_lower
+
+                    # Check for live content
+                    is_live = 'live' in video_title_lower and not song_attributes.get('is_live')
+
+                    has_song_in_title = clean_song.lower() in video_title_lower
 
                     # Title/artist matching bonuses
                     if has_song_in_title and has_artist_in_title:
@@ -365,19 +473,41 @@ class YouTubeSearcher:
                     elif has_artist_in_title:
                         base_score += 15
 
-                    # Official content gets highest boost
-                    if has_official_in_title:
+                    # Official content scoring (prioritized)
+                    if is_vevo:
+                        base_score += 50  # VEVO is always official
+                    elif is_topic_channel:
+                        base_score += 45  # Topic channels are verified official audio
+                    elif has_official_in_title and is_official_channel:
+                        base_score += 45
+                    elif has_official_in_title:
                         base_score += 40
-                    if is_official_channel:
+                    elif is_official_channel:
                         base_score += 25
 
-                    # Live content gets secondary boost (below official)
-                    if is_live and not has_official_in_title:
-                        base_score += 15
+                    # Lyric videos from official channels are good fallback
+                    if is_lyric_video:
+                        if is_official_channel or is_vevo or is_topic_channel:
+                            base_score += 20  # Official lyric video
+                        else:
+                            base_score -= 10  # Unofficial lyric video less desirable
 
+                    # Live content handling
+                    if is_live:
+                        if song_attributes.get('is_live'):
+                            base_score += 20  # User wants live version
+                        else:
+                            base_score += 10  # Live is okay but not preferred
+
+                    # Duration scoring with bonus for official videos
                     duration_score = 0
                     if target_duration and video_duration:
-                        duration_score = self.score_video_by_duration(video_duration, target_duration)
+                        # Allow official music videos to be up to 30s longer (intro/outro)
+                        adjusted_duration = video_duration
+                        if has_official_in_title or is_vevo:
+                            if video_duration > target_duration and video_duration <= target_duration + 30:
+                                adjusted_duration = target_duration  # Treat as perfect match
+                        duration_score = self.score_video_by_duration(adjusted_duration, target_duration)
 
                     total_score = base_score + (duration_score * 2)
 
@@ -388,8 +518,12 @@ class YouTubeSearcher:
                 if best_video_id and best_score > 50:
                     break
 
-            if not best_video_id and search_response['items']:
-                best_video_id = search_response['items'][0]['id']['videoId']
+            # Fallback: if all videos were filtered out, log warning
+            if not best_video_id and all_candidates:
+                if self.gui_callback:
+                    self.gui_callback(f"Warning: No suitable video found for '{artist} - {song}'. "
+                                    f"All {len(all_candidates)} candidates were filtered out.")
+                return None
 
             if best_video_id:
                 self.search_cache[search_key] = best_video_id
