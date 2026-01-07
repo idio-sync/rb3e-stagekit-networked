@@ -82,6 +82,8 @@ For video playback, install VLC:
 
 ## Stage Kit Pico Firmware
 
+The Pico code can be used with or without the dashboard, though using the dash makes debugging and light deployment much easier.
+
 ### Hardware Requirements
 - Raspberry Pi Pico W or Pico 2 W
 - Fatsco Stage Kit light (strobe or LED array)
