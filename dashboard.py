@@ -1146,6 +1146,9 @@ class RB3Dashboard:
         # Handle window closing
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+        # Apply dark title bar after window is realized
+        self.set_dark_title_bar()
+
     def setup_theme(self):
         """Setup comprehensive manual dark theme"""
         # Color palette
@@ -1282,24 +1285,35 @@ class RB3Dashboard:
                        background=self.accent_color,
                        troughcolor='#353535')
 
-        # Set dark title bar on Windows
-        self.set_dark_title_bar()
-
     def set_dark_title_bar(self):
         """Enable dark title bar on Windows 10/11"""
+        if sys.platform != 'win32':
+            return
+
         try:
-            if sys.platform == 'win32':
-                self.root.update()
-                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-                DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            self.root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+
+            # Try attribute 20 first (Windows 10 20H1+), then 19 (older)
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(ctypes.c_int(1)),
+                ctypes.sizeof(ctypes.c_int)
+            )
+
+            # If that failed, try older attribute value
+            if result != 0:
+                DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     hwnd,
-                    DWMWA_USE_IMMERSIVE_DARK_MODE,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
                     ctypes.byref(ctypes.c_int(1)),
                     ctypes.sizeof(ctypes.c_int)
                 )
         except Exception:
-            pass  # Silently fail on non-Windows or older Windows
+            pass
 
     def get_settings_path(self):
         """Get settings file path"""
