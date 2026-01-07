@@ -2183,21 +2183,30 @@ class RB3Dashboard:
             video_enabled = self.video_enabled_var.get()
             api_key = self.api_key_var.get().strip()
 
-            if video_enabled and api_key:
-                self.log_message("Initializing video components...")
-                self.youtube_searcher = YouTubeSearcher(api_key,
-                                                        song_database=self.song_database,
-                                                        gui_callback=self.log_message)
+            # Always check VLC if video is enabled
+            if video_enabled:
                 self.vlc_player = VLCPlayer(gui_callback=self.log_message,
                                            song_database=self.song_database)
-                self.stream_extractor = StreamExtractor(gui_callback=self.log_message)
 
                 if self.vlc_player.vlc_path:
                     self.vlc_status_label.config(text=f"VLC: {self.vlc_player.vlc_path}",
                                                 foreground='green')
+                    self.log_message(f"VLC found: {self.vlc_player.vlc_path}")
                 else:
                     self.vlc_status_label.config(text="VLC: Not found", foreground='red')
-                    self.log_message("VLC not found - video playback disabled")
+                    self.log_message("VLC not found - video playback will not work")
+
+                if api_key:
+                    self.log_message("Initializing video components...")
+                    self.youtube_searcher = YouTubeSearcher(api_key,
+                                                            song_database=self.song_database,
+                                                            gui_callback=self.log_message)
+                    self.stream_extractor = StreamExtractor(gui_callback=self.log_message)
+                else:
+                    self.log_message("YouTube API key not set - video search disabled")
+                    self.vlc_status_label.config(text="VLC: No API key", foreground='orange')
+            else:
+                self.vlc_status_label.config(text="VLC: Video disabled", foreground='gray')
 
             # Create unified listener
             self.listener = UnifiedRB3EListener(
@@ -2206,8 +2215,8 @@ class RB3Dashboard:
                 song_update_callback=self.on_song_update
             )
 
-            # Set video components
-            if video_enabled and api_key:
+            # Set video components if all are available
+            if video_enabled and api_key and self.vlc_player and self.vlc_player.vlc_path:
                 self.listener.set_video_components(
                     self.youtube_searcher, self.vlc_player, self.stream_extractor)
 
