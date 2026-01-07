@@ -339,17 +339,31 @@ class YouTubeSearcher:
 
                     base_score = 0
 
-                    is_official = any(term in video_channel for term in ['official', 'records', 'music', clean_artist.lower()])
+                    # Check for official content (highest priority)
+                    is_official_channel = any(term in video_channel for term in ['official', 'records', 'vevo', clean_artist.lower()])
+                    has_official_in_title = 'official' in video_title
+
+                    # Check for live content (second priority)
+                    is_live = 'live' in video_title
+
                     has_song_in_title = clean_song.lower() in video_title
                     has_artist_in_title = clean_artist.lower() in video_title
 
+                    # Title/artist matching
                     if has_song_in_title and has_artist_in_title:
                         base_score += 30
                     elif has_song_in_title or has_artist_in_title:
                         base_score += 15
 
-                    if is_official:
-                        base_score += 20
+                    # Official content gets highest boost
+                    if has_official_in_title:
+                        base_score += 40
+                    if is_official_channel:
+                        base_score += 25
+
+                    # Live content gets secondary boost (below official)
+                    if is_live and not has_official_in_title:
+                        base_score += 15
 
                     duration_score = 0
                     if target_duration and video_duration:
@@ -1345,20 +1359,20 @@ class RB3Dashboard:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
-        # Control tab
-        control_frame = ttk.Frame(self.notebook)
-        self.notebook.add(control_frame, text="Control")
-        self.create_control_tab(control_frame)
-
-        # Stage Kit tab
-        stagekit_frame = ttk.Frame(self.notebook)
-        self.notebook.add(stagekit_frame, text="Stage Kit")
-        self.create_stagekit_tab(stagekit_frame)
+        # Status tab (formerly Control)
+        status_frame = ttk.Frame(self.notebook)
+        self.notebook.add(status_frame, text="Status")
+        self.create_control_tab(status_frame)
 
         # Song Browser tab
         browser_frame = ttk.Frame(self.notebook)
         self.notebook.add(browser_frame, text="Song Browser")
         self.create_song_browser_tab(browser_frame)
+
+        # Stage Kit tab
+        stagekit_frame = ttk.Frame(self.notebook)
+        self.notebook.add(stagekit_frame, text="Stage Kit")
+        self.create_stagekit_tab(stagekit_frame)
 
         # Settings tab
         settings_frame = ttk.Frame(self.notebook)
@@ -1599,38 +1613,70 @@ class RB3Dashboard:
                  foreground='gray', font=('TkDefaultFont', 9)).pack(side='right')
 
     def create_settings_tab(self, parent):
-        """Create settings tab"""
-        canvas = tk.Canvas(parent)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        """Create settings tab with two-column layout"""
+        # Main container with two columns
+        main_frame = ttk.Frame(parent)
+        main_frame.pack(fill='both', expand=True, padx=10, pady=5)
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        # Left column
+        left_col = ttk.Frame(main_frame)
+        left_col.pack(side='left', fill='both', expand=True, padx=(0, 5))
 
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # Right column
+        right_col = ttk.Frame(main_frame)
+        right_col.pack(side='left', fill='both', expand=True, padx=(5, 0))
+
+        # --- LEFT COLUMN ---
 
         # API Configuration
-        api_frame = ttk.LabelFrame(scrollable_frame, text="API Configuration", padding=10)
-        api_frame.pack(fill='x', padx=10, pady=5)
+        api_frame = ttk.LabelFrame(left_col, text="API Configuration", padding=10)
+        api_frame.pack(fill='x', pady=(0, 5))
 
         ttk.Label(api_frame, text="YouTube Data API v3 Key:").pack(anchor='w')
         self.api_key_var = tk.StringVar(value=self.settings.get('youtube_api_key', ''))
-        ttk.Entry(api_frame, textvariable=self.api_key_var, width=50, show='*').pack(fill='x', pady=(2, 5))
+        ttk.Entry(api_frame, textvariable=self.api_key_var, width=40, show='*').pack(fill='x', pady=(2, 0))
+        yt_link = ttk.Label(api_frame, text="console.cloud.google.com/apis",
+                           foreground='#6699cc', cursor='hand2', font=('TkDefaultFont', 8))
+        yt_link.pack(anchor='w')
+        yt_link.bind('<Button-1>', lambda e: webbrowser.open('https://console.cloud.google.com/apis/credentials'))
 
-        ttk.Label(api_frame, text="Last.fm API Key (for album art):").pack(anchor='w')
+        ttk.Label(api_frame, text="Last.fm API Key (for album art):").pack(anchor='w', pady=(8, 0))
         self.lastfm_api_key_var = tk.StringVar(value=self.settings.get('lastfm_api_key', ''))
-        ttk.Entry(api_frame, textvariable=self.lastfm_api_key_var, width=50, show='*').pack(fill='x', pady=(2, 5))
+        ttk.Entry(api_frame, textvariable=self.lastfm_api_key_var, width=40, show='*').pack(fill='x', pady=(2, 0))
+        lastfm_link = ttk.Label(api_frame, text="last.fm/api/account/create",
+                               foreground='#6699cc', cursor='hand2', font=('TkDefaultFont', 8))
+        lastfm_link.pack(anchor='w')
+        lastfm_link.bind('<Button-1>', lambda e: webbrowser.open('https://www.last.fm/api/account/create'))
+
+        # Song Database
+        database_frame = ttk.LabelFrame(left_col, text="Song Database (Optional)", padding=10)
+        database_frame.pack(fill='x', pady=5)
+
+        self.database_status_label = ttk.Label(database_frame, text="No database loaded",
+                                               foreground='orange')
+        self.database_status_label.pack(anchor='w', pady=(0, 5))
+
+        db_button_frame = ttk.Frame(database_frame)
+        db_button_frame.pack(fill='x')
+
+        ttk.Button(db_button_frame, text="Load JSON Database",
+                  command=self.load_song_database).pack(side='left', padx=(0, 5))
+        self.clear_db_button = ttk.Button(db_button_frame, text="Clear",
+                                          command=self.clear_song_database, state='disabled')
+        self.clear_db_button.pack(side='left')
+
+        ttk.Label(database_frame, text="Improves video duration matching",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(5, 0))
+
+        # --- RIGHT COLUMN ---
 
         # Video Settings
-        video_frame = ttk.LabelFrame(scrollable_frame, text="Video Playback", padding=10)
-        video_frame.pack(fill='x', padx=10, pady=5)
+        video_frame = ttk.LabelFrame(right_col, text="Video Playback", padding=10)
+        video_frame.pack(fill='x', pady=(0, 5))
 
         self.video_enabled_var = tk.BooleanVar(value=self.settings.get('video_enabled', False))
         ttk.Checkbutton(video_frame, text="Enable YouTube video playback",
-                       variable=self.video_enabled_var).pack(anchor='w', pady=2)
+                       variable=self.video_enabled_var).pack(anchor='w', pady=1)
 
         self.fullscreen_var = tk.BooleanVar(value=self.settings.get('fullscreen', True))
         ttk.Checkbutton(video_frame, text="Start videos in fullscreen",
@@ -1649,45 +1695,22 @@ class RB3Dashboard:
                        variable=self.sync_var).pack(anchor='w', pady=1)
 
         self.auto_quit_var = tk.BooleanVar(value=self.settings.get('auto_quit_on_menu', True))
-        ttk.Checkbutton(video_frame, text="Auto-quit VLC when returning to menu",
+        ttk.Checkbutton(video_frame, text="Auto-quit VLC on menu return",
                        variable=self.auto_quit_var).pack(anchor='w', pady=1)
 
         # Delay setting
         delay_frame = ttk.Frame(video_frame)
-        delay_frame.pack(fill='x', pady=5)
-        ttk.Label(delay_frame, text="Video start delay (seconds):").pack(side='left')
+        delay_frame.pack(fill='x', pady=(5, 0))
+        ttk.Label(delay_frame, text="Start delay (sec):").pack(side='left')
         self.delay_var = tk.DoubleVar(value=self.settings.get('video_start_delay', 0.0))
         ttk.Spinbox(delay_frame, from_=-10.0, to=10.0, increment=0.5,
-                   textvariable=self.delay_var, width=8).pack(side='left', padx=(10, 0))
-        ttk.Label(delay_frame, text="(negative = early)",
-                 font=('TkDefaultFont', 8)).pack(side='left', padx=(5, 0))
+                   textvariable=self.delay_var, width=6).pack(side='left', padx=(5, 0))
+        ttk.Label(delay_frame, text="(-=early)",
+                 font=('TkDefaultFont', 8), foreground='gray').pack(side='left', padx=(5, 0))
 
-        # Song Database
-        database_frame = ttk.LabelFrame(scrollable_frame, text="Song Database (Optional)", padding=10)
-        database_frame.pack(fill='x', padx=10, pady=5)
-
-        self.database_status_label = ttk.Label(database_frame, text="No database loaded",
-                                               foreground='orange')
-        self.database_status_label.pack(anchor='w', pady=(0, 5))
-
-        db_button_frame = ttk.Frame(database_frame)
-        db_button_frame.pack(fill='x')
-
-        ttk.Button(db_button_frame, text="Load JSON Database",
-                  command=self.load_song_database).pack(side='left', padx=(0, 5))
-        self.clear_db_button = ttk.Button(db_button_frame, text="Clear",
-                                          command=self.clear_song_database, state='disabled')
-        self.clear_db_button.pack(side='left')
-
-        ttk.Label(database_frame, text="Load JSON for better video duration matching",
-                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(5, 0))
-
-        # Save button
-        ttk.Button(scrollable_frame, text="Save Settings",
-                  command=self.save_settings).pack(pady=15)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # Save button at bottom of right column
+        ttk.Button(right_col, text="Save Settings",
+                  command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
 
     def create_log_tab(self, parent):
         """Create log display tab"""
