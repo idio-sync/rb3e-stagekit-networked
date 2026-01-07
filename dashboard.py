@@ -30,7 +30,7 @@ import os
 import sys
 import webbrowser
 import ctypes
-from collections import deque
+from collections import deque, OrderedDict
 from typing import Optional, Tuple, Dict
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -38,6 +38,7 @@ import yt_dlp
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, filedialog
 import json
+import sqlite3
 from datetime import datetime
 import requests
 
@@ -1338,20 +1339,97 @@ class SongBrowser:
 # ALBUM ART MANAGER
 # =============================================================================
 
+class LRUCache:
+    """Simple LRU cache using OrderedDict"""
+
+    def __init__(self, maxsize=200):
+        self.cache = OrderedDict()
+        self.maxsize = maxsize
+
+    def get(self, key):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            return self.cache[key]
+        return None
+
+    def set(self, key, value):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = value
+        if len(self.cache) > self.maxsize:
+            self.cache.popitem(last=False)
+
+    def __contains__(self, key):
+        return key in self.cache
+
+
 class AlbumArtManager:
-    """Manages album art fetching and caching using Last.fm API"""
+    """Manages album art fetching and caching using Last.fm API with SQLite storage"""
 
     def __init__(self, gui_callback=None):
         self.gui_callback = gui_callback
         self.api_key = ""
-        self.cache = {}
+        self.cache = LRUCache(maxsize=200)  # In-memory LRU cache for PhotoImages
         self.url_cache = {}
         self.fetch_queue = []
         self.processing = False
         self.placeholder_image = None
         self.image_size = (60, 60)
-        self.cache_dir = self.get_cache_directory()
+        self.db_path = self._get_db_path()
+        self._init_database()
         self.create_placeholder_image()
+
+    def _get_db_path(self):
+        """Get path to SQLite database file"""
+        try:
+            appdata_dir = os.environ.get('APPDATA')
+            if appdata_dir:
+                cache_dir = os.path.join(appdata_dir, 'RB3Dashboard')
+                os.makedirs(cache_dir, exist_ok=True)
+                return os.path.join(cache_dir, 'album_art.db')
+        except Exception:
+            pass
+
+        try:
+            user_home = os.path.expanduser("~")
+            cache_dir = os.path.join(user_home, '.rb3dashboard')
+            os.makedirs(cache_dir, exist_ok=True)
+            return os.path.join(cache_dir, 'album_art.db')
+        except Exception:
+            pass
+
+        return None
+
+    def _init_database(self):
+        """Initialize SQLite database"""
+        if not self.db_path:
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS album_art (
+                    cache_key TEXT PRIMARY KEY,
+                    artist TEXT,
+                    album TEXT,
+                    image_data BLOB,
+                    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    def _get_connection(self):
+        """Get a database connection (creates new one per thread)"""
+        if not self.db_path:
+            return None
+        try:
+            return sqlite3.connect(self.db_path)
+        except Exception:
+            return None
 
     def safe_callback(self, message):
         if self.gui_callback:
@@ -1379,76 +1457,66 @@ class AlbumArtManager:
                 pass
 
             self.placeholder_image = ImageTk.PhotoImage(img)
-        except Exception as e:
+        except Exception:
             self.placeholder_image = None
-
-    def get_cache_directory(self):
-        try:
-            appdata_dir = os.environ.get('APPDATA')
-            if appdata_dir:
-                cache_dir = os.path.join(appdata_dir, 'RB3Dashboard', 'album_art')
-                os.makedirs(cache_dir, exist_ok=True)
-                return cache_dir
-        except Exception:
-            pass
-
-        try:
-            user_home = os.path.expanduser("~")
-            cache_dir = os.path.join(user_home, '.rb3dashboard', 'album_art')
-            os.makedirs(cache_dir, exist_ok=True)
-            return cache_dir
-        except Exception:
-            pass
-
-        return None
-
-    def get_cache_filename(self, cache_key):
-        safe_name = hashlib.md5(cache_key.encode('utf-8')).hexdigest()
-        return f"{safe_name}.jpg"
-
-    def get_cache_filepath(self, cache_key):
-        if not self.cache_dir:
-            return None
-        filename = self.get_cache_filename(cache_key)
-        return os.path.join(self.cache_dir, filename)
 
     def get_cache_key(self, artist, album):
         return f"{artist.lower().strip()}-{album.lower().strip()}" if album else f"{artist.lower().strip()}-unknown"
 
-    def load_from_disk_cache(self, cache_key):
-        if not self.cache_dir or not PIL_AVAILABLE:
+    def load_from_db(self, cache_key):
+        """Load image from SQLite database"""
+        if not self.db_path or not PIL_AVAILABLE:
             return None
 
-        filepath = self.get_cache_filepath(cache_key)
-        if not filepath or not os.path.exists(filepath):
+        conn = self._get_connection()
+        if not conn:
             return None
 
         try:
-            img = Image.open(filepath)
-            img = img.resize(self.image_size, Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            self.cache[cache_key] = photo
-            return photo
-        except Exception:
-            try:
-                os.remove(filepath)
-            except Exception:
-                pass
-            return None
+            cursor = conn.cursor()
+            cursor.execute('SELECT image_data FROM album_art WHERE cache_key = ?', (cache_key,))
+            row = cursor.fetchone()
+            conn.close()
 
-    def save_to_disk_cache(self, cache_key, image_data):
-        if not self.cache_dir or not PIL_AVAILABLE:
-            return
-
-        filepath = self.get_cache_filepath(cache_key)
-        if not filepath:
-            return
-
-        try:
-            with open(filepath, 'wb') as f:
-                f.write(image_data)
+            if row and row[0]:
+                img = Image.open(BytesIO(row[0]))
+                img = img.resize(self.image_size, Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.cache.set(cache_key, photo)
+                return photo
         except Exception:
             pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        return None
+
+    def save_to_db(self, cache_key, artist, album, image_data):
+        """Save image to SQLite database"""
+        if not self.db_path:
+            return
+
+        conn = self._get_connection()
+        if not conn:
+            return
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO album_art (cache_key, artist, album, image_data, fetched_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (cache_key, artist, album, image_data))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def get_album_art(self, artist, album, callback=None):
         if not self.api_key or not self.placeholder_image:
@@ -1456,13 +1524,17 @@ class AlbumArtManager:
 
         cache_key = self.get_cache_key(artist, album)
 
-        if cache_key in self.cache:
-            return self.cache[cache_key]
+        # Check in-memory LRU cache
+        cached = self.cache.get(cache_key)
+        if cached:
+            return cached
 
-        cached_image = self.load_from_disk_cache(cache_key)
+        # Check SQLite database
+        cached_image = self.load_from_db(cache_key)
         if cached_image:
             return cached_image
 
+        # Queue for fetching
         if cache_key not in self.url_cache:
             self.fetch_queue.append({
                 'artist': artist,
@@ -1525,18 +1597,18 @@ class AlbumArtManager:
 
             if image_url:
                 self.url_cache[cache_key] = image_url
-                self.download_and_cache_image(image_url, cache_key, callback)
+                self.download_and_cache_image(image_url, cache_key, artist, album, callback)
             else:
-                self.cache[cache_key] = self.placeholder_image
+                self.cache.set(cache_key, self.placeholder_image)
                 if callback:
                     callback(cache_key, self.placeholder_image)
 
         except Exception:
-            self.cache[cache_key] = self.placeholder_image
+            self.cache.set(cache_key, self.placeholder_image)
             if callback:
                 callback(cache_key, self.placeholder_image)
 
-    def download_and_cache_image(self, image_url, cache_key, callback=None):
+    def download_and_cache_image(self, image_url, cache_key, artist, album, callback=None):
         try:
             if not PIL_AVAILABLE:
                 return
@@ -1544,18 +1616,20 @@ class AlbumArtManager:
             response = requests.get(image_url, timeout=15)
             response.raise_for_status()
 
-            self.save_to_disk_cache(cache_key, response.content)
+            # Save to SQLite database
+            self.save_to_db(cache_key, artist, album, response.content)
 
+            # Create PhotoImage and cache in memory
             img = Image.open(BytesIO(response.content))
             img = img.resize(self.image_size, Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
-            self.cache[cache_key] = photo
+            self.cache.set(cache_key, photo)
 
             if callback:
                 callback(cache_key, photo)
 
         except Exception:
-            self.cache[cache_key] = self.placeholder_image
+            self.cache.set(cache_key, self.placeholder_image)
             if callback:
                 callback(cache_key, self.placeholder_image)
 
