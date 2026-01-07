@@ -20,7 +20,7 @@ This repository consists of two parts:
 - **Content Filtering**: Excludes covers, karaoke, tutorials, and other unwanted content
 
 ### Song Browser
-- **Browse Your Library**: View all songs available in RB3Enhanced
+- **Browse Your Library**: View all songs available in RB3Enhanced, loaded over the network
 - **Album Art**: Fetches album artwork from Last.fm
 - **Search & Filter**: Quickly find songs by artist, title, or album
 - **Quick Navigation**: Double-click to jump to any song
