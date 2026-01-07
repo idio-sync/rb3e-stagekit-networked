@@ -17,7 +17,6 @@ def install_if_missing(package_name, import_name):
 install_if_missing("google-api-python-client", "googleapiclient")
 install_if_missing("yt-dlp", "yt_dlp")
 install_if_missing("Pillow", "PIL")
-install_if_missing("ttkthemes", "ttkthemes")
 
 import socket
 import struct
@@ -29,7 +28,6 @@ import os
 import sys
 import webbrowser
 import ctypes
-from ttkthemes import ThemedTk
 from typing import Optional, Tuple, Dict
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -1101,13 +1099,12 @@ class RB3Dashboard:
     """Main unified dashboard application"""
 
     def __init__(self):
-        # Use ThemedTk with equilux (dark theme) - faster than sv_ttk
-        self.root = ThemedTk(theme="equilux")
+        self.root = tk.Tk()
         self.root.title("RB3Enhanced Dashboard")
         self.root.geometry("850x700")
         self.root.resizable(True, True)
 
-        # Setup theme colors and dark title bar
+        # Setup manual dark theme
         self.setup_theme()
 
         # Application state
@@ -1150,21 +1147,140 @@ class RB3Dashboard:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def setup_theme(self):
-        """Setup theme colors and Windows dark title bar"""
-        # Dark theme colors (equilux is already dark)
-        self.bg_color = '#464646'
-        self.fg_color = '#ffffff'
-        self.select_bg_color = '#5a5a5a'
-        self.alternate_bg_color = '#505050'
-        self.even_bg_color = '#464646'
-        self.text_bg_color = '#383838'
-        self.text_fg_color = '#ffffff'
+        """Setup comprehensive manual dark theme"""
+        # Color palette
+        self.bg_color = '#2d2d2d'
+        self.fg_color = '#e0e0e0'
+        self.select_bg_color = '#404040'
+        self.alternate_bg_color = '#353535'
+        self.even_bg_color = '#2d2d2d'
+        self.text_bg_color = '#252525'
+        self.text_fg_color = '#e0e0e0'
+        self.accent_color = '#0078d4'
+        self.border_color = '#555555'
 
-        # Configure Treeview style
+        # Configure root window
+        self.root.configure(bg=self.bg_color)
+        self.root.option_add('*Background', self.bg_color)
+        self.root.option_add('*Foreground', self.fg_color)
+
+        # Get ttk style
         style = ttk.Style()
-        style.configure("Larger.Treeview",
+        style.theme_use('clam')  # clam is most customizable
+
+        # Frame
+        style.configure('TFrame', background=self.bg_color)
+        style.configure('TLabelframe', background=self.bg_color, foreground=self.fg_color)
+        style.configure('TLabelframe.Label', background=self.bg_color, foreground=self.fg_color)
+
+        # Labels
+        style.configure('TLabel', background=self.bg_color, foreground=self.fg_color)
+
+        # Buttons
+        style.configure('TButton',
+                       background='#404040',
+                       foreground=self.fg_color,
+                       borderwidth=1,
+                       focuscolor='none')
+        style.map('TButton',
+                 background=[('active', '#505050'), ('pressed', '#353535')],
+                 foreground=[('disabled', '#808080')])
+
+        # Accent button
+        style.configure('Accent.TButton',
+                       background=self.accent_color,
+                       foreground='#ffffff')
+        style.map('Accent.TButton',
+                 background=[('active', '#1084d8'), ('pressed', '#006cbd')])
+
+        # Entry
+        style.configure('TEntry',
+                       fieldbackground=self.text_bg_color,
+                       foreground=self.fg_color,
+                       insertcolor=self.fg_color,
+                       borderwidth=1)
+
+        # Combobox
+        style.configure('TCombobox',
+                       fieldbackground=self.text_bg_color,
+                       background='#404040',
+                       foreground=self.fg_color,
+                       arrowcolor=self.fg_color)
+        style.map('TCombobox',
+                 fieldbackground=[('readonly', self.text_bg_color)],
+                 selectbackground=[('readonly', self.select_bg_color)])
+
+        # Spinbox
+        style.configure('TSpinbox',
+                       fieldbackground=self.text_bg_color,
+                       background='#404040',
+                       foreground=self.fg_color,
+                       arrowcolor=self.fg_color)
+
+        # Checkbutton
+        style.configure('TCheckbutton',
+                       background=self.bg_color,
+                       foreground=self.fg_color)
+        style.map('TCheckbutton',
+                 background=[('active', self.bg_color)])
+
+        # Radiobutton
+        style.configure('TRadiobutton',
+                       background=self.bg_color,
+                       foreground=self.fg_color)
+        style.map('TRadiobutton',
+                 background=[('active', self.bg_color)])
+
+        # Notebook (tabs)
+        style.configure('TNotebook',
+                       background=self.bg_color,
+                       borderwidth=0)
+        style.configure('TNotebook.Tab',
+                       background='#353535',
+                       foreground=self.fg_color,
+                       padding=[12, 4])
+        style.map('TNotebook.Tab',
+                 background=[('selected', '#404040'), ('active', '#3a3a3a')],
+                 foreground=[('selected', '#ffffff')])
+
+        # Treeview
+        style.configure('Treeview',
+                       background=self.bg_color,
+                       foreground=self.fg_color,
+                       fieldbackground=self.bg_color,
+                       borderwidth=0)
+        style.configure('Treeview.Heading',
+                       background='#353535',
+                       foreground=self.fg_color,
+                       borderwidth=1)
+        style.map('Treeview',
+                 background=[('selected', self.select_bg_color)],
+                 foreground=[('selected', '#ffffff')])
+
+        # Larger Treeview for song browser
+        style.configure('Larger.Treeview',
+                       background=self.bg_color,
+                       foreground=self.fg_color,
+                       fieldbackground=self.bg_color,
                        font=('TkDefaultFont', 12),
                        rowheight=70)
+
+        # Scrollbar
+        style.configure('Vertical.TScrollbar',
+                       background='#404040',
+                       troughcolor=self.bg_color,
+                       borderwidth=0,
+                       arrowcolor=self.fg_color)
+        style.configure('Horizontal.TScrollbar',
+                       background='#404040',
+                       troughcolor=self.bg_color,
+                       borderwidth=0,
+                       arrowcolor=self.fg_color)
+
+        # Progressbar
+        style.configure('TProgressbar',
+                       background=self.accent_color,
+                       troughcolor='#353535')
 
         # Set dark title bar on Windows
         self.set_dark_title_bar()
