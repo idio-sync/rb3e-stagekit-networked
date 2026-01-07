@@ -686,6 +686,301 @@ class StreamExtractor:
 
 
 # =============================================================================
+# SONG HISTORY (Session)
+# =============================================================================
+
+class SongHistory:
+    """Tracks songs played during the current session"""
+
+    def __init__(self):
+        self.history = []
+        self.enabled = True
+
+    def add_song(self, artist: str, song: str, album: str = "", shortname: str = ""):
+        """Add a song to the history"""
+        if not self.enabled:
+            return
+
+        entry = {
+            'timestamp': datetime.now().isoformat(),
+            'artist': artist,
+            'song': song,
+            'album': album,
+            'shortname': shortname
+        }
+        self.history.append(entry)
+
+    def get_history(self) -> list:
+        """Get the full history (newest first)"""
+        return list(reversed(self.history))
+
+    def clear(self):
+        """Clear the session history"""
+        self.history = []
+
+    def export_to_csv(self, filepath: str):
+        """Export history to CSV file"""
+        import csv
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Timestamp', 'Artist', 'Song', 'Album'])
+            for entry in self.history:
+                writer.writerow([
+                    entry['timestamp'],
+                    entry['artist'],
+                    entry['song'],
+                    entry['album']
+                ])
+
+    def export_to_json(self, filepath: str):
+        """Export history to JSON file"""
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump({
+                'exported': datetime.now().isoformat(),
+                'session_history': self.history
+            }, f, indent=2)
+
+    def get_count(self) -> int:
+        """Get number of songs in history"""
+        return len(self.history)
+
+
+# =============================================================================
+# PLAY STATISTICS (Persistent)
+# =============================================================================
+
+class PlayStatistics:
+    """Persistent play statistics stored in JSON"""
+
+    def __init__(self, stats_path: str = None):
+        self.stats_path = stats_path or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'play_stats.json')
+        self.stats = self.load_stats()
+
+    def load_stats(self) -> dict:
+        """Load stats from file"""
+        if os.path.exists(self.stats_path):
+            try:
+                with open(self.stats_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {
+            'total_plays': 0,
+            'total_time_seconds': 0,
+            'songs': {},
+            'first_tracked': datetime.now().isoformat()
+        }
+
+    def save_stats(self):
+        """Save stats to file"""
+        try:
+            with open(self.stats_path, 'w', encoding='utf-8') as f:
+                json.dump(self.stats, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save stats: {e}")
+
+    def record_play(self, artist: str, song: str, duration_seconds: int = 0):
+        """Record a song play"""
+        song_key = f"{artist.lower()}|{song.lower()}"
+
+        self.stats['total_plays'] += 1
+        self.stats['total_time_seconds'] += duration_seconds
+
+        if song_key not in self.stats['songs']:
+            self.stats['songs'][song_key] = {
+                'artist': artist,
+                'song': song,
+                'play_count': 0,
+                'total_time_seconds': 0,
+                'first_played': datetime.now().isoformat(),
+                'last_played': None
+            }
+
+        self.stats['songs'][song_key]['play_count'] += 1
+        self.stats['songs'][song_key]['total_time_seconds'] += duration_seconds
+        self.stats['songs'][song_key]['last_played'] = datetime.now().isoformat()
+
+        self.save_stats()
+
+    def get_top_songs(self, limit: int = 10) -> list:
+        """Get top played songs"""
+        songs = list(self.stats['songs'].values())
+        songs.sort(key=lambda x: x['play_count'], reverse=True)
+        return songs[:limit]
+
+    def get_total_plays(self) -> int:
+        return self.stats['total_plays']
+
+    def get_total_time(self) -> int:
+        """Get total time in seconds"""
+        return self.stats['total_time_seconds']
+
+    def get_total_time_formatted(self) -> str:
+        """Get total time as formatted string"""
+        total = self.stats['total_time_seconds']
+        hours = total // 3600
+        minutes = (total % 3600) // 60
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
+
+    def get_unique_songs(self) -> int:
+        return len(self.stats['songs'])
+
+
+# =============================================================================
+# LAST.FM SCROBBLER
+# =============================================================================
+
+class LastFmScrobbler:
+    """Last.fm scrobbling integration"""
+
+    API_URL = "https://ws.audioscrobbler.com/2.0/"
+
+    def __init__(self, api_key: str = "", api_secret: str = "", session_key: str = "",
+                 gui_callback=None):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.session_key = session_key
+        self.gui_callback = gui_callback
+        self.enabled = False
+        self.current_song_start = None
+        self.current_song = None
+
+    def is_configured(self) -> bool:
+        """Check if Last.fm is properly configured"""
+        return bool(self.api_key and self.api_secret and self.session_key)
+
+    def _sign_call(self, params: dict) -> str:
+        """Create API signature"""
+        sorted_params = sorted(params.items())
+        signature_string = ''.join(f"{k}{v}" for k, v in sorted_params)
+        signature_string += self.api_secret
+        return hashlib.md5(signature_string.encode('utf-8')).hexdigest()
+
+    def _api_call(self, method: str, params: dict, http_method: str = 'POST') -> dict:
+        """Make an API call to Last.fm"""
+        params['method'] = method
+        params['api_key'] = self.api_key
+        params['sk'] = self.session_key
+        params['api_sig'] = self._sign_call(params)
+        params['format'] = 'json'
+
+        try:
+            if http_method == 'POST':
+                response = requests.post(self.API_URL, data=params, timeout=10)
+            else:
+                response = requests.get(self.API_URL, params=params, timeout=10)
+            return response.json()
+        except Exception as e:
+            if self.gui_callback:
+                self.gui_callback(f"Last.fm API error: {e}")
+            return {}
+
+    def update_now_playing(self, artist: str, track: str, album: str = ""):
+        """Update Now Playing status on Last.fm"""
+        if not self.enabled or not self.is_configured():
+            return
+
+        self.current_song = {'artist': artist, 'track': track, 'album': album}
+        self.current_song_start = time.time()
+
+        params = {
+            'artist': artist,
+            'track': track
+        }
+        if album:
+            params['album'] = album
+
+        result = self._api_call('track.updateNowPlaying', params)
+
+        if 'error' in result:
+            if self.gui_callback:
+                self.gui_callback(f"Last.fm now playing error: {result.get('message', 'Unknown error')}")
+        elif self.gui_callback:
+            self.gui_callback(f"Last.fm: Now playing - {artist} - {track}")
+
+    def scrobble(self, artist: str, track: str, album: str = "", duration: int = 0):
+        """Scrobble a track to Last.fm
+
+        Should only be called after playing 50% of the track or 4 minutes
+        """
+        if not self.enabled or not self.is_configured():
+            return
+
+        params = {
+            'artist': artist,
+            'track': track,
+            'timestamp': str(int(time.time()))
+        }
+        if album:
+            params['album'] = album
+        if duration:
+            params['duration'] = str(duration)
+
+        result = self._api_call('track.scrobble', params)
+
+        if 'error' in result:
+            if self.gui_callback:
+                self.gui_callback(f"Last.fm scrobble error: {result.get('message', 'Unknown error')}")
+        elif self.gui_callback:
+            self.gui_callback(f"Last.fm: Scrobbled - {artist} - {track}")
+
+    def should_scrobble(self, duration_seconds: int, elapsed_seconds: int) -> bool:
+        """Check if track should be scrobbled based on Last.fm rules
+
+        Rules: Track must be played for at least 50% or 4 minutes
+        """
+        if elapsed_seconds >= 240:  # 4 minutes
+            return True
+        if duration_seconds > 0 and elapsed_seconds >= duration_seconds * 0.5:
+            return True
+        return False
+
+    def get_auth_token(self) -> Optional[str]:
+        """Get authentication token for user authorization"""
+        if not self.api_key:
+            return None
+
+        params = {
+            'method': 'auth.gettoken',
+            'api_key': self.api_key,
+            'format': 'json'
+        }
+
+        try:
+            response = requests.get(self.API_URL, params=params, timeout=10)
+            result = response.json()
+            return result.get('token')
+        except Exception:
+            return None
+
+    def get_auth_url(self, token: str) -> str:
+        """Get URL for user to authorize the application"""
+        return f"https://www.last.fm/api/auth/?api_key={self.api_key}&token={token}"
+
+    def get_session_key(self, token: str) -> Optional[str]:
+        """Exchange authorized token for session key"""
+        params = {
+            'method': 'auth.getSession',
+            'api_key': self.api_key,
+            'token': token
+        }
+        params['api_sig'] = self._sign_call(params)
+        params['format'] = 'json'
+
+        try:
+            response = requests.get(self.API_URL, params=params, timeout=10)
+            result = response.json()
+            if 'session' in result:
+                return result['session']['key']
+            return None
+        except Exception:
+            return None
+
+
+# =============================================================================
 # SONG BROWSER
 # =============================================================================
 
@@ -1024,11 +1319,13 @@ class UnifiedRB3EListener:
     """
 
     def __init__(self, gui_callback=None, ip_detected_callback=None,
-                 song_update_callback=None, stagekit_callback=None):
+                 song_update_callback=None, stagekit_callback=None,
+                 song_started_callback=None):
         self.gui_callback = gui_callback
         self.ip_detected_callback = ip_detected_callback
         self.song_update_callback = song_update_callback
         self.stagekit_callback = stagekit_callback
+        self.song_started_callback = song_started_callback
 
         self.sock = None
         self.running = False
@@ -1159,6 +1456,14 @@ class UnifiedRB3EListener:
             if self.game_state == 0 and new_state == 1:
                 if self.gui_callback:
                     self.gui_callback("Song starting!")
+
+                # Notify that song has started (for history/scrobbling)
+                if self.song_started_callback and (self.current_song or self.current_artist):
+                    self.song_started_callback(
+                        self.current_artist,
+                        self.current_song,
+                        self.current_shortname
+                    )
 
                 if self.pending_video and self.video_enabled:
                     self.start_pending_video()
@@ -1295,8 +1600,26 @@ class RB3Dashboard:
         # Load settings
         self.settings = self.load_settings()
 
+        # History and statistics tracking
+        self.song_history = SongHistory()
+        self.song_history.enabled = self.settings.get('history_enabled', True)
+
+        self.play_stats = PlayStatistics()
+
+        # Last.fm scrobbler
+        self.scrobbler = LastFmScrobbler(
+            api_key=self.settings.get('lastfm_api_key', ''),
+            api_secret=self.settings.get('lastfm_api_secret', ''),
+            session_key=self.settings.get('lastfm_session_key', ''),
+            gui_callback=None  # Set later after log_message is available
+        )
+        self.scrobbler.enabled = self.settings.get('scrobble_enabled', False)
+
         # Create UI
         self.create_widgets()
+
+        # Set scrobbler callback now that log_message exists
+        self.scrobbler.gui_callback = self.log_message
 
         # Auto-load database if path saved
         self.auto_load_database()
@@ -1512,6 +1835,11 @@ class RB3Dashboard:
         browser_frame = ttk.Frame(self.notebook)
         self.notebook.add(browser_frame, text="Song Browser")
         self.create_song_browser_tab(browser_frame)
+
+        # History tab
+        history_frame = ttk.Frame(self.notebook)
+        self.notebook.add(history_frame, text="History")
+        self.create_history_tab(history_frame)
 
         # Stage Kit tab
         stagekit_frame = ttk.Frame(self.notebook)
@@ -1756,6 +2084,171 @@ class RB3Dashboard:
         ttk.Label(status_frame, text="Double-click to jump to song",
                  foreground='gray', font=('TkDefaultFont', 9)).pack(side='right')
 
+    def create_history_tab(self, parent):
+        """Create history tab showing session play history and stats"""
+        # Top section: Session stats
+        stats_frame = ttk.LabelFrame(parent, text="Statistics", padding=10)
+        stats_frame.pack(fill='x', padx=10, pady=5)
+
+        stats_row = ttk.Frame(stats_frame)
+        stats_row.pack(fill='x')
+
+        # Session stats (left)
+        session_stats = ttk.Frame(stats_row)
+        session_stats.pack(side='left', fill='x', expand=True)
+        ttk.Label(session_stats, text="Session:", font=('TkDefaultFont', 9, 'bold')).pack(anchor='w')
+        self.session_count_label = ttk.Label(session_stats, text="0 songs played")
+        self.session_count_label.pack(anchor='w')
+
+        # All-time stats (middle)
+        alltime_stats = ttk.Frame(stats_row)
+        alltime_stats.pack(side='left', fill='x', expand=True)
+        ttk.Label(alltime_stats, text="All-Time:", font=('TkDefaultFont', 9, 'bold')).pack(anchor='w')
+        self.alltime_count_label = ttk.Label(alltime_stats, text="0 songs, 0 unique")
+        self.alltime_count_label.pack(anchor='w')
+        self.alltime_time_label = ttk.Label(alltime_stats, text="Total time: 0m")
+        self.alltime_time_label.pack(anchor='w')
+
+        # Top songs button (right)
+        top_songs_frame = ttk.Frame(stats_row)
+        top_songs_frame.pack(side='right', padx=10)
+        ttk.Button(top_songs_frame, text="Show Top Songs",
+                  command=self.show_top_songs).pack()
+
+        # History list
+        list_frame = ttk.LabelFrame(parent, text="Session History", padding=5)
+        list_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        # Treeview for history
+        tree_container = ttk.Frame(list_frame)
+        tree_container.pack(fill='both', expand=True)
+
+        self.history_tree = ttk.Treeview(tree_container,
+                                         columns=('time', 'artist', 'song', 'album'),
+                                         show='headings',
+                                         style="Larger.Treeview")
+
+        self.history_tree.heading('time', text='Time', anchor='w')
+        self.history_tree.heading('artist', text='Artist', anchor='w')
+        self.history_tree.heading('song', text='Song', anchor='w')
+        self.history_tree.heading('album', text='Album', anchor='w')
+
+        self.history_tree.column('time', width=80, minwidth=60)
+        self.history_tree.column('artist', width=180, minwidth=120)
+        self.history_tree.column('song', width=250, minwidth=150)
+        self.history_tree.column('album', width=180, minwidth=120)
+
+        self.history_tree.tag_configure('oddrow', background=self.alternate_bg_color)
+        self.history_tree.tag_configure('evenrow', background=self.even_bg_color)
+
+        h_scrollbar = ttk.Scrollbar(tree_container, orient='vertical', command=self.history_tree.yview)
+        self.history_tree.configure(yscrollcommand=h_scrollbar.set)
+
+        self.history_tree.grid(row=0, column=0, sticky='nsew')
+        h_scrollbar.grid(row=0, column=1, sticky='ns')
+
+        tree_container.grid_rowconfigure(0, weight=1)
+        tree_container.grid_columnconfigure(0, weight=1)
+
+        # Bottom controls
+        controls_frame = ttk.Frame(parent)
+        controls_frame.pack(fill='x', padx=10, pady=5)
+
+        ttk.Button(controls_frame, text="Clear History",
+                  command=self.clear_session_history).pack(side='left', padx=(0, 10))
+
+        self.history_status_label = ttk.Label(controls_frame, text="History tracking enabled",
+                                              foreground='gray')
+        self.history_status_label.pack(side='left')
+
+    def show_top_songs(self):
+        """Show dialog with top played songs"""
+        if not hasattr(self, 'play_stats') or not self.play_stats:
+            messagebox.showinfo("Top Songs", "No play statistics available yet.")
+            return
+
+        top_songs = self.play_stats.get_top_songs(15)
+        if not top_songs:
+            messagebox.showinfo("Top Songs", "No songs played yet.")
+            return
+
+        # Create a simple dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Top Played Songs")
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
+
+        # Apply dark styling
+        dialog.configure(bg=self.bg_color)
+
+        ttk.Label(dialog, text="Your Most Played Songs",
+                 font=('TkDefaultFont', 12, 'bold')).pack(pady=10)
+
+        # List frame
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        text = tk.Text(list_frame, wrap='word', bg=self.bg_color, fg=self.fg_color,
+                      font=('TkDefaultFont', 10), height=15)
+        scrollbar = ttk.Scrollbar(list_frame, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+
+        text.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        for i, song in enumerate(top_songs, 1):
+            text.insert('end', f"{i:2}. {song['artist']} - {song['song']}\n")
+            text.insert('end', f"    Plays: {song['play_count']}\n\n")
+
+        text.configure(state='disabled')
+
+        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
+
+    def clear_session_history(self):
+        """Clear the session history"""
+        if hasattr(self, 'song_history') and self.song_history:
+            self.song_history.clear()
+            self.refresh_history_display()
+            self.log_message("Session history cleared")
+
+    def refresh_history_display(self):
+        """Refresh the history treeview"""
+        if not hasattr(self, 'history_tree'):
+            return
+
+        # Clear existing items
+        for item in self.history_tree.get_children():
+            self.history_tree.delete(item)
+
+        if not hasattr(self, 'song_history') or not self.song_history:
+            return
+
+        # Add history items (newest first)
+        history = self.song_history.get_history()
+        for i, entry in enumerate(history):
+            # Parse timestamp for display
+            try:
+                dt = datetime.fromisoformat(entry['timestamp'])
+                time_str = dt.strftime('%H:%M:%S')
+            except:
+                time_str = entry['timestamp'][:8]
+
+            tag = 'oddrow' if i % 2 == 0 else 'evenrow'
+            self.history_tree.insert('', 'end',
+                                     values=(time_str, entry['artist'], entry['song'], entry['album']),
+                                     tags=(tag,))
+
+        # Update session count
+        self.session_count_label.config(text=f"{self.song_history.get_count()} songs played")
+
+        # Update all-time stats
+        if hasattr(self, 'play_stats') and self.play_stats:
+            total = self.play_stats.get_total_plays()
+            unique = self.play_stats.get_unique_songs()
+            time_str = self.play_stats.get_total_time_formatted()
+            self.alltime_count_label.config(text=f"{total} songs, {unique} unique")
+            self.alltime_time_label.config(text=f"Total time: {time_str}")
+
     def create_settings_tab(self, parent):
         """Create settings tab with two-column layout"""
         # Main container with two columns
@@ -1791,6 +2284,29 @@ class RB3Dashboard:
                                foreground='#6699cc', cursor='hand2', font=('TkDefaultFont', 8))
         lastfm_link.pack(anchor='w')
         lastfm_link.bind('<Button-1>', lambda e: webbrowser.open('https://www.last.fm/api/account/create'))
+
+        # Last.fm Scrobbling
+        scrobble_frame = ttk.LabelFrame(left_col, text="Last.fm Scrobbling", padding=10)
+        scrobble_frame.pack(fill='x', pady=5)
+
+        self.scrobble_enabled_var = tk.BooleanVar(value=self.settings.get('scrobble_enabled', False))
+        ttk.Checkbutton(scrobble_frame, text="Enable scrobbling",
+                       variable=self.scrobble_enabled_var).pack(anchor='w')
+
+        ttk.Label(scrobble_frame, text="Last.fm API Secret:").pack(anchor='w', pady=(5, 0))
+        self.lastfm_secret_var = tk.StringVar(value=self.settings.get('lastfm_api_secret', ''))
+        ttk.Entry(scrobble_frame, textvariable=self.lastfm_secret_var, width=40, show='*').pack(fill='x', pady=(2, 0))
+
+        ttk.Label(scrobble_frame, text="Session Key:").pack(anchor='w', pady=(5, 0))
+        self.lastfm_session_var = tk.StringVar(value=self.settings.get('lastfm_session_key', ''))
+        ttk.Entry(scrobble_frame, textvariable=self.lastfm_session_var, width=40, show='*').pack(fill='x', pady=(2, 0))
+
+        auth_frame = ttk.Frame(scrobble_frame)
+        auth_frame.pack(fill='x', pady=(5, 0))
+        ttk.Button(auth_frame, text="Authorize Last.fm",
+                  command=self.authorize_lastfm).pack(side='left')
+        self.lastfm_status_label = ttk.Label(auth_frame, text="Not configured", foreground='gray')
+        self.lastfm_status_label.pack(side='left', padx=(10, 0))
 
         # Song Database
         database_frame = ttk.LabelFrame(left_col, text="Song Database (Optional)", padding=10)
@@ -1852,6 +2368,26 @@ class RB3Dashboard:
         ttk.Label(delay_frame, text="(-=early)",
                  font=('TkDefaultFont', 8), foreground='gray').pack(side='left', padx=(5, 0))
 
+        # History & Statistics
+        history_frame = ttk.LabelFrame(right_col, text="History & Statistics", padding=10)
+        history_frame.pack(fill='x', pady=5)
+
+        self.history_enabled_var = tk.BooleanVar(value=self.settings.get('history_enabled', True))
+        ttk.Checkbutton(history_frame, text="Track song history",
+                       variable=self.history_enabled_var).pack(anchor='w')
+
+        self.stats_enabled_var = tk.BooleanVar(value=self.settings.get('stats_enabled', True))
+        ttk.Checkbutton(history_frame, text="Track play statistics",
+                       variable=self.stats_enabled_var).pack(anchor='w')
+
+        export_frame = ttk.Frame(history_frame)
+        export_frame.pack(fill='x', pady=(8, 0))
+
+        ttk.Button(export_frame, text="Export History (CSV)",
+                  command=lambda: self.export_history('csv')).pack(side='left', padx=(0, 5))
+        ttk.Button(export_frame, text="Export (JSON)",
+                  command=lambda: self.export_history('json')).pack(side='left')
+
         # Save button at bottom of right column
         ttk.Button(right_col, text="Save Settings",
                   command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
@@ -1892,10 +2428,125 @@ class RB3Dashboard:
         self.log_text.delete('1.0', 'end')
         self.log_message("Log cleared")
 
+    def export_history(self, format_type='csv'):
+        """Export session history to file"""
+        if not hasattr(self, 'song_history') or not self.song_history:
+            messagebox.showwarning("Export", "No history to export.")
+            return
+
+        if self.song_history.get_count() == 0:
+            messagebox.showwarning("Export", "No songs in history to export.")
+            return
+
+        if format_type == 'csv':
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=f"song_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+            if filepath:
+                self.song_history.export_to_csv(filepath)
+                self.log_message(f"History exported to {filepath}")
+                messagebox.showinfo("Export", f"History exported to:\n{filepath}")
+        else:
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                initialfile=f"song_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            if filepath:
+                self.song_history.export_to_json(filepath)
+                self.log_message(f"History exported to {filepath}")
+                messagebox.showinfo("Export", f"History exported to:\n{filepath}")
+
+    def authorize_lastfm(self):
+        """Start Last.fm authorization flow"""
+        api_key = self.lastfm_api_key_var.get().strip()
+        api_secret = self.lastfm_secret_var.get().strip()
+
+        if not api_key or not api_secret:
+            messagebox.showerror("Error", "Please enter both Last.fm API Key and API Secret first.")
+            return
+
+        # Create temporary scrobbler for auth
+        scrobbler = LastFmScrobbler(api_key=api_key, api_secret=api_secret)
+        token = scrobbler.get_auth_token()
+
+        if not token:
+            messagebox.showerror("Error", "Failed to get authorization token from Last.fm.")
+            return
+
+        # Open authorization URL
+        auth_url = scrobbler.get_auth_url(token)
+        webbrowser.open(auth_url)
+
+        # Show dialog to wait for user
+        result = messagebox.askokcancel(
+            "Last.fm Authorization",
+            "A browser window has opened for Last.fm authorization.\n\n"
+            "1. Log in to Last.fm if needed\n"
+            "2. Click 'Yes, allow access'\n"
+            "3. Return here and click OK\n\n"
+            "Click OK after you've authorized the application."
+        )
+
+        if result:
+            # Try to get session key
+            session_key = scrobbler.get_session_key(token)
+            if session_key:
+                self.lastfm_session_var.set(session_key)
+                self.lastfm_status_label.config(text="Authorized", foreground='green')
+                self.log_message("Last.fm authorization successful")
+                messagebox.showinfo("Success", "Last.fm authorization successful!\n\nClick 'Save Settings' to save your session key.")
+            else:
+                self.lastfm_status_label.config(text="Auth failed", foreground='red')
+                messagebox.showerror("Error", "Failed to get session key. Please try again.")
+
     def on_song_update(self, song, artist):
         """Called when song/artist info updates"""
         self.root.after(0, lambda: self.song_var.set(song if song else "Waiting for game..."))
         self.root.after(0, lambda: self.artist_var.set(artist if artist else ""))
+
+    def on_song_started(self, artist, song, shortname):
+        """Called when a song actually starts playing (game state 0->1)"""
+        if not artist and not song:
+            return
+
+        # Track in session history
+        if self.song_history and self.song_history.enabled:
+            self.song_history.add_song(artist, song, "", shortname)
+            self.root.after(0, self.refresh_history_display)
+
+        # Track in persistent stats
+        if self.play_stats and self.settings.get('stats_enabled', True):
+            # Try to get duration from database
+            duration = 0
+            if self.song_database:
+                duration = self.song_database.get_song_duration(shortname, artist, song) or 0
+            self.play_stats.record_play(artist, song, duration)
+
+        # Last.fm scrobbling - update now playing
+        if self.scrobbler and self.scrobbler.enabled:
+            self.scrobbler.update_now_playing(artist, song)
+
+            # Schedule scrobble after appropriate time (4 min or 50%)
+            duration = 0
+            if self.song_database:
+                duration = self.song_database.get_song_duration(shortname, artist, song) or 0
+
+            if duration > 0:
+                scrobble_time = min(duration * 0.5, 240)  # 50% or 4 minutes
+            else:
+                scrobble_time = 240  # Default to 4 minutes
+
+            # Schedule the scrobble (convert to milliseconds)
+            self.root.after(int(scrobble_time * 1000),
+                           lambda a=artist, s=song: self._do_scrobble(a, s))
+
+    def _do_scrobble(self, artist, song):
+        """Perform the actual scrobble"""
+        if self.scrobbler and self.scrobbler.enabled:
+            self.scrobbler.scrobble(artist, song)
 
     def on_ip_detected(self, ip_address):
         """Called when RB3Enhanced IP is detected"""
@@ -2212,7 +2863,8 @@ class RB3Dashboard:
             self.listener = UnifiedRB3EListener(
                 gui_callback=self.log_message,
                 ip_detected_callback=self.on_ip_detected,
-                song_update_callback=self.on_song_update
+                song_update_callback=self.on_song_update,
+                song_started_callback=self.on_song_started
             )
 
             # Set video components if all are available
@@ -2295,6 +2947,11 @@ class RB3Dashboard:
         return {
             'youtube_api_key': self.api_key_var.get().strip(),
             'lastfm_api_key': self.lastfm_api_key_var.get().strip(),
+            'lastfm_api_secret': self.lastfm_secret_var.get().strip(),
+            'lastfm_session_key': self.lastfm_session_var.get().strip(),
+            'scrobble_enabled': self.scrobble_enabled_var.get(),
+            'history_enabled': self.history_enabled_var.get(),
+            'stats_enabled': self.stats_enabled_var.get(),
             'video_enabled': self.video_enabled_var.get(),
             'fullscreen': self.fullscreen_var.get(),
             'muted': self.muted_var.get(),
@@ -2319,6 +2976,23 @@ class RB3Dashboard:
             if self.album_art_manager:
                 self.album_art_manager.set_api_key(settings.get('lastfm_api_key', ''))
 
+            # Update history tracking
+            if self.song_history:
+                self.song_history.enabled = settings.get('history_enabled', True)
+
+            # Update scrobbler
+            if self.scrobbler:
+                self.scrobbler.api_key = settings.get('lastfm_api_key', '')
+                self.scrobbler.api_secret = settings.get('lastfm_api_secret', '')
+                self.scrobbler.session_key = settings.get('lastfm_session_key', '')
+                self.scrobbler.enabled = settings.get('scrobble_enabled', False)
+
+                # Update status label
+                if self.scrobbler.is_configured():
+                    self.lastfm_status_label.config(text="Configured", foreground='green')
+                else:
+                    self.lastfm_status_label.config(text="Not configured", foreground='gray')
+
             # Update listener if running
             if self.listener:
                 video_settings = self.get_video_settings()
@@ -2334,24 +3008,36 @@ class RB3Dashboard:
         """Load settings from file"""
         settings_path = self.get_settings_path()
 
+        defaults = {
+            'youtube_api_key': '',
+            'lastfm_api_key': '',
+            'lastfm_api_secret': '',
+            'lastfm_session_key': '',
+            'scrobble_enabled': False,
+            'history_enabled': True,
+            'stats_enabled': True,
+            'video_enabled': False,
+            'fullscreen': True,
+            'muted': True,
+            'always_on_top': False,
+            'sync_video_to_song': True,
+            'auto_quit_on_menu': True,
+            'video_start_delay': 0.0,
+            'database_path': ''
+        }
+
         try:
             with open(settings_path, 'r') as f:
-                return json.load(f)
+                loaded = json.load(f)
+                # Merge with defaults
+                for key, value in defaults.items():
+                    if key not in loaded:
+                        loaded[key] = value
+                return loaded
         except FileNotFoundError:
-            return {
-                'youtube_api_key': '',
-                'lastfm_api_key': '',
-                'video_enabled': False,
-                'fullscreen': True,
-                'muted': True,
-                'always_on_top': False,
-                'sync_video_to_song': True,
-                'auto_quit_on_menu': True,
-                'video_start_delay': 0.0,
-                'database_path': ''
-            }
+            return defaults
         except Exception:
-            return {}
+            return defaults
 
     def on_closing(self):
         """Handle window close"""
