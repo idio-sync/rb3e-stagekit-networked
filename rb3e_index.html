@@ -280,13 +280,14 @@
             right: 0;
             background-color: #1a252f;
             color: #ecf0f1;
-            padding: 15px 20px;
+            padding: 12px 20px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.3);
             z-index: 1000;
             transition: transform 0.3s ease-in-out;
+            gap: 20px;
         }
 
         .now-playing.hidden {
@@ -296,15 +297,18 @@
         .now-playing-info {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 12px;
+            flex: 1;
+            min-width: 0;
         }
 
         .now-playing-status {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background-color: #2ecc71;
             animation: pulse 2s infinite;
+            flex-shrink: 0;
         }
 
         .now-playing-status.menu {
@@ -320,46 +324,144 @@
         .now-playing-text {
             display: flex;
             flex-direction: column;
+            min-width: 0;
         }
 
         .now-playing-song {
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
             color: #ecf0f1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .now-playing-artist {
-            font-size: 13px;
+            font-size: 12px;
             color: #bdc3c7;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
+        /* Center section: Band info, venue, screen */
+        .now-playing-details {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-shrink: 0;
+        }
+
+        .np-detail-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .np-detail-label {
+            font-size: 9px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .np-detail-value {
+            font-size: 12px;
+            color: #bdc3c7;
+            white-space: nowrap;
+        }
+
+        /* Band info display */
+        .band-info {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .instrument-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            background-color: #34495e;
+            color: #95a5a6;
+        }
+
+        .instrument-badge.active {
+            background-color: #3498db;
+            color: white;
+        }
+
+        .instrument-badge.guitar { background-color: #e74c3c; }
+        .instrument-badge.bass { background-color: #e67e22; }
+        .instrument-badge.drums { background-color: #9b59b6; }
+        .instrument-badge.keys { background-color: #2ecc71; }
+        .instrument-badge.vocals { background-color: #3498db; }
+
+        /* Right section: Score display */
         .now-playing-score {
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 15px;
+            flex-shrink: 0;
+        }
+
+        .score-container {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
         }
 
         .score-value {
-            font-size: 20px;
+            font-size: 18px;
             font-weight: bold;
             color: #3498db;
         }
 
+        .score-label {
+            font-size: 9px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+        }
+
         .stars-display {
-            font-size: 18px;
+            font-size: 16px;
             color: #f1c40f;
-            letter-spacing: 2px;
+            letter-spacing: 1px;
         }
 
         .now-playing-state {
-            font-size: 12px;
+            font-size: 10px;
             color: #95a5a6;
             text-transform: uppercase;
+            padding: 3px 8px;
+            background-color: rgba(255,255,255,0.1);
+            border-radius: 3px;
         }
 
         /* Adjust body padding to account for now playing bar */
         body.has-now-playing {
-            padding-bottom: 80px;
+            padding-bottom: 70px;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .now-playing {
+                flex-wrap: wrap;
+                gap: 10px;
+                padding: 10px 15px;
+            }
+            .now-playing-details {
+                display: none;
+            }
+            body.has-now-playing {
+                padding-bottom: 60px;
+            }
         }
 
         @media (prefers-color-scheme: dark) {
@@ -894,9 +996,14 @@
             const starsEl = document.getElementById('npStars');
             const stateEl = document.getElementById('npState');
             const statusEl = document.getElementById('npStatus');
+            const venueEl = document.getElementById('npVenue');
+            const screenEl = document.getElementById('npScreen');
+            const venueGroup = document.getElementById('npVenueGroup');
+            const screenGroup = document.getElementById('npScreenGroup');
+            const bandGroup = document.getElementById('npBandGroup');
 
             // Check if we have valid data
-            const hasData = data && (data.song || data.artist || data.details);
+            const hasData = data && (data.song || data.artist || data.details || data.state);
 
             if (hasData) {
                 // Show panel
@@ -912,7 +1019,8 @@
                     scoreEl.textContent = data.score.toLocaleString();
                     scoreEl.parentElement.style.display = 'flex';
                 } else {
-                    scoreEl.parentElement.style.display = 'none';
+                    scoreEl.textContent = '0';
+                    scoreEl.parentElement.style.display = 'flex';
                 }
 
                 // Update stars if available
@@ -920,17 +1028,87 @@
                     starsEl.textContent = '★'.repeat(Math.min(data.stars, 5)) + '☆'.repeat(Math.max(0, 5 - data.stars));
                     starsEl.style.display = 'block';
                 } else {
-                    starsEl.style.display = 'none';
+                    starsEl.textContent = '☆☆☆☆☆';
+                    starsEl.style.display = 'block';
+                }
+
+                // Update venue if available
+                if (data.venue) {
+                    venueEl.textContent = formatVenueName(data.venue);
+                    venueGroup.style.display = 'flex';
+                } else {
+                    venueGroup.style.display = 'none';
+                }
+
+                // Update screen if available
+                if (data.screen) {
+                    screenEl.textContent = formatScreenName(data.screen);
+                    screenGroup.style.display = 'flex';
+                } else {
+                    screenGroup.style.display = 'none';
+                }
+
+                // Update band info if available
+                if (data.band) {
+                    updateBandInfo(data.band);
+                    bandGroup.style.display = 'flex';
+                } else {
+                    bandGroup.style.display = 'none';
                 }
 
                 // Update state
                 const state = data.state || 'unknown';
                 const isPlaying = state === 'playing' || state === 'ingame' || data.song;
-                stateEl.textContent = isPlaying ? 'Now Playing' : (state === 'menu' ? 'In Menu' : state);
+                stateEl.textContent = isPlaying ? 'Playing' : (state === 'menu' ? 'Menu' : state);
                 statusEl.className = 'now-playing-status' + (isPlaying ? '' : ' menu');
             } else {
                 hideNowPlayingPanel();
             }
+        }
+
+        function formatVenueName(venue) {
+            // Clean up venue names (remove underscores, capitalize)
+            if (!venue) return '-';
+            return venue
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, c => c.toUpperCase())
+                .substring(0, 20);
+        }
+
+        function formatScreenName(screen) {
+            // Clean up screen names
+            if (!screen) return '-';
+            return screen
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, c => c.toUpperCase())
+                .substring(0, 15);
+        }
+
+        function updateBandInfo(band) {
+            // Update instrument badges based on band data
+            // band could be an object like { guitar: true, bass: false, drums: true, keys: false, vocals: true }
+            // or an array of active instruments
+            const instruments = ['guitar', 'bass', 'drums', 'keys', 'vocals'];
+            const badges = document.querySelectorAll('#npBand .instrument-badge');
+
+            badges.forEach(badge => {
+                const inst = badge.dataset.inst;
+                let isActive = false;
+
+                if (Array.isArray(band)) {
+                    isActive = band.includes(inst) || band.includes(inst.charAt(0).toUpperCase());
+                } else if (typeof band === 'object') {
+                    isActive = band[inst] || band[inst.charAt(0).toUpperCase()];
+                } else if (typeof band === 'string') {
+                    isActive = band.toLowerCase().includes(inst);
+                }
+
+                if (isActive) {
+                    badge.classList.add('active', inst);
+                } else {
+                    badge.classList.remove('active', 'guitar', 'bass', 'drums', 'keys', 'vocals');
+                }
+            });
         }
 
         function hideNowPlayingPanel() {
@@ -1039,6 +1217,7 @@
 
     <!-- Now Playing Panel -->
     <div id="nowPlayingPanel" class="now-playing hidden">
+        <!-- Left: Song info -->
         <div class="now-playing-info">
             <div id="npStatus" class="now-playing-status"></div>
             <div class="now-playing-text">
@@ -1046,10 +1225,37 @@
                 <span id="npArtist" class="now-playing-artist">-</span>
             </div>
         </div>
+
+        <!-- Center: Band info, venue, screen -->
+        <div class="now-playing-details">
+            <div class="np-detail-group" id="npBandGroup">
+                <span class="np-detail-label">Band</span>
+                <div id="npBand" class="band-info">
+                    <span class="instrument-badge" data-inst="guitar" title="Guitar">G</span>
+                    <span class="instrument-badge" data-inst="bass" title="Bass">B</span>
+                    <span class="instrument-badge" data-inst="drums" title="Drums">D</span>
+                    <span class="instrument-badge" data-inst="keys" title="Keys">K</span>
+                    <span class="instrument-badge" data-inst="vocals" title="Vocals">V</span>
+                </div>
+            </div>
+            <div class="np-detail-group" id="npVenueGroup">
+                <span class="np-detail-label">Venue</span>
+                <span id="npVenue" class="np-detail-value">-</span>
+            </div>
+            <div class="np-detail-group" id="npScreenGroup">
+                <span class="np-detail-label">Screen</span>
+                <span id="npScreen" class="np-detail-value">-</span>
+            </div>
+        </div>
+
+        <!-- Right: Score and stars -->
         <div class="now-playing-score">
             <span id="npState" class="now-playing-state">-</span>
             <span id="npStars" class="stars-display"></span>
-            <span id="npScore" class="score-value">0</span>
+            <div class="score-container">
+                <span id="npScore" class="score-value">0</span>
+                <span class="score-label">Score</span>
+            </div>
         </div>
     </div>
 </body>
