@@ -1667,12 +1667,13 @@ class UnifiedRB3EListener:
 
     def __init__(self, gui_callback=None, ip_detected_callback=None,
                  song_update_callback=None, stagekit_callback=None,
-                 song_started_callback=None):
+                 song_started_callback=None, game_info_callback=None):
         self.gui_callback = gui_callback
         self.ip_detected_callback = ip_detected_callback
         self.song_update_callback = song_update_callback
         self.stagekit_callback = stagekit_callback
         self.song_started_callback = song_started_callback
+        self.game_info_callback = game_info_callback
 
         self.sock = None
         self.running = False
@@ -1685,6 +1686,18 @@ class UnifiedRB3EListener:
         self.current_artist = ""
         self.current_shortname = ""
         self.game_state = 0
+
+        # Live game info (protected by _state_lock)
+        self.current_score = 0
+        self.current_stars = 0
+        self.member_scores = [0, 0, 0, 0]
+        self.band_info = {
+            'members': [False, False, False, False],
+            'instruments': [0, 0, 0, 0],
+            'difficulties': [0, 0, 0, 0]
+        }
+        self.current_venue = ""
+        self.current_screen = ""
 
         # RB3E connection
         self.rb3_ip_address = None
@@ -1805,6 +1818,63 @@ class UnifiedRB3EListener:
                     left_weight = data[8]
                     right_weight = data[9]
                     self.stagekit_callback(left_weight, right_weight)
+
+            elif packet_type == RB3E_EVENT_SCORE:
+                # Score packet: total_score (4 bytes), member_scores (4x4 bytes), stars (1 byte)
+                if len(data) >= 29:
+                    total_score = struct.unpack('>I', data[8:12])[0]
+                    member1 = struct.unpack('>I', data[12:16])[0]
+                    member2 = struct.unpack('>I', data[16:20])[0]
+                    member3 = struct.unpack('>I', data[20:24])[0]
+                    member4 = struct.unpack('>I', data[24:28])[0]
+                    stars = data[28]
+
+                    with self._state_lock:
+                        self.current_score = total_score
+                        self.current_stars = stars
+                        self.member_scores = [member1, member2, member3, member4]
+
+                    if self.game_info_callback:
+                        self.game_info_callback('score', {
+                            'total': total_score,
+                            'members': [member1, member2, member3, member4],
+                            'stars': stars
+                        })
+
+            elif packet_type == RB3E_EVENT_BAND_INFO:
+                # Band info: member_exists (4 bytes), difficulties (4 bytes), instruments (4 bytes)
+                if len(data) >= 20:
+                    members = [bool(data[8]), bool(data[9]), bool(data[10]), bool(data[11])]
+                    difficulties = [data[12], data[13], data[14], data[15]]
+                    instruments = [data[16], data[17], data[18], data[19]]
+
+                    with self._state_lock:
+                        self.band_info = {
+                            'members': members,
+                            'difficulties': difficulties,
+                            'instruments': instruments
+                        }
+
+                    if self.game_info_callback:
+                        self.game_info_callback('band', {
+                            'members': members,
+                            'difficulties': difficulties,
+                            'instruments': instruments
+                        })
+
+            elif packet_type == RB3E_EVENT_VENUE_NAME:
+                with self._state_lock:
+                    self.current_venue = packet_data
+
+                if self.game_info_callback:
+                    self.game_info_callback('venue', packet_data)
+
+            elif packet_type == RB3E_EVENT_SCREEN_NAME:
+                with self._state_lock:
+                    self.current_screen = packet_data
+
+                if self.game_info_callback:
+                    self.game_info_callback('screen', packet_data)
 
         except Exception as e:
             if self.gui_callback:
@@ -2273,15 +2343,83 @@ class RB3Dashboard:
         np_frame = ttk.LabelFrame(self.root, text="Now Playing", padding=5)
         np_frame.pack(fill="x", padx=10, pady=5)
 
+        # Main container with two columns
+        main_container = ttk.Frame(np_frame)
+        main_container.pack(fill="x", expand=True)
+
+        # Left side: Song/Artist info
+        song_frame = ttk.Frame(main_container)
+        song_frame.pack(side="left", fill="both", expand=True)
+
         # Song name
-        self.ent_song = ttk.Entry(np_frame, textvariable=self.song_var,
+        self.ent_song = ttk.Entry(song_frame, textvariable=self.song_var,
                                   state="readonly", font=("Arial", 14, "bold"))
         self.ent_song.pack(fill="x", pady=(0, 2))
 
         # Artist name
-        self.ent_artist = ttk.Entry(np_frame, textvariable=self.artist_var,
+        self.ent_artist = ttk.Entry(song_frame, textvariable=self.artist_var,
                                     state="readonly", font=("Arial", 11))
         self.ent_artist.pack(fill="x")
+
+        # Right side: Game info panel
+        game_info_frame = ttk.Frame(main_container)
+        game_info_frame.pack(side="right", padx=(10, 0))
+
+        # Score display
+        score_frame = ttk.Frame(game_info_frame)
+        score_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(score_frame, text="Score", font=("Arial", 8)).pack()
+        self.score_var = tk.StringVar(value="0")
+        self.score_label = ttk.Label(score_frame, textvariable=self.score_var,
+                                     font=("Arial", 16, "bold"), foreground="#3498db")
+        self.score_label.pack()
+
+        # Stars display
+        stars_frame = ttk.Frame(game_info_frame)
+        stars_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(stars_frame, text="Stars", font=("Arial", 8)).pack()
+        self.stars_var = tk.StringVar(value="☆☆☆☆☆")
+        self.stars_label = ttk.Label(stars_frame, textvariable=self.stars_var,
+                                     font=("Arial", 14), foreground="#f1c40f")
+        self.stars_label.pack()
+
+        # Band info display
+        band_frame = ttk.Frame(game_info_frame)
+        band_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(band_frame, text="Band", font=("Arial", 8)).pack()
+        self.band_labels = {}
+        band_icons_frame = ttk.Frame(band_frame)
+        band_icons_frame.pack()
+
+        instruments = [('G', 'guitar'), ('B', 'bass'), ('D', 'drums'), ('K', 'keys'), ('V', 'vocals')]
+        for abbrev, inst in instruments:
+            lbl = ttk.Label(band_icons_frame, text=abbrev, font=("Arial", 9, "bold"),
+                           foreground="#7f8c8d", width=2)
+            lbl.pack(side="left", padx=1)
+            self.band_labels[inst] = lbl
+
+        # Venue display
+        venue_frame = ttk.Frame(game_info_frame)
+        venue_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(venue_frame, text="Venue", font=("Arial", 8)).pack()
+        self.venue_var = tk.StringVar(value="-")
+        self.venue_label = ttk.Label(venue_frame, textvariable=self.venue_var,
+                                     font=("Arial", 10))
+        self.venue_label.pack()
+
+        # Screen display
+        screen_frame = ttk.Frame(game_info_frame)
+        screen_frame.pack(side="left")
+
+        ttk.Label(screen_frame, text="Screen", font=("Arial", 8)).pack()
+        self.screen_var = tk.StringVar(value="-")
+        self.screen_label = ttk.Label(screen_frame, textvariable=self.screen_var,
+                                      font=("Arial", 10))
+        self.screen_label.pack()
 
     def create_control_tab(self, parent):
         """Create control panel tab"""
@@ -3058,6 +3196,74 @@ class RB3Dashboard:
         self.web_ui_button.config(state='normal')
         self.load_songs_button.config(state='normal')
 
+    def on_game_info(self, info_type, data):
+        """Called when game info updates (score, band, venue, screen)"""
+        self.root.after(0, lambda: self._update_game_info(info_type, data))
+
+    def _update_game_info(self, info_type, data):
+        """Update game info UI (called on main thread)"""
+        try:
+            if info_type == 'score':
+                # Update score display
+                total = data.get('total', 0)
+                stars = data.get('stars', 0)
+
+                self.score_var.set(f"{total:,}")
+
+                # Update stars display
+                filled = min(stars, 5)
+                empty = 5 - filled
+                self.stars_var.set("★" * filled + "☆" * empty)
+
+            elif info_type == 'band':
+                # Update band member display
+                members = data.get('members', [False, False, False, False])
+                instruments = data.get('instruments', [0, 0, 0, 0])
+
+                # Instrument type mapping: 0=guitar, 1=bass, 2=drums, 3=vocals, 4=keys
+                inst_map = {0: 'guitar', 1: 'bass', 2: 'drums', 3: 'vocals', 4: 'keys'}
+                inst_colors = {
+                    'guitar': '#e74c3c',
+                    'bass': '#e67e22',
+                    'drums': '#9b59b6',
+                    'keys': '#2ecc71',
+                    'vocals': '#3498db'
+                }
+
+                # Reset all labels to inactive
+                for inst, lbl in self.band_labels.items():
+                    lbl.config(foreground="#7f8c8d")
+
+                # Activate instruments that are being played
+                for i, (is_member, inst_type) in enumerate(zip(members, instruments)):
+                    if is_member and inst_type in inst_map:
+                        inst_name = inst_map[inst_type]
+                        if inst_name in self.band_labels:
+                            self.band_labels[inst_name].config(
+                                foreground=inst_colors.get(inst_name, "#3498db")
+                            )
+
+            elif info_type == 'venue':
+                # Format venue name
+                venue = self._format_display_name(data) if data else "-"
+                self.venue_var.set(venue[:15])  # Truncate if too long
+
+            elif info_type == 'screen':
+                # Format screen name
+                screen = self._format_display_name(data) if data else "-"
+                self.screen_var.set(screen[:12])  # Truncate if too long
+
+        except Exception as e:
+            # Silently ignore UI update errors
+            pass
+
+    def _format_display_name(self, name):
+        """Format a venue or screen name for display"""
+        if not name:
+            return "-"
+        # Remove underscores, capitalize words
+        return name.replace('_', ' ').title()
+
     def open_web_ui(self):
         """Open RB3Enhanced web interface"""
         if self.detected_ip:
@@ -3364,7 +3570,8 @@ class RB3Dashboard:
                 gui_callback=self.log_message,
                 ip_detected_callback=self.on_ip_detected,
                 song_update_callback=self.on_song_update,
-                song_started_callback=self.on_song_started
+                song_started_callback=self.on_song_started,
+                game_info_callback=self.on_game_info
             )
 
             # Set video components if all are available
