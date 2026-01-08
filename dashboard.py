@@ -1045,8 +1045,9 @@ class LastFmScrobbler:
 class DiscordPresence:
     """Discord Rich Presence integration with auto-reconnect"""
 
-    # Default Discord Application ID (users can create their own)
-    DEFAULT_CLIENT_ID = "1234567890123456789"  # Placeholder - user should set their own
+    # Default Discord Application ID - uses RB3 Deluxe app which has proper assets
+    # Users can create their own at discord.com/developers/applications
+    DEFAULT_CLIENT_ID = "1125571051607298190"  # RB3 Deluxe Discord Application
 
     # Reconnection settings
     MAX_RECONNECT_ATTEMPTS = 5
@@ -1073,9 +1074,9 @@ class DiscordPresence:
                 self.gui_callback("Discord Rich Presence not available (pypresence not installed)")
             return False
 
-        if not self.client_id or self.client_id == self.DEFAULT_CLIENT_ID:
+        if not self.client_id:
             if self.gui_callback:
-                self.gui_callback("Discord: No valid Client ID configured")
+                self.gui_callback("Discord: No Client ID configured")
             return False
 
         try:
@@ -1156,8 +1157,8 @@ class DiscordPresence:
                 self.rpc.update(
                     details=details,
                     state=state_text,
-                    large_image="rb3",
-                    large_text="Rock Band 3",
+                    large_image="guitar",
+                    large_text="Rock Band 3 Deluxe",
                     start=int(self.start_time) if self.start_time else None
                 )
             except Exception:
@@ -1200,8 +1201,8 @@ class DiscordPresence:
             self.rpc.update(
                 details=details,
                 state=state_text,
-                large_image="rb3",  # Image key from Discord app
-                large_text="Rock Band 3",
+                large_image="guitar",  # RB3 Deluxe app asset
+                large_text="Rock Band 3 Deluxe",
                 start=int(self.start_time)
             )
 
@@ -1246,8 +1247,8 @@ class DiscordPresence:
             self.rpc.update(
                 details="Browsing Songs",
                 state="In Menus",
-                large_image="rb3",
-                large_text="Rock Band 3"
+                large_image="guitar",
+                large_text="Rock Band 3 Deluxe"
             )
         except Exception:
             self.connected = False
@@ -3774,7 +3775,7 @@ class RB3Dashboard:
             'lastfm_session_key': '',
             'scrobble_enabled': False,
             'discord_enabled': False,
-            'discord_client_id': '',
+            'discord_client_id': '1125571051607298190',  # RB3 Deluxe Discord app
             'history_enabled': True,
             'stats_enabled': True,
             'video_enabled': False,
