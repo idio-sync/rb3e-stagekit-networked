@@ -2961,14 +2961,21 @@ class RB3Dashboard:
         ttk.Checkbutton(discord_frame, text="Enable Discord Rich Presence",
                        variable=self.discord_enabled_var).pack(anchor='w')
 
-        ttk.Label(discord_frame, text="Discord Application ID:").pack(anchor='w', pady=(5, 0))
-        self.discord_client_id_var = tk.StringVar(value=self.settings.get('discord_client_id', ''))
-        ttk.Entry(discord_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
+        ttk.Label(discord_frame, text="Uses RB3 Deluxe app by default",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
 
-        discord_link = ttk.Label(discord_frame, text="discord.com/developers/applications",
-                                foreground='#6699cc', cursor='hand2', font=('TkDefaultFont', 8))
-        discord_link.pack(anchor='w')
-        discord_link.bind('<Button-1>', lambda e: webbrowser.open('https://discord.com/developers/applications'))
+        # Optional custom app ID (collapsed by default)
+        custom_app_frame = ttk.Frame(discord_frame)
+        custom_app_frame.pack(fill='x', pady=(5, 0))
+
+        ttk.Label(custom_app_frame, text="Custom App ID (optional):",
+                 font=('TkDefaultFont', 8)).pack(anchor='w')
+        # Only show non-default values in the entry
+        default_id = DiscordPresence.DEFAULT_CLIENT_ID
+        current_id = self.settings.get('discord_client_id', '')
+        display_id = '' if current_id == default_id else current_id
+        self.discord_client_id_var = tk.StringVar(value=display_id)
+        ttk.Entry(custom_app_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
 
         self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
         self.discord_status_label.pack(anchor='w', pady=(5, 0))
@@ -3687,7 +3694,8 @@ class RB3Dashboard:
             'lastfm_session_key': self.lastfm_session_var.get().strip(),
             'scrobble_enabled': self.scrobble_enabled_var.get(),
             'discord_enabled': self.discord_enabled_var.get(),
-            'discord_client_id': self.discord_client_id_var.get().strip(),
+            # Use default RB3 Deluxe app ID if custom ID not specified
+            'discord_client_id': self.discord_client_id_var.get().strip() or DiscordPresence.DEFAULT_CLIENT_ID,
             'history_enabled': self.history_enabled_var.get(),
             'stats_enabled': self.stats_enabled_var.get(),
             'video_enabled': self.video_enabled_var.get(),
@@ -3736,13 +3744,14 @@ class RB3Dashboard:
             if self.discord_presence:
                 old_enabled = self.discord_presence.enabled
                 new_enabled = settings.get('discord_enabled', False)
-                new_client_id = settings.get('discord_client_id', '')
+                # Always has a valid client_id (defaults to RB3 Deluxe app)
+                new_client_id = settings.get('discord_client_id', DiscordPresence.DEFAULT_CLIENT_ID)
 
                 self.discord_presence.client_id = new_client_id
                 self.discord_presence.enabled = new_enabled
 
                 # Connect/disconnect as needed
-                if new_enabled and not old_enabled and new_client_id:
+                if new_enabled and not old_enabled:
                     if self.discord_presence.connect():
                         self.discord_status_label.config(text="Connected", foreground='green')
                     else:
@@ -3750,8 +3759,6 @@ class RB3Dashboard:
                 elif not new_enabled and old_enabled:
                     self.discord_presence.disconnect()
                     self.discord_status_label.config(text="Disabled", foreground='gray')
-                elif not new_client_id:
-                    self.discord_status_label.config(text="No Client ID", foreground='orange')
 
             # Update listener if running
             if self.listener:
@@ -3775,7 +3782,7 @@ class RB3Dashboard:
             'lastfm_session_key': '',
             'scrobble_enabled': False,
             'discord_enabled': False,
-            'discord_client_id': '1125571051607298190',  # RB3 Deluxe Discord app
+            'discord_client_id': '',  # Empty = use RB3 Deluxe app by default
             'history_enabled': True,
             'stats_enabled': True,
             'video_enabled': False,
