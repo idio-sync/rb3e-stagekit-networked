@@ -690,14 +690,30 @@ class VLCPlayer:
 class StreamExtractor:
     """Gets direct video URLs from YouTube"""
 
-    def __init__(self, gui_callback=None):
+    # Supported browsers for cookie extraction
+    SUPPORTED_BROWSERS = ['chrome', 'firefox', 'edge', 'brave', 'opera', 'vivaldi', 'chromium']
+
+    def __init__(self, gui_callback=None, cookie_browser: str = None):
         self.gui_callback = gui_callback
+        self.cookie_browser = cookie_browser
         self.ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'format': 'bestvideo+bestaudio/best',
             'noplaylist': True,
         }
+        # Add cookie extraction from browser if specified
+        if cookie_browser and cookie_browser.lower() in self.SUPPORTED_BROWSERS:
+            self.ydl_opts['cookiesfrombrowser'] = (cookie_browser.lower(),)
+
+    def set_cookie_browser(self, browser: str):
+        """Set browser to extract cookies from for age-restricted videos"""
+        if browser and browser.lower() in self.SUPPORTED_BROWSERS:
+            self.cookie_browser = browser.lower()
+            self.ydl_opts['cookiesfrombrowser'] = (self.cookie_browser,)
+        else:
+            self.cookie_browser = None
+            self.ydl_opts.pop('cookiesfrombrowser', None)
 
     def get_stream_url(self, video_id: str) -> Optional[str]:
         """Get direct stream URL for a YouTube video"""
@@ -1198,7 +1214,8 @@ class DiscordPresence:
             details = f"{song}"[:128] if song else "Unknown Song"
             state_text = f"by {artist}"[:128] if artist else state
 
-            self.rpc.update(
+            # Update Discord Rich Presence
+            result = self.rpc.update(
                 details=details,
                 state=state_text,
                 large_image="guitar",  # RB3 Deluxe app asset
@@ -1208,6 +1225,9 @@ class DiscordPresence:
 
             if self.gui_callback:
                 self.gui_callback(f"Discord: Now playing - {artist} - {song}")
+                # Log result for debugging
+                if result:
+                    self.gui_callback(f"Discord: Update response received")
 
         except Exception as e:
             self.connected = False
@@ -2933,6 +2953,23 @@ class RB3Dashboard:
         ttk.Button(monitor_frame, text="↻", width=2,
                   command=self.refresh_monitor_list).pack(side='left', padx=(3, 0))
 
+        # Cookie browser for age-restricted videos
+        cookie_frame = ttk.Frame(video_frame)
+        cookie_frame.pack(fill='x', pady=(5, 0))
+        ttk.Label(cookie_frame, text="Browser cookies:").pack(side='left')
+
+        self.cookie_browser_var = tk.StringVar(value=self.settings.get('cookie_browser', ''))
+        cookie_options = ['None (may fail age-restricted)', 'chrome', 'firefox', 'edge', 'brave']
+        self.cookie_combo = ttk.Combobox(cookie_frame, textvariable=self.cookie_browser_var,
+                                         values=cookie_options, state='readonly', width=22)
+        self.cookie_combo.pack(side='left', padx=(5, 0))
+        # Set display value
+        if not self.cookie_browser_var.get():
+            self.cookie_combo.set('None (may fail age-restricted)')
+
+        ttk.Label(video_frame, text="For age-restricted videos, select a browser where you're logged into YouTube",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
+
         # History & Statistics
         history_frame = ttk.LabelFrame(right_col, text="History & Statistics", padding=10)
         history_frame.pack(fill='x', pady=5)
@@ -3566,7 +3603,11 @@ class RB3Dashboard:
                     self.youtube_searcher = YouTubeSearcher(api_key,
                                                             song_database=self.song_database,
                                                             gui_callback=self.log_message)
-                    self.stream_extractor = StreamExtractor(gui_callback=self.log_message)
+                    cookie_browser = self.settings.get('cookie_browser', '')
+                    self.stream_extractor = StreamExtractor(gui_callback=self.log_message,
+                                                            cookie_browser=cookie_browser)
+                    if cookie_browser:
+                        self.log_message(f"Using {cookie_browser} cookies for age-restricted videos")
                 else:
                     self.log_message("YouTube API key not set - video search disabled")
                     self.vlc_status_label.config(text="VLC: No API key", foreground='orange')
@@ -3685,6 +3726,14 @@ class RB3Dashboard:
     # SETTINGS
     # =========================================================================
 
+    def _get_cookie_browser_value(self):
+        """Get the actual browser name from the combo selection"""
+        value = self.cookie_browser_var.get()
+        # Return empty string if 'None' option is selected
+        if not value or value.startswith('None'):
+            return ''
+        return value.lower()
+
     def get_current_settings(self):
         """Get all current settings"""
         return {
@@ -3706,6 +3755,7 @@ class RB3Dashboard:
             'auto_quit_on_menu': self.auto_quit_var.get(),
             'video_start_delay': self.delay_var.get(),
             'video_monitor': self.get_selected_monitor_index(),
+            'cookie_browser': self._get_cookie_browser_value(),
             'database_path': self.settings.get('database_path', '')
         }
 
@@ -3760,6 +3810,13 @@ class RB3Dashboard:
                     self.discord_presence.disconnect()
                     self.discord_status_label.config(text="Disabled", foreground='gray')
 
+            # Update stream extractor cookie browser
+            if self.stream_extractor:
+                new_cookie_browser = settings.get('cookie_browser', '')
+                self.stream_extractor.set_cookie_browser(new_cookie_browser)
+                if new_cookie_browser:
+                    self.log_message(f"Updated cookie browser: {new_cookie_browser}")
+
             # Update listener if running
             if self.listener:
                 video_settings = self.get_video_settings()
@@ -3793,6 +3850,7 @@ class RB3Dashboard:
             'auto_quit_on_menu': True,
             'video_start_delay': 0.0,
             'video_monitor': 0,
+            'cookie_browser': '',
             'database_path': ''
         }
 
