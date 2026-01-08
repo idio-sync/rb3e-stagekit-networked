@@ -1497,7 +1497,6 @@ class AlbumArtManager:
             cursor = conn.cursor()
             cursor.execute('SELECT image_data FROM album_art WHERE cache_key = ?', (cache_key,))
             row = cursor.fetchone()
-            conn.close()
 
             if row and row[0]:
                 img = Image.open(BytesIO(row[0]))
@@ -1746,6 +1745,12 @@ class UnifiedRB3EListener:
                         self.gui_callback(f"Socket error: {e}")
 
         except Exception as e:
+            if self.sock:
+                try:
+                    self.sock.close()
+                except Exception:
+                    pass
+                self.sock = None
             if self.gui_callback:
                 self.gui_callback(f"Failed to start listener: {e}")
 
@@ -1876,7 +1881,7 @@ class UnifiedRB3EListener:
             shortname = self.current_shortname
             current_game_state = self.game_state
 
-        if not video_enabled or not self.youtube_searcher:
+        if not video_enabled or not self.youtube_searcher or not self.stream_extractor:
             return
 
         try:
@@ -3392,6 +3397,19 @@ class RB3Dashboard:
             self.log_message("Started listening for RB3Enhanced events")
 
         except Exception as e:
+            # Clean up any sockets that were created before the failure
+            if self.sock_telemetry:
+                try:
+                    self.sock_telemetry.close()
+                except Exception:
+                    pass
+                self.sock_telemetry = None
+            if self.sock_control:
+                try:
+                    self.sock_control.close()
+                except Exception:
+                    pass
+                self.sock_control = None
             messagebox.showerror("Error", f"Failed to start: {e}")
             self.log_message(f"Failed to start: {e}")
 
@@ -3405,11 +3423,25 @@ class RB3Dashboard:
         if self.vlc_player:
             self.vlc_player.stop_current_video()
 
+        # Wait for threads to finish before closing sockets
+        if hasattr(self, 'listener_thread') and self.listener_thread and self.listener_thread.is_alive():
+            self.listener_thread.join(timeout=2.0)
+        if hasattr(self, 'telemetry_thread') and self.telemetry_thread and self.telemetry_thread.is_alive():
+            self.telemetry_thread.join(timeout=2.0)
+
         if self.sock_telemetry:
-            self.sock_telemetry.close()
+            try:
+                self.sock_telemetry.close()
+            except Exception:
+                pass
+            self.sock_telemetry = None
 
         if self.sock_control:
-            self.sock_control.close()
+            try:
+                self.sock_control.close()
+            except Exception:
+                pass
+            self.sock_control = None
 
         self.status_label.config(text="Stopped", foreground='red')
         self.start_button.config(state='normal')
