@@ -2601,12 +2601,30 @@ class RB3Dashboard:
                                         command=self.open_web_ui, state='disabled')
         self.web_ui_button.pack(side='left', padx=5)
 
+    def create_stagekit_tab(self, parent):
+        """Create Stage Kit tab with Status and Test sub-tabs"""
+        # Create sub-notebook for Status and Test tabs
+        stagekit_notebook = ttk.Notebook(parent)
+        stagekit_notebook.pack(fill='both', expand=True, padx=5, pady=5)
+
+        # Status tab (default)
+        status_frame = ttk.Frame(stagekit_notebook)
+        stagekit_notebook.add(status_frame, text="Status")
+        self.create_stagekit_status_tab(status_frame)
+
+        # Test tab
+        test_frame = ttk.Frame(stagekit_notebook)
+        stagekit_notebook.add(test_frame, text="Test")
+        self.create_stagekit_test_tab(test_frame)
+
+    def create_stagekit_status_tab(self, parent):
+        """Create Stage Kit status sub-tab with detected Picos"""
         # Detected Picos section
         pico_frame = ttk.LabelFrame(parent, text="Detected Stage Kit Picos", padding=10)
-        pico_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        pico_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
         columns = ("ip", "name", "usb", "signal", "status")
-        self.pico_tree = ttk.Treeview(pico_frame, columns=columns, show="headings", height=4)
+        self.pico_tree = ttk.Treeview(pico_frame, columns=columns, show="headings", height=8)
         self.pico_tree.heading("ip", text="IP Address")
         self.pico_tree.heading("name", text="Name")
         self.pico_tree.heading("usb", text="USB Status")
@@ -2622,12 +2640,17 @@ class RB3Dashboard:
         self.pico_tree.pack(fill="both", expand=True)
         self.pico_tree.bind("<<TreeviewSelect>>", self.on_pico_select)
 
+        # Target label
         self.pico_target_label = ttk.Label(parent, text="Stage Kit Target: ALL DEVICES (Broadcast)",
                                            font=("Arial", 9))
-        self.pico_target_label.pack(pady=(0, 5))
+        self.pico_target_label.pack(pady=(5, 10))
 
-    def create_stagekit_tab(self, parent):
-        """Create Stage Kit controls tab"""
+        # Info text
+        ttk.Label(parent, text="Select a Pico to target it specifically, or leave unselected to broadcast to all",
+                 foreground='gray', font=('TkDefaultFont', 9)).pack()
+
+    def create_stagekit_test_tab(self, parent):
+        """Create Stage Kit test controls sub-tab"""
         # Main Controls
         main_frame = ttk.LabelFrame(parent, text="Global Effects", padding=10)
         main_frame.pack(fill="x", padx=10, pady=5)
