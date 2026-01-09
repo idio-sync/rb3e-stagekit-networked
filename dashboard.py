@@ -2481,11 +2481,6 @@ class RB3Dashboard:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
-        # Status tab (formerly Control)
-        status_frame = ttk.Frame(self.notebook)
-        self.notebook.add(status_frame, text="Status")
-        self.create_control_tab(status_frame)
-
         # Song Browser tab
         browser_frame = ttk.Frame(self.notebook)
         self.notebook.add(browser_frame, text="Song Browser")
@@ -2563,43 +2558,6 @@ class RB3Dashboard:
         self.screen_label = ttk.Label(screen_frame, textvariable=self.screen_var,
                                       font=("Arial", 10))
         self.screen_label.pack()
-
-    def create_control_tab(self, parent):
-        """Create control panel tab"""
-        # Status section
-        status_frame = ttk.LabelFrame(parent, text="Status", padding=10)
-        status_frame.pack(fill='x', padx=10, pady=5)
-
-        self.status_label = ttk.Label(status_frame, text="Stopped",
-                                      font=('TkDefaultFont', 12, 'bold'))
-        self.status_label.pack()
-
-        self.vlc_status_label = ttk.Label(status_frame, text="VLC: Not checked")
-        self.vlc_status_label.pack(pady=(5, 0))
-
-        self.ip_status_label = ttk.Label(status_frame, text="RB3Enhanced: Not detected",
-                                         foreground='orange')
-        self.ip_status_label.pack(pady=(5, 0))
-
-        self.db_status_label = ttk.Label(status_frame, text="Database: Not loaded",
-                                         foreground='orange')
-        self.db_status_label.pack(pady=(5, 0))
-
-        # Control buttons
-        button_frame = ttk.Frame(parent)
-        button_frame.pack(pady=15)
-
-        self.start_button = ttk.Button(button_frame, text="Start Listening",
-                                       command=self.start_listener, style='Accent.TButton')
-        self.start_button.pack(side='left', padx=5)
-
-        self.stop_button = ttk.Button(button_frame, text="Stop",
-                                      command=self.stop_listener, state='disabled')
-        self.stop_button.pack(side='left', padx=5)
-
-        self.web_ui_button = ttk.Button(button_frame, text="Open RBE Web UI",
-                                        command=self.open_web_ui, state='disabled')
-        self.web_ui_button.pack(side='left', padx=5)
 
     def create_stagekit_tab(self, parent):
         """Create Stage Kit tab with Status and Test sub-tabs"""
@@ -3182,8 +3140,53 @@ class RB3Dashboard:
                   command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
 
     def create_log_tab(self, parent):
-        """Create log display tab"""
-        # Controls frame at top
+        """Create log display tab with status indicators"""
+        # Status section at top
+        status_frame = ttk.LabelFrame(parent, text="Status", padding=10)
+        status_frame.pack(fill='x', padx=10, pady=5)
+
+        # Status indicators in a row
+        status_row = ttk.Frame(status_frame)
+        status_row.pack(fill='x')
+
+        # Listening status
+        listen_frame = ttk.Frame(status_row)
+        listen_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(listen_frame, text="Listener:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.status_label = ttk.Label(listen_frame, text="Starting...",
+                                      font=('TkDefaultFont', 9, 'bold'))
+        self.status_label.pack(side='left', padx=(5, 0))
+
+        # VLC status
+        vlc_frame = ttk.Frame(status_row)
+        vlc_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(vlc_frame, text="VLC:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.vlc_status_label = ttk.Label(vlc_frame, text="Checking...",
+                                          font=('TkDefaultFont', 9))
+        self.vlc_status_label.pack(side='left', padx=(5, 0))
+
+        # RB3Enhanced status
+        rb3e_frame = ttk.Frame(status_row)
+        rb3e_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(rb3e_frame, text="RB3E:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.ip_status_label = ttk.Label(rb3e_frame, text="Not detected",
+                                         font=('TkDefaultFont', 9), foreground='orange')
+        self.ip_status_label.pack(side='left', padx=(5, 0))
+
+        # Database status
+        db_frame = ttk.Frame(status_row)
+        db_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(db_frame, text="Database:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.db_status_label = ttk.Label(db_frame, text="Not loaded",
+                                         font=('TkDefaultFont', 9), foreground='orange')
+        self.db_status_label.pack(side='left', padx=(5, 0))
+
+        # Open Web UI button
+        self.web_ui_button = ttk.Button(status_row, text="Open RBE Web UI",
+                                        command=self.open_web_ui, state='disabled')
+        self.web_ui_button.pack(side='right')
+
+        # Controls frame for log options
         controls_frame = ttk.Frame(parent)
         controls_frame.pack(fill='x', padx=10, pady=5)
 
@@ -3420,7 +3423,7 @@ class RB3Dashboard:
         self.root.after(0, self._update_ip_ui, ip_address)
 
     def _update_ip_ui(self, ip_address):
-        self.ip_status_label.config(text=f"RB3Enhanced: {ip_address}", foreground='green')
+        self.ip_status_label.config(text=ip_address, foreground='green')
         self.web_ui_button.config(state='normal')
         self.load_songs_button.config(state='normal')
 
@@ -3745,7 +3748,7 @@ class RB3Dashboard:
                 self.database_status_label.config(
                     text=f"Loaded {stats['loaded_count']} songs", foreground='green')
                 self.db_status_label.config(
-                    text=f"Database: {stats['loaded_count']} songs", foreground='green')
+                    text=f"{stats['loaded_count']} songs", foreground='green')
                 self.clear_db_button.config(state='normal')
 
     def load_song_database(self):
@@ -3765,7 +3768,7 @@ class RB3Dashboard:
                 self.database_status_label.config(
                     text=f"Loaded {stats['loaded_count']} songs", foreground='green')
                 self.db_status_label.config(
-                    text=f"Database: {stats['loaded_count']} songs", foreground='green')
+                    text=f"{stats['loaded_count']} songs", foreground='green')
                 self.clear_db_button.config(state='normal')
 
                 if self.youtube_searcher:
@@ -3778,7 +3781,7 @@ class RB3Dashboard:
         self.song_database = SongDatabase(gui_callback=self.log_message)
         self.settings['database_path'] = ''
         self.database_status_label.config(text="No database loaded", foreground='orange')
-        self.db_status_label.config(text="Database: Not loaded", foreground='orange')
+        self.db_status_label.config(text="Not loaded", foreground='orange')
         self.clear_db_button.config(state='disabled')
 
     # =========================================================================
@@ -3809,11 +3812,10 @@ class RB3Dashboard:
                                            song_database=self.song_database)
 
                 if self.vlc_player.vlc_path:
-                    self.vlc_status_label.config(text=f"VLC: {self.vlc_player.vlc_path}",
-                                                foreground='green')
+                    self.vlc_status_label.config(text="Ready", foreground='green')
                     self.log_message(f"VLC found: {self.vlc_player.vlc_path}")
                 else:
-                    self.vlc_status_label.config(text="VLC: Not found", foreground='red')
+                    self.vlc_status_label.config(text="Not found", foreground='red')
                     self.log_message("VLC not found - video playback will not work")
 
                 if api_key:
@@ -3828,9 +3830,9 @@ class RB3Dashboard:
                         self.log_message(f"Using {cookie_browser} cookies for age-restricted videos")
                 else:
                     self.log_message("YouTube API key not set - video search disabled")
-                    self.vlc_status_label.config(text="VLC: No API key", foreground='orange')
+                    self.vlc_status_label.config(text="No API key", foreground='orange')
             else:
-                self.vlc_status_label.config(text="VLC: Video disabled", foreground='gray')
+                self.vlc_status_label.config(text="Disabled", foreground='gray')
 
             # Create unified listener
             self.listener = UnifiedRB3EListener(
@@ -3864,8 +3866,6 @@ class RB3Dashboard:
 
             self.is_running = True
             self.status_label.config(text="Listening", foreground='green')
-            self.start_button.config(state='disabled')
-            self.stop_button.config(state='normal')
 
             # Start device cleanup
             self.root.after(1000, self.cleanup_devices)
@@ -3920,9 +3920,7 @@ class RB3Dashboard:
             self.sock_control = None
 
         self.status_label.config(text="Stopped", foreground='red')
-        self.start_button.config(state='normal')
-        self.stop_button.config(state='disabled')
-        self.ip_status_label.config(text="RB3Enhanced: Not detected", foreground='orange')
+        self.ip_status_label.config(text="Not detected", foreground='orange')
         self.web_ui_button.config(state='disabled')
         self.load_songs_button.config(state='disabled')
         self.detected_ip = None
@@ -4110,6 +4108,8 @@ class RB3Dashboard:
 
     def run(self):
         """Start the application"""
+        # Auto-start listener after UI is ready
+        self.root.after(100, self.start_listener)
         self.root.mainloop()
 
 
