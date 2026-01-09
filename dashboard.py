@@ -1863,9 +1863,8 @@ class UnifiedRB3EListener:
                     self.stagekit_callback(left_weight, right_weight)
 
             elif packet_type == RB3E_EVENT_SCORE:
+                # NOTE: RB3Enhanced defines this event type but doesn't actually send it
                 # Score packet: total_score (4 bytes), member_scores (4x4 bytes), stars (1 byte)
-                if self.gui_callback:
-                    self.gui_callback(f"[DEBUG] Score packet received, len={len(data)}")
                 if len(data) >= 29:
                     total_score = struct.unpack('>I', data[8:12])[0]
                     member1 = struct.unpack('>I', data[12:16])[0]
@@ -1885,14 +1884,10 @@ class UnifiedRB3EListener:
                             'members': [member1, member2, member3, member4],
                             'stars': stars
                         })
-                else:
-                    if self.gui_callback:
-                        self.gui_callback(f"[DEBUG] Score packet too short: {len(data)} bytes")
 
             elif packet_type == RB3E_EVENT_BAND_INFO:
+                # NOTE: RB3Enhanced defines this event type but doesn't actually send it
                 # Band info: member_exists (4 bytes), difficulties (4 bytes), instruments (4 bytes)
-                if self.gui_callback:
-                    self.gui_callback(f"[DEBUG] Band info packet received, len={len(data)}")
                 if len(data) >= 20:
                     members = [bool(data[8]), bool(data[9]), bool(data[10]), bool(data[11])]
                     difficulties = [data[12], data[13], data[14], data[15]]
@@ -1911,9 +1906,6 @@ class UnifiedRB3EListener:
                             'difficulties': difficulties,
                             'instruments': instruments
                         })
-                else:
-                    if self.gui_callback:
-                        self.gui_callback(f"[DEBUG] Band info packet too short: {len(data)} bytes")
 
             elif packet_type == RB3E_EVENT_VENUE_NAME:
                 with self._state_lock:
@@ -2422,41 +2414,11 @@ class RB3Dashboard:
         game_info_frame = ttk.Frame(main_container)
         game_info_frame.pack(side="right", padx=(10, 0))
 
-        # Score display
-        score_frame = ttk.Frame(game_info_frame)
-        score_frame.pack(side="left", padx=(0, 15))
-
-        ttk.Label(score_frame, text="Score", font=("Arial", 8)).pack()
+        # NOTE: Score, stars, and band info events are defined in RB3Enhanced
+        # but not actually implemented/sent. Keeping variables for future compatibility.
         self.score_var = tk.StringVar(value="0")
-        self.score_label = ttk.Label(score_frame, textvariable=self.score_var,
-                                     font=("Arial", 16, "bold"), foreground="#3498db")
-        self.score_label.pack()
-
-        # Stars display
-        stars_frame = ttk.Frame(game_info_frame)
-        stars_frame.pack(side="left", padx=(0, 15))
-
-        ttk.Label(stars_frame, text="Stars", font=("Arial", 8)).pack()
         self.stars_var = tk.StringVar(value="☆☆☆☆☆")
-        self.stars_label = ttk.Label(stars_frame, textvariable=self.stars_var,
-                                     font=("Arial", 14), foreground="#f1c40f")
-        self.stars_label.pack()
-
-        # Band info display
-        band_frame = ttk.Frame(game_info_frame)
-        band_frame.pack(side="left", padx=(0, 15))
-
-        ttk.Label(band_frame, text="Band", font=("Arial", 8)).pack()
         self.band_labels = {}
-        band_icons_frame = ttk.Frame(band_frame)
-        band_icons_frame.pack()
-
-        instruments = [('G', 'guitar'), ('B', 'bass'), ('D', 'drums'), ('K', 'keys'), ('V', 'vocals')]
-        for abbrev, inst in instruments:
-            lbl = ttk.Label(band_icons_frame, text=abbrev, font=("Arial", 9, "bold"),
-                           foreground="#7f8c8d", width=2)
-            lbl.pack(side="left", padx=1)
-            self.band_labels[inst] = lbl
 
         # Venue display
         venue_frame = ttk.Frame(game_info_frame)
