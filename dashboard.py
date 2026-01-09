@@ -770,8 +770,9 @@ class SongHistory:
     def __init__(self):
         self.history = []
         self.enabled = True
+        self.total_time_seconds = 0
 
-    def add_song(self, artist: str, song: str, album: str = "", shortname: str = ""):
+    def add_song(self, artist: str, song: str, album: str = "", shortname: str = "", duration: int = 0):
         """Add a song to the history"""
         if not self.enabled:
             return
@@ -781,9 +782,11 @@ class SongHistory:
             'artist': artist,
             'song': song,
             'album': album,
-            'shortname': shortname
+            'shortname': shortname,
+            'duration': duration
         }
         self.history.append(entry)
+        self.total_time_seconds += duration
 
     def get_history(self) -> list:
         """Get the full history (newest first)"""
@@ -792,6 +795,20 @@ class SongHistory:
     def clear(self):
         """Clear the session history"""
         self.history = []
+        self.total_time_seconds = 0
+
+    def get_total_time(self) -> int:
+        """Get total session time in seconds"""
+        return self.total_time_seconds
+
+    def get_total_time_formatted(self) -> str:
+        """Get total session time as formatted string"""
+        total = self.total_time_seconds
+        hours = total // 3600
+        minutes = (total % 3600) // 60
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
 
     def export_to_csv(self, filepath: str):
         """Export history to CSV file"""
@@ -2654,6 +2671,8 @@ class RB3Dashboard:
         ttk.Label(session_stats, text="Session:", font=('TkDefaultFont', 9, 'bold')).pack(anchor='w')
         self.session_count_label = ttk.Label(session_stats, text="0 songs played")
         self.session_count_label.pack(anchor='w')
+        self.session_time_label = ttk.Label(session_stats, text="Total time: 0m")
+        self.session_time_label.pack(anchor='w')
 
         # All-time stats (middle)
         alltime_stats = ttk.Frame(stats_row)
@@ -2793,8 +2812,9 @@ class RB3Dashboard:
                                      values=(time_str, entry['artist'], entry['song'], entry['album']),
                                      tags=(tag,))
 
-        # Update session count
+        # Update session stats
         self.session_count_label.config(text=f"{self.song_history.get_count()} songs played")
+        self.session_time_label.config(text=f"Total time: {self.song_history.get_total_time_formatted()}")
 
         # Update all-time stats
         if hasattr(self, 'play_stats') and self.play_stats:
@@ -3171,17 +3191,18 @@ class RB3Dashboard:
         if not artist and not song:
             return
 
+        # Try to get duration from database (used by both session and persistent stats)
+        duration = 0
+        if self.song_database:
+            duration = self.song_database.get_song_duration(shortname, artist, song) or 0
+
         # Track in session history
         if self.song_history and self.song_history.enabled:
-            self.song_history.add_song(artist, song, "", shortname)
+            self.song_history.add_song(artist, song, "", shortname, duration)
             self.root.after(0, self.refresh_history_display)
 
         # Track in persistent stats
         if self.play_stats and self.settings.get('stats_enabled', True):
-            # Try to get duration from database
-            duration = 0
-            if self.song_database:
-                duration = self.song_database.get_song_duration(shortname, artist, song) or 0
             self.play_stats.record_play(artist, song, duration)
 
         # Last.fm scrobbling - update now playing
