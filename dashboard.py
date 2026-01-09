@@ -2210,7 +2210,8 @@ class RB3Dashboard:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("RB3Enhanced Dashboard")
-        self.root.geometry("850x700")
+        self.root.geometry("1100x700")
+        self.root.minsize(900, 600)
         self.root.resizable(True, True)
 
         # Setup manual dark theme
@@ -2518,16 +2519,12 @@ class RB3Dashboard:
         self.band_labels = {}
 
         # Main container for the bar (placed in top-right of parent)
-        # We use a standard Frame (not LabelFrame) to layout the Label and Box side-by-side
         self.activity_frame = ttk.Frame(parent)
-        # y=2 aligns it visually with standard tab text height
         self.activity_frame.place(relx=1.0, y=2, anchor='ne')
 
-        # 1. "Activity" Label to the left of the box
-        ttk.Label(self.activity_frame, text="Activity", 
-                 font=("TkDefaultFont", 9, "bold")).pack(side='left', padx=(0, 5))
+        # --- REMOVED: "Activity" Label code was here ---
 
-        # 2. The "Box" (Frame with border to look like a container)
+        # 1. The "Box" (Frame with border)
         box_frame = ttk.Frame(self.activity_frame, relief='groove', borderwidth=1)
         box_frame.pack(side='left', fill='y')
 
@@ -2536,8 +2533,13 @@ class RB3Dashboard:
         inner_frame.pack(fill='both')
 
         # Waiting message (shown when RB3E not detected)
-        self.activity_waiting_label = ttk.Label(inner_frame, text="Waiting for RB3Enhanced...",
-                                                font=("TkDefaultFont", 9), foreground='gray')
+        # Keeps the forced width=65 to ensure the box reserves space
+        self.activity_waiting_label = ttk.Label(inner_frame, 
+                                                text="Waiting for RB3Enhanced...",
+                                                font=("TkDefaultFont", 9), 
+                                                foreground='gray',
+                                                width=65,        
+                                                anchor='center') 
         self.activity_waiting_label.pack(side='left')
 
         # Song activity frame (hidden until RB3E detected)
@@ -2557,9 +2559,9 @@ class RB3Dashboard:
         ttk.Label(self.venue_frame, text="Venue:", font=("TkDefaultFont", 9)).pack(side='left')
         self.venue_var = tk.StringVar(value="-")
         
-        # WIDTH INCREASED 1.5x (12 -> 18)
+        # Wide Venue Label
         self.venue_label = ttk.Label(self.venue_frame, textvariable=self.venue_var,
-                                     font=("TkDefaultFont", 9), width=18, anchor='w')
+                                     font=("TkDefaultFont", 9), width=25, anchor='w')
         self.venue_label.pack(side='left', padx=(3, 0))
 
         # Screen
@@ -2568,9 +2570,9 @@ class RB3Dashboard:
         ttk.Label(self.screen_frame, text="Screen:", font=("TkDefaultFont", 9)).pack(side='left')
         self.screen_var = tk.StringVar(value="-")
         
-        # WIDTH INCREASED 1.5x (10 -> 15)
+        # Wide Screen Label
         self.screen_label = ttk.Label(self.screen_frame, textvariable=self.screen_var,
-                                      font=("TkDefaultFont", 9), width=15, anchor='w')
+                                      font=("TkDefaultFont", 9), width=20, anchor='w')
         self.screen_label.pack(side='left', padx=(3, 0))
 
     def create_stagekit_tab(self, parent):
