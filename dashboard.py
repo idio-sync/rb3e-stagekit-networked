@@ -898,12 +898,12 @@ class PlayStatistics:
         except Exception as e:
             print(f"Failed to save stats: {e}")
 
-    def record_play(self, artist: str, song: str, duration_seconds: int = 0):
-        """Record a song play"""
+    def record_play(self, artist: str, song: str):
+        """Record a song play (time added separately when song ends)"""
         song_key = f"{artist.lower()}|{song.lower()}"
 
         self.stats['total_plays'] += 1
-        self.stats['total_time_seconds'] += duration_seconds
+        self._last_song_key = song_key  # Track for adding time later
 
         if song_key not in self.stats['songs']:
             self.stats['songs'][song_key] = {
@@ -916,8 +916,21 @@ class PlayStatistics:
             }
 
         self.stats['songs'][song_key]['play_count'] += 1
-        self.stats['songs'][song_key]['total_time_seconds'] += duration_seconds
         self.stats['songs'][song_key]['last_played'] = datetime.now().isoformat()
+
+        self.save_stats()
+
+    def add_play_time(self, artist: str, song: str, duration_seconds: int):
+        """Add actual play time to stats (called when song ends)"""
+        if duration_seconds <= 0:
+            return
+
+        song_key = f"{artist.lower()}|{song.lower()}"
+
+        self.stats['total_time_seconds'] += duration_seconds
+
+        if song_key in self.stats['songs']:
+            self.stats['songs'][song_key]['total_time_seconds'] += duration_seconds
 
         self.save_stats()
 
@@ -3219,12 +3232,9 @@ class RB3Dashboard:
             self.song_history.add_song(artist, song, "", shortname)
             self.root.after(0, self.refresh_history_display)
 
-        # Track in persistent stats (use database duration as estimate)
+        # Track in persistent stats (time added when song ends)
         if self.play_stats and self.settings.get('stats_enabled', True):
-            duration = 0
-            if self.song_database:
-                duration = self.song_database.get_song_duration(shortname, artist, song) or 0
-            self.play_stats.record_play(artist, song, duration)
+            self.play_stats.record_play(artist, song)
 
         # Last.fm scrobbling - update now playing
         if self.scrobbler and self.scrobbler.enabled:
@@ -3269,6 +3279,11 @@ class RB3Dashboard:
             # Update session history with actual elapsed time
             if self.song_history and self.song_history.enabled:
                 self.song_history.update_last_song_duration(elapsed_seconds)
+                self.root.after(0, self.refresh_history_display)
+
+            # Update all-time stats with actual elapsed time
+            if self.play_stats and self.settings.get('stats_enabled', True):
+                self.play_stats.add_play_time(artist, song, elapsed_seconds)
                 self.root.after(0, self.refresh_history_display)
 
             # Log the actual playtime
