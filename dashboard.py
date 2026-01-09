@@ -2474,16 +2474,13 @@ class RB3Dashboard:
 
     def create_widgets(self):
         """Create all GUI widgets"""
-        # Top header frame containing tabs and now playing info
-        header_frame = ttk.Frame(self.root)
-        header_frame.pack(fill='x', padx=10, pady=(5, 0))
-
-        # Now Playing info on the right side of header
-        self.create_now_playing_bar(header_frame)
+        # Container frame for notebook and activity info overlay
+        container = ttk.Frame(self.root)
+        container.pack(fill='both', expand=True, padx=10, pady=5)
 
         # Main notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        self.notebook = ttk.Notebook(container)
+        self.notebook.pack(fill='both', expand=True)
 
         # Song Browser tab
         browser_frame = ttk.Frame(self.notebook)
@@ -2510,40 +2507,46 @@ class RB3Dashboard:
         self.notebook.add(log_frame, text="Log")
         self.create_log_tab(log_frame)
 
-    def create_now_playing_bar(self, parent):
-        """Create the Now Playing info in the header area"""
-        # Container for now playing - aligned right
-        np_frame = ttk.Frame(parent)
-        np_frame.pack(side='right', pady=(0, 2))
+        # Activity info overlay - positioned to the right of tabs
+        self.create_activity_bar(container)
 
+    def create_activity_bar(self, parent):
+        """Create the Activity info bar positioned to the right of notebook tabs"""
         # NOTE: Score, stars, and band info events are defined in RB3Enhanced
         # but not actually implemented/sent. Keeping variables for future compatibility.
         self.score_var = tk.StringVar(value="0")
         self.stars_var = tk.StringVar(value="☆☆☆☆☆")
         self.band_labels = {}
 
-        # Venue and Screen on the right
-        self.venue_var = tk.StringVar(value="-")
-        ttk.Label(np_frame, text="Venue:", font=("TkDefaultFont", 9)).pack(side='left')
-        self.venue_label = ttk.Label(np_frame, textvariable=self.venue_var,
-                                     font=("TkDefaultFont", 9), width=12)
-        self.venue_label.pack(side='left', padx=(2, 10))
+        # Create scrollable frame for activity info
+        activity_frame = ttk.Frame(parent)
+        activity_frame.place(relx=1.0, y=2, anchor='ne')  # Top-right corner
 
+        # Inner frame for content
+        inner_frame = ttk.Frame(activity_frame)
+        inner_frame.pack(side='right')
+
+        # Activity label (only shown when playing)
+        self.activity_label = ttk.Label(inner_frame, text="",
+                                        font=("TkDefaultFont", 9))
+        self.activity_label.pack(side='right', padx=(10, 0))
+
+        # Separator (only shown when playing)
+        self.activity_separator = ttk.Separator(inner_frame, orient='vertical')
+
+        # Screen
         self.screen_var = tk.StringVar(value="-")
-        ttk.Label(np_frame, text="Screen:", font=("TkDefaultFont", 9)).pack(side='left')
-        self.screen_label = ttk.Label(np_frame, textvariable=self.screen_var,
-                                      font=("TkDefaultFont", 9), width=10)
-        self.screen_label.pack(side='left', padx=(2, 15))
+        self.screen_label = ttk.Label(inner_frame, textvariable=self.screen_var,
+                                      font=("TkDefaultFont", 9), width=10, anchor='w')
+        self.screen_label.pack(side='right', padx=(2, 0))
+        ttk.Label(inner_frame, text="Screen:", font=("TkDefaultFont", 9)).pack(side='right')
 
-        # Separator
-        ttk.Separator(np_frame, orient='vertical').pack(side='left', fill='y', padx=(0, 15))
-
-        # Now Playing: Artist - Song
-        ttk.Label(np_frame, text="Now Playing:", font=("TkDefaultFont", 9, "bold")).pack(side='left')
-
-        self.now_playing_label = ttk.Label(np_frame, text="Waiting for game...",
-                                           font=("TkDefaultFont", 9))
-        self.now_playing_label.pack(side='left', padx=(5, 0))
+        # Venue
+        self.venue_var = tk.StringVar(value="-")
+        self.venue_label = ttk.Label(inner_frame, textvariable=self.venue_var,
+                                     font=("TkDefaultFont", 9), width=12, anchor='w')
+        self.venue_label.pack(side='right', padx=(2, 15))
+        ttk.Label(inner_frame, text="Venue:", font=("TkDefaultFont", 9)).pack(side='right')
 
     def create_stagekit_tab(self, parent):
         """Create Stage Kit tab with Status and Test sub-tabs"""
@@ -3319,17 +3322,16 @@ class RB3Dashboard:
 
     def on_song_update(self, song, artist):
         """Called when song/artist info updates"""
-        # Update the now playing label
+        # Update the activity label - only show when playing
         if song and artist:
-            now_playing_text = f"{artist} - {song}"
+            activity_text = f"{artist} - {song}"
+            self.root.after(0, lambda: self._show_activity(activity_text))
         elif song:
-            now_playing_text = song
+            self.root.after(0, lambda: self._show_activity(song))
         elif artist:
-            now_playing_text = artist
+            self.root.after(0, lambda: self._show_activity(artist))
         else:
-            now_playing_text = "Waiting for game..."
-
-        self.root.after(0, lambda: self.now_playing_label.config(text=now_playing_text))
+            self.root.after(0, self._hide_activity)
 
         # Keep these for other uses (Discord, etc.)
         self.root.after(0, lambda: self.song_var.set(song if song else ""))
@@ -3346,6 +3348,20 @@ class RB3Dashboard:
                 except Exception:
                     pass
                 self.scrobble_timer_id = None
+
+    def _show_activity(self, text):
+        """Show activity text with separator"""
+        self.activity_label.config(text=text)
+        # Show separator if not already shown
+        if not self.activity_separator.winfo_ismapped():
+            self.activity_separator.pack(side='right', fill='y', padx=(10, 0))
+
+    def _hide_activity(self):
+        """Hide activity text and separator"""
+        self.activity_label.config(text="")
+        # Hide separator
+        if self.activity_separator.winfo_ismapped():
+            self.activity_separator.pack_forget()
 
     def on_song_started(self, artist, song, shortname):
         """Called when a song actually starts playing (game state 0->1)"""
