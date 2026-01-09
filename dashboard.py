@@ -3017,6 +3017,12 @@ class RB3Dashboard:
         self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
         self.discord_status_label.pack(anchor='w', pady=(5, 0))
 
+        # Discord settings requirement note
+        ttk.Label(discord_frame, text="Requires Discord desktop app with Activity Status enabled",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(3, 0))
+        ttk.Label(discord_frame, text="(Settings → Activity Privacy → Display current activity)",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
+
         # Save button at bottom of right column
         ttk.Button(right_col, text="Save Settings",
                   command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
