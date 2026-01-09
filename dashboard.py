@@ -2210,7 +2210,8 @@ class RB3Dashboard:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("RB3Enhanced Dashboard")
-        self.root.geometry("850x700")
+        self.root.geometry("1100x700")
+        self.root.minsize(900, 600)
         self.root.resizable(True, True)
 
         # Setup manual dark theme
@@ -2474,17 +2475,13 @@ class RB3Dashboard:
 
     def create_widgets(self):
         """Create all GUI widgets"""
-        # Now Playing bar at top (always visible)
-        self.create_now_playing_bar()
+        # Container frame for notebook and activity info overlay
+        container = ttk.Frame(self.root)
+        container.pack(fill='both', expand=True, padx=10, pady=5)
 
         # Main notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-
-        # Status tab (formerly Control)
-        status_frame = ttk.Frame(self.notebook)
-        self.notebook.add(status_frame, text="Status")
-        self.create_control_tab(status_frame)
+        self.notebook = ttk.Notebook(container)
+        self.notebook.pack(fill='both', expand=True)
 
         # Song Browser tab
         browser_frame = ttk.Frame(self.notebook)
@@ -2511,102 +2508,97 @@ class RB3Dashboard:
         self.notebook.add(log_frame, text="Log")
         self.create_log_tab(log_frame)
 
-    def create_now_playing_bar(self):
-        """Create the Now Playing bar at top of window"""
-        np_frame = ttk.LabelFrame(self.root, text="Now Playing", padding=5)
-        np_frame.pack(fill="x", padx=10, pady=5)
+        # Activity info overlay - positioned inline with tabs
+        self.create_activity_bar(container)
 
-        # Main container with two columns
-        main_container = ttk.Frame(np_frame)
-        main_container.pack(fill="x", expand=True)
-
-        # Left side: Song/Artist info
-        song_frame = ttk.Frame(main_container)
-        song_frame.pack(side="left", fill="both", expand=True)
-
-        # Song name
-        self.ent_song = ttk.Entry(song_frame, textvariable=self.song_var,
-                                  state="readonly", font=("Arial", 14, "bold"))
-        self.ent_song.pack(fill="x", pady=(0, 2))
-
-        # Artist name
-        self.ent_artist = ttk.Entry(song_frame, textvariable=self.artist_var,
-                                    state="readonly", font=("Arial", 11))
-        self.ent_artist.pack(fill="x")
-
-        # Right side: Game info panel
-        game_info_frame = ttk.Frame(main_container)
-        game_info_frame.pack(side="right", padx=(10, 0))
-
-        # NOTE: Score, stars, and band info events are defined in RB3Enhanced
-        # but not actually implemented/sent. Keeping variables for future compatibility.
+    def create_activity_bar(self, parent):
+        """Create the Activity info bar positioned inline with tabs"""
+        # Data vars
         self.score_var = tk.StringVar(value="0")
         self.stars_var = tk.StringVar(value="☆☆☆☆☆")
         self.band_labels = {}
 
-        # Venue display
-        venue_frame = ttk.Frame(game_info_frame)
-        venue_frame.pack(side="left", padx=(0, 15))
+        # Main container for the bar (placed in top-right of parent)
+        self.activity_frame = ttk.Frame(parent)
+        self.activity_frame.place(relx=1.0, y=2, anchor='ne')
 
-        ttk.Label(venue_frame, text="Venue", font=("Arial", 8)).pack()
+        # --- REMOVED: "Activity" Label code was here ---
+
+        # 1. The "Box" (Frame with border)
+        box_frame = ttk.Frame(self.activity_frame, relief='groove', borderwidth=1)
+        box_frame.pack(side='left', fill='y')
+
+        # Inner content with padding
+        inner_frame = ttk.Frame(box_frame, padding=(5, 2))
+        inner_frame.pack(fill='both')
+
+        # Waiting message (shown when RB3E not detected)
+        # Keeps the forced width=65 to ensure the box reserves space
+        self.activity_waiting_label = ttk.Label(inner_frame, 
+                                                text="Waiting for RB3Enhanced...",
+                                                font=("TkDefaultFont", 9), 
+                                                foreground='gray',
+                                                width=65,        
+                                                anchor='center') 
+        self.activity_waiting_label.pack(side='left')
+
+        # Song activity frame (hidden until RB3E detected)
+        self.activity_content_frame = ttk.Frame(inner_frame)
+
+        # Song info (Artist - Song)
+        self.activity_song_label = ttk.Label(self.activity_content_frame, text="",
+                                             font=("TkDefaultFont", 9, "bold"))
+        self.activity_song_label.pack(side='left')
+
+        # Separator
+        self.activity_separator = ttk.Separator(self.activity_content_frame, orient='vertical')
+
+        # Venue
+        self.venue_frame = ttk.Frame(self.activity_content_frame)
+        self.venue_frame.pack(side='left', padx=(0, 15))
+        ttk.Label(self.venue_frame, text="Venue:", font=("TkDefaultFont", 9)).pack(side='left')
         self.venue_var = tk.StringVar(value="-")
-        self.venue_label = ttk.Label(venue_frame, textvariable=self.venue_var,
-                                     font=("Arial", 10))
-        self.venue_label.pack()
+        
+        # Wide Venue Label
+        self.venue_label = ttk.Label(self.venue_frame, textvariable=self.venue_var,
+                                     font=("TkDefaultFont", 9), width=25, anchor='w')
+        self.venue_label.pack(side='left', padx=(3, 0))
 
-        # Screen display
-        screen_frame = ttk.Frame(game_info_frame)
-        screen_frame.pack(side="left")
-
-        ttk.Label(screen_frame, text="Screen", font=("Arial", 8)).pack()
+        # Screen
+        self.screen_frame = ttk.Frame(self.activity_content_frame)
+        self.screen_frame.pack(side='left')
+        ttk.Label(self.screen_frame, text="Screen:", font=("TkDefaultFont", 9)).pack(side='left')
         self.screen_var = tk.StringVar(value="-")
-        self.screen_label = ttk.Label(screen_frame, textvariable=self.screen_var,
-                                      font=("Arial", 10))
-        self.screen_label.pack()
+        
+        # Wide Screen Label
+        self.screen_label = ttk.Label(self.screen_frame, textvariable=self.screen_var,
+                                      font=("TkDefaultFont", 9), width=20, anchor='w')
+        self.screen_label.pack(side='left', padx=(3, 0))
 
-    def create_control_tab(self, parent):
-        """Create control panel tab"""
-        # Status section
-        status_frame = ttk.LabelFrame(parent, text="Status", padding=10)
-        status_frame.pack(fill='x', padx=10, pady=5)
+    def create_stagekit_tab(self, parent):
+        """Create Stage Kit tab with Status and Test sub-tabs"""
+        # Create sub-notebook for Status and Test tabs
+        stagekit_notebook = ttk.Notebook(parent)
+        stagekit_notebook.pack(fill='both', expand=True, padx=5, pady=5)
 
-        self.status_label = ttk.Label(status_frame, text="Stopped",
-                                      font=('TkDefaultFont', 12, 'bold'))
-        self.status_label.pack()
+        # Status tab (default)
+        status_frame = ttk.Frame(stagekit_notebook)
+        stagekit_notebook.add(status_frame, text="Status")
+        self.create_stagekit_status_tab(status_frame)
 
-        self.vlc_status_label = ttk.Label(status_frame, text="VLC: Not checked")
-        self.vlc_status_label.pack(pady=(5, 0))
+        # Test tab
+        test_frame = ttk.Frame(stagekit_notebook)
+        stagekit_notebook.add(test_frame, text="Test")
+        self.create_stagekit_test_tab(test_frame)
 
-        self.ip_status_label = ttk.Label(status_frame, text="RB3Enhanced: Not detected",
-                                         foreground='orange')
-        self.ip_status_label.pack(pady=(5, 0))
-
-        self.db_status_label = ttk.Label(status_frame, text="Database: Not loaded",
-                                         foreground='orange')
-        self.db_status_label.pack(pady=(5, 0))
-
-        # Control buttons
-        button_frame = ttk.Frame(parent)
-        button_frame.pack(pady=15)
-
-        self.start_button = ttk.Button(button_frame, text="Start Listening",
-                                       command=self.start_listener, style='Accent.TButton')
-        self.start_button.pack(side='left', padx=5)
-
-        self.stop_button = ttk.Button(button_frame, text="Stop",
-                                      command=self.stop_listener, state='disabled')
-        self.stop_button.pack(side='left', padx=5)
-
-        self.web_ui_button = ttk.Button(button_frame, text="Open RBE Web UI",
-                                        command=self.open_web_ui, state='disabled')
-        self.web_ui_button.pack(side='left', padx=5)
-
+    def create_stagekit_status_tab(self, parent):
+        """Create Stage Kit status sub-tab with detected Picos"""
         # Detected Picos section
         pico_frame = ttk.LabelFrame(parent, text="Detected Stage Kit Picos", padding=10)
-        pico_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        pico_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
         columns = ("ip", "name", "usb", "signal", "status")
-        self.pico_tree = ttk.Treeview(pico_frame, columns=columns, show="headings", height=4)
+        self.pico_tree = ttk.Treeview(pico_frame, columns=columns, show="headings", height=8)
         self.pico_tree.heading("ip", text="IP Address")
         self.pico_tree.heading("name", text="Name")
         self.pico_tree.heading("usb", text="USB Status")
@@ -2622,12 +2614,17 @@ class RB3Dashboard:
         self.pico_tree.pack(fill="both", expand=True)
         self.pico_tree.bind("<<TreeviewSelect>>", self.on_pico_select)
 
+        # Target label
         self.pico_target_label = ttk.Label(parent, text="Stage Kit Target: ALL DEVICES (Broadcast)",
                                            font=("Arial", 9))
-        self.pico_target_label.pack(pady=(0, 5))
+        self.pico_target_label.pack(pady=(5, 10))
 
-    def create_stagekit_tab(self, parent):
-        """Create Stage Kit controls tab"""
+        # Info text
+        ttk.Label(parent, text="Select a Pico to target it specifically, or leave unselected to broadcast to all",
+                 foreground='gray', font=('TkDefaultFont', 9)).pack()
+
+    def create_stagekit_test_tab(self, parent):
+        """Create Stage Kit test controls sub-tab"""
         # Main Controls
         main_frame = ttk.LabelFrame(parent, text="Global Effects", padding=10)
         main_frame.pack(fill="x", padx=10, pady=5)
@@ -3159,11 +3156,65 @@ class RB3Dashboard:
                   command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
 
     def create_log_tab(self, parent):
-        """Create log display tab"""
-        self.log_text = scrolledtext.ScrolledText(parent, wrap='word', height=20)
-        self.log_text.pack(fill='both', expand=True, padx=10, pady=10)
+        """Create log display tab with status indicators"""
+        # Status section at top
+        status_frame = ttk.LabelFrame(parent, text="Status", padding=10)
+        status_frame.pack(fill='x', padx=10, pady=5)
 
-        ttk.Button(parent, text="Clear Log", command=self.clear_log).pack(pady=5)
+        # Status indicators in a row
+        status_row = ttk.Frame(status_frame)
+        status_row.pack(fill='x')
+
+        # Listening status
+        listen_frame = ttk.Frame(status_row)
+        listen_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(listen_frame, text="Listener:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.status_label = ttk.Label(listen_frame, text="Starting...",
+                                      font=('TkDefaultFont', 9, 'bold'))
+        self.status_label.pack(side='left', padx=(5, 0))
+
+        # VLC status
+        vlc_frame = ttk.Frame(status_row)
+        vlc_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(vlc_frame, text="VLC:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.vlc_status_label = ttk.Label(vlc_frame, text="Checking...",
+                                          font=('TkDefaultFont', 9))
+        self.vlc_status_label.pack(side='left', padx=(5, 0))
+
+        # RB3Enhanced status
+        rb3e_frame = ttk.Frame(status_row)
+        rb3e_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(rb3e_frame, text="RB3E:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.ip_status_label = ttk.Label(rb3e_frame, text="Not detected",
+                                         font=('TkDefaultFont', 9), foreground='orange')
+        self.ip_status_label.pack(side='left', padx=(5, 0))
+
+        # Database status
+        db_frame = ttk.Frame(status_row)
+        db_frame.pack(side='left', padx=(0, 20))
+        ttk.Label(db_frame, text="Database:", font=('TkDefaultFont', 9)).pack(side='left')
+        self.db_status_label = ttk.Label(db_frame, text="Not loaded",
+                                         font=('TkDefaultFont', 9), foreground='orange')
+        self.db_status_label.pack(side='left', padx=(5, 0))
+
+        # Open Web UI button
+        self.web_ui_button = ttk.Button(status_row, text="Open RBE Web UI",
+                                        command=self.open_web_ui, state='disabled')
+        self.web_ui_button.pack(side='right')
+
+        # Controls frame for log options
+        controls_frame = ttk.Frame(parent)
+        controls_frame.pack(fill='x', padx=10, pady=5)
+
+        self.log_stagekit_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(controls_frame, text="Show Stage Kit/Lighting Events",
+                       variable=self.log_stagekit_var).pack(side='left')
+
+        ttk.Button(controls_frame, text="Clear Log", command=self.clear_log).pack(side='right')
+
+        # Log text area
+        self.log_text = scrolledtext.ScrolledText(parent, wrap='word', height=20)
+        self.log_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
     # =========================================================================
     # CALLBACKS AND HELPERS
@@ -3298,7 +3349,19 @@ class RB3Dashboard:
 
     def on_song_update(self, song, artist):
         """Called when song/artist info updates"""
-        self.root.after(0, lambda: self.song_var.set(song if song else "Waiting for game..."))
+        # Update the activity label - only show when playing
+        if song and artist:
+            activity_text = f"{artist} - {song}"
+            self.root.after(0, lambda: self._show_activity(activity_text))
+        elif song:
+            self.root.after(0, lambda: self._show_activity(song))
+        elif artist:
+            self.root.after(0, lambda: self._show_activity(artist))
+        else:
+            self.root.after(0, self._hide_activity)
+
+        # Keep these for other uses (Discord, etc.)
+        self.root.after(0, lambda: self.song_var.set(song if song else ""))
         self.root.after(0, lambda: self.artist_var.set(artist if artist else ""))
 
         # Set Discord to idle state and cancel pending scrobble when returning to menu
@@ -3312,6 +3375,21 @@ class RB3Dashboard:
                 except Exception:
                     pass
                 self.scrobble_timer_id = None
+
+    def _show_activity(self, text):
+        """Show song activity text with separator"""
+        self.activity_song_label.config(text=text)
+        # Show separator between song and venue if not already shown
+        if not self.activity_separator.winfo_ismapped():
+            # Pack separator after song label, before venue
+            self.activity_separator.pack(side='left', fill='y', padx=(10, 10), after=self.activity_song_label)
+
+    def _hide_activity(self):
+        """Hide song activity text and separator"""
+        self.activity_song_label.config(text="")
+        # Hide separator
+        if self.activity_separator.winfo_ismapped():
+            self.activity_separator.pack_forget()
 
     def on_song_started(self, artist, song, shortname):
         """Called when a song actually starts playing (game state 0->1)"""
@@ -3388,9 +3466,12 @@ class RB3Dashboard:
         self.root.after(0, self._update_ip_ui, ip_address)
 
     def _update_ip_ui(self, ip_address):
-        self.ip_status_label.config(text=f"RB3Enhanced: {ip_address}", foreground='green')
+        self.ip_status_label.config(text=ip_address, foreground='green')
         self.web_ui_button.config(state='normal')
         self.load_songs_button.config(state='normal')
+        # Show activity content, hide waiting message
+        self.activity_waiting_label.pack_forget()
+        self.activity_content_frame.pack(side='left')
 
     def on_game_info(self, info_type, data):
         """Called when game info updates (score, band, venue, screen)"""
@@ -3459,6 +3540,36 @@ class RB3Dashboard:
             return "-"
         # Remove underscores, capitalize words
         return name.replace('_', ' ').title()
+
+    def on_stagekit_event(self, left_weight, right_weight):
+        """Called when stage kit/lighting event is received"""
+        if not self.log_stagekit_var.get():
+            return
+
+        # Decode the lighting data for display
+        # Left byte: fog (bit 4), strobe (bits 0-3 = speed)
+        # Right byte: LED colors (bits 0-3), LED state (bits 4-6)
+        fog = "ON" if (left_weight & 0x10) else "OFF"
+        strobe_speed = left_weight & 0x0F
+
+        led_colors = right_weight & 0x0F
+        led_state = (right_weight >> 4) & 0x07
+
+        color_names = []
+        if led_colors & 0x01:
+            color_names.append("Blue")
+        if led_colors & 0x02:
+            color_names.append("Green")
+        if led_colors & 0x04:
+            color_names.append("Yellow")
+        if led_colors & 0x08:
+            color_names.append("Red")
+        colors = ", ".join(color_names) if color_names else "None"
+
+        state_names = {0: "Off", 1: "Slow", 2: "Medium", 3: "Fast", 4: "Fastest"}
+        led_state_name = state_names.get(led_state, f"State {led_state}")
+
+        self.log_message(f"StageKit: Fog={fog} Strobe={strobe_speed} LEDs=[{colors}] Mode={led_state_name} (L=0x{left_weight:02X} R=0x{right_weight:02X})")
 
     def open_web_ui(self):
         """Open RB3Enhanced web interface"""
@@ -3683,7 +3794,7 @@ class RB3Dashboard:
                 self.database_status_label.config(
                     text=f"Loaded {stats['loaded_count']} songs", foreground='green')
                 self.db_status_label.config(
-                    text=f"Database: {stats['loaded_count']} songs", foreground='green')
+                    text=f"{stats['loaded_count']} songs", foreground='green')
                 self.clear_db_button.config(state='normal')
 
     def load_song_database(self):
@@ -3703,7 +3814,7 @@ class RB3Dashboard:
                 self.database_status_label.config(
                     text=f"Loaded {stats['loaded_count']} songs", foreground='green')
                 self.db_status_label.config(
-                    text=f"Database: {stats['loaded_count']} songs", foreground='green')
+                    text=f"{stats['loaded_count']} songs", foreground='green')
                 self.clear_db_button.config(state='normal')
 
                 if self.youtube_searcher:
@@ -3716,7 +3827,7 @@ class RB3Dashboard:
         self.song_database = SongDatabase(gui_callback=self.log_message)
         self.settings['database_path'] = ''
         self.database_status_label.config(text="No database loaded", foreground='orange')
-        self.db_status_label.config(text="Database: Not loaded", foreground='orange')
+        self.db_status_label.config(text="Not loaded", foreground='orange')
         self.clear_db_button.config(state='disabled')
 
     # =========================================================================
@@ -3747,11 +3858,10 @@ class RB3Dashboard:
                                            song_database=self.song_database)
 
                 if self.vlc_player.vlc_path:
-                    self.vlc_status_label.config(text=f"VLC: {self.vlc_player.vlc_path}",
-                                                foreground='green')
+                    self.vlc_status_label.config(text="Ready", foreground='green')
                     self.log_message(f"VLC found: {self.vlc_player.vlc_path}")
                 else:
-                    self.vlc_status_label.config(text="VLC: Not found", foreground='red')
+                    self.vlc_status_label.config(text="Not found", foreground='red')
                     self.log_message("VLC not found - video playback will not work")
 
                 if api_key:
@@ -3766,15 +3876,16 @@ class RB3Dashboard:
                         self.log_message(f"Using {cookie_browser} cookies for age-restricted videos")
                 else:
                     self.log_message("YouTube API key not set - video search disabled")
-                    self.vlc_status_label.config(text="VLC: No API key", foreground='orange')
+                    self.vlc_status_label.config(text="No API key", foreground='orange')
             else:
-                self.vlc_status_label.config(text="VLC: Video disabled", foreground='gray')
+                self.vlc_status_label.config(text="Disabled", foreground='gray')
 
             # Create unified listener
             self.listener = UnifiedRB3EListener(
                 gui_callback=self.log_message,
                 ip_detected_callback=self.on_ip_detected,
                 song_update_callback=self.on_song_update,
+                stagekit_callback=self.on_stagekit_event,
                 song_started_callback=self.on_song_started,
                 song_ended_callback=self.on_song_ended,
                 game_info_callback=self.on_game_info
@@ -3801,8 +3912,6 @@ class RB3Dashboard:
 
             self.is_running = True
             self.status_label.config(text="Listening", foreground='green')
-            self.start_button.config(state='disabled')
-            self.stop_button.config(state='normal')
 
             # Start device cleanup
             self.root.after(1000, self.cleanup_devices)
@@ -3857,12 +3966,17 @@ class RB3Dashboard:
             self.sock_control = None
 
         self.status_label.config(text="Stopped", foreground='red')
-        self.start_button.config(state='normal')
-        self.stop_button.config(state='disabled')
-        self.ip_status_label.config(text="RB3Enhanced: Not detected", foreground='orange')
+        self.ip_status_label.config(text="Not detected", foreground='orange')
         self.web_ui_button.config(state='disabled')
         self.load_songs_button.config(state='disabled')
         self.detected_ip = None
+
+        # Reset activity bar to waiting state
+        self.activity_content_frame.pack_forget()
+        self.activity_song_label.config(text="")
+        if self.activity_separator.winfo_ismapped():
+            self.activity_separator.pack_forget()
+        self.activity_waiting_label.pack(side='left')
 
         self.log_message("Stopped listening")
 
@@ -4047,6 +4161,8 @@ class RB3Dashboard:
 
     def run(self):
         """Start the application"""
+        # Auto-start listener after UI is ready
+        self.root.after(100, self.start_listener)
         self.root.mainloop()
 
 
