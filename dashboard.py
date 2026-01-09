@@ -1407,6 +1407,9 @@ class SongBrowser:
 
             self.safe_callback(f"Loaded {len(self.songs_data)} songs from {len(self.artists_index)} artists")
 
+            # Save to cache for next launch
+            self.save_to_cache()
+
             self.loading = False
             return True
 
@@ -1418,6 +1421,74 @@ class SongBrowser:
             self.safe_callback(f"Error parsing song list: {e}")
             self.loading = False
             return False
+
+    def get_cache_path(self):
+        """Get path for song list cache file"""
+        if sys.platform == 'win32':
+            appdata_dir = os.environ.get('APPDATA')
+            if appdata_dir:
+                cache_dir = os.path.join(appdata_dir, 'RB3Dashboard')
+                os.makedirs(cache_dir, exist_ok=True)
+                return os.path.join(cache_dir, 'song_list_cache.json')
+        # Linux/Mac
+        user_home = os.path.expanduser('~')
+        cache_dir = os.path.join(user_home, '.rb3dashboard')
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, 'song_list_cache.json')
+
+    def save_to_cache(self):
+        """Save song list to JSON cache"""
+        if not self.songs_data:
+            return False
+        try:
+            cache_path = self.get_cache_path()
+            cache_data = {
+                'songs': self.songs_data,
+                'cached_at': time.time(),
+                'source_ip': self.rb3_ip
+            }
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2)
+            self.safe_callback(f"Cached {len(self.songs_data)} songs to {cache_path}")
+            return True
+        except Exception as e:
+            self.safe_callback(f"Failed to save cache: {e}")
+            return False
+
+    def load_from_cache(self):
+        """Load song list from JSON cache"""
+        try:
+            cache_path = self.get_cache_path()
+            if not os.path.exists(cache_path):
+                return False
+
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+
+            self.songs_data = cache_data.get('songs', [])
+            self.rb3_ip = cache_data.get('source_ip')
+
+            # Build artists index
+            self.artists_index = {}
+            for song in self.songs_data:
+                artist = song.get('artist', 'Unknown Artist')
+                if artist not in self.artists_index:
+                    self.artists_index[artist] = []
+                self.artists_index[artist].append(song)
+
+            for artist in self.artists_index:
+                self.artists_index[artist].sort(key=lambda x: x.get('title', ''))
+
+            self.safe_callback(f"Loaded {len(self.songs_data)} songs from cache")
+            return True
+        except Exception as e:
+            self.safe_callback(f"Failed to load cache: {e}")
+            return False
+
+    def has_cached_data(self):
+        """Check if cached song list exists"""
+        cache_path = self.get_cache_path()
+        return os.path.exists(cache_path)
 
     def play_song(self, shortname):
         """Send play command to RB3Enhanced"""
@@ -2624,11 +2695,16 @@ class RB3Dashboard:
         if lastfm_key:
             self.album_art_manager.set_api_key(lastfm_key)
 
+        # Check if we have cached data
+        has_cache = self.song_browser.has_cached_data()
+
         # Controls
         controls_frame = ttk.Frame(parent)
         controls_frame.pack(fill='x', padx=10, pady=5)
 
-        self.load_songs_button = ttk.Button(controls_frame, text="Load Song List",
+        # Button text depends on whether cache exists
+        button_text = "Refresh Song List" if has_cache else "Load Song List"
+        self.load_songs_button = ttk.Button(controls_frame, text=button_text,
                                             command=self.load_song_list, state='disabled')
         self.load_songs_button.pack(side='left', padx=(0, 10))
 
@@ -2691,12 +2767,21 @@ class RB3Dashboard:
         status_frame = ttk.Frame(parent)
         status_frame.pack(fill='x', padx=10, pady=5)
 
-        self.browser_status_label = ttk.Label(status_frame,
-                                              text="Connect to RB3Enhanced to load song list")
+        status_text = "Connect to RB3Enhanced to refresh song list" if has_cache else "Connect to RB3Enhanced to load song list"
+        self.browser_status_label = ttk.Label(status_frame, text=status_text)
         self.browser_status_label.pack(side='left')
 
         ttk.Label(status_frame, text="Double-click to jump to song",
                  foreground='gray', font=('TkDefaultFont', 9)).pack(side='right')
+
+        # Load cached data if available
+        if has_cache:
+            if self.song_browser.load_from_cache():
+                self.populate_song_tree()
+                count = len(self.song_browser.songs_data)
+                artist_count = len(self.song_browser.artists_index)
+                self.song_count_label.config(text=f"{count} songs, {artist_count} artists (cached)")
+                self.browser_status_label.config(text="Loaded from cache - connect to RB3Enhanced to refresh")
 
     def create_history_tab(self, parent):
         """Create history tab showing session play history and stats"""
@@ -3488,14 +3573,14 @@ class RB3Dashboard:
         threading.Thread(target=load_thread, daemon=True).start()
 
     def on_song_list_loaded(self, success):
-        self.load_songs_button.config(state='normal', text='Reload Song List')
+        self.load_songs_button.config(state='normal', text='Refresh Song List')
 
         if success:
             self.populate_song_tree()
             count = len(self.song_browser.songs_data)
             artist_count = len(self.song_browser.artists_index)
             self.song_count_label.config(text=f"{count} songs, {artist_count} artists")
-            self.browser_status_label.config(text="Song list loaded")
+            self.browser_status_label.config(text="Song list loaded and cached")
         else:
             self.browser_status_label.config(text="Failed to load song list")
 
