@@ -1,230 +1,168 @@
 # RB3Enhanced Tools
 
-This repository consists of three parts:
-1. A unified dashboard application for Rock Band 3 Enhanced that combines Stage Kit wireless control, YouTube music video playback, song tracking, and social integrations.
-2. A simple dashboard that only handles Stage Kit wireless control.
-3. Pico W firmware that turns wired Fatsco/Santroller Stage Kit devices into a wireless networked device.
+This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges the gap between your game console, your PC, and real-world stage lighting.
 
-## Dashboard Features
+## 📂 Project Structure
 
-### Stage Kit Wireless Control
-- **Fleet Management**: Auto-detect and monitor multiple Pico W devices on your network
-- **Manual Controls**: Trigger fog, strobe, and LED colors for testing
-- **Telemetry**: Monitor signal strength (RSSI) and USB connection status
-- **Broadcast or Targeted**: Send commands to all devices or specific units
+The project consists of three main components:
 
-### YouTube Music Video Playback
-- **Automatic Video Search**: Finds and plays music videos synced to your gameplay
-- **Smart Matching**: Prioritizes official videos, VEVO, and artist channels
-- **Duration Matching**: Uses song database to find videos with matching length
-- **VLC Integration**: Plays videos via VLC with fullscreen, mute, and always-on-top options
-- **Content Filtering**: Excludes covers, karaoke, tutorials, and other unwanted content
-
-### Song Browser
-- **Browse Your Library**: View all songs available in RB3Enhanced, loaded over the network
-- **Album Art**: Fetches album artwork from Last.fm
-- **Search & Filter**: Quickly find songs by artist, title, or album
-- **Quick Navigation**: Double-click to jump to any song
-
-### History & Statistics
-- **Session History**: Track songs played during each session
-- **Persistent Stats**: All-time play counts, unique songs, total listening time
-- **Top Songs**: View your most played tracks
-- **Export**: Save history to CSV or JSON
-
-### Last.fm Scrobbling
-- **Now Playing**: Updates your Last.fm profile in real-time
-- **Automatic Scrobbling**: Scrobbles after 50% or 4 minutes of play
-- **Easy Setup**: Built-in OAuth authorization flow
-
-### Discord Rich Presence
-- **Show What You're Playing**: Display current song in your Discord status
-- **Elapsed Time**: Shows how long you've been playing
-- **Auto-Clear**: Clears when returning to menus
+1.  **Unified Dashboard (`dashboard.py`):** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
+2.  **Pico W Firmware (`circuitpython_stagekit.py`):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
+3.  **Simple Dashboard (`simple_stagekit_dashboard.py`):** A lightweight alternative dashboard focused solely on lighting control and debugging network packets.
 
 ---
 
-## Installation
+## 🌟 Features
 
-### Dashboard (Windows/Linux/Mac)
+### 🖥️ Unified Dashboard
+* **Video Sync:** Automatically searches for and plays official music videos (via YouTube/VLC) synced perfectly to your gameplay. Features intelligent filtering to avoid covers/tutorials.
+* **Song Library:** Browse your currently loaded RB3E song list directly on your PC, complete with album art fetched from Last.fm.
+* **Stats & History:** Tracks session playtime, song history, and all-time top statistics. Exportable to CSV/JSON.
+* **Social Integration:**
+    * **Discord Rich Presence:** Displays your current song, artist, and elapsed time on your Discord profile.
+    * **Last.fm:** Real-time "Now Playing" updates and automatic scrobbling (after 50% or 4 minutes of play).
+* **Fleet Management:** Auto-detects all wireless Stage Kit Picos on the network, monitoring their signal strength (RSSI) and USB status.
 
-1. **Install Python 3.8+** from [python.org](https://python.org)
-
-2. **Download** `dashboard.py` from this repository
-
-3. **Run the dashboard**:
-   ```bash
-   python dashboard.py
-   ```
-   Dependencies are installed automatically on first run.
-
-4. **Configure Settings** (Settings tab):
-   - Enter your YouTube Data API v3 key for video playback
-   - Enter your Last.fm API key for album art and scrobbling
-   - Enable/disable features as desired
-
-### API Keys (Optional)
-
-| Feature | API Key Required | Get It From |
-|---------|------------------|-------------|
-| Video Playback | YouTube Data API v3 | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) |
-| Album Art | Last.fm API | [Last.fm API](https://www.last.fm/api/account/create) |
-| Scrobbling | Last.fm API + Secret | [Last.fm API](https://www.last.fm/api/account/create) |
-| Discord Presence | Discord Application ID | [Discord Developer Portal](https://discord.com/developers/applications) |
-
-### VLC Media Player
-
-For video playback, install VLC:
-- **Windows**: [videolan.org](https://www.videolan.org/vlc/)
-- **Linux**: `sudo apt install vlc`
-- **Mac**: [videolan.org](https://www.videolan.org/vlc/)
+### 💡 Wireless Stage Kit (Pico W)
+* **Wireless Bridge:** Removes the need to run long USB cables from the console to the fog machine.
+* **UDP Protocol:** Listens for RB3E game events over WiFi on port `21070`.
+* **Telemetry:** Broadcasts device health (WiFi signal, Connection status) back to the dashboard on port `21071`.
+* **Fail-safes:** Auto-shutoff for lights/fog if network data stops to prevent "stuck" states.
 
 ---
 
-## Stage Kit Pico Firmware
+## 🛠️ Hardware Setup (Pico W)
 
-The Pico code can be used with or without the dashboard, though using the dash makes debugging and light deployment much easier.
+This firmware turns a Raspberry Pi Pico W into a wireless receiver for your Stage Kit.
 
-### Hardware Requirements
-- Raspberry Pi Pico W or Pico 2 W
-- Fatsco Stage Kit light (strobe or LED array)
-- USB OTG Cable (Micro-USB to Micro-USB)
-- 5V 2A power supply recommended (external power from a powered USB hub recommended for maximum brightness)
+### Requirements
+* **Microcontroller:** Raspberry Pi Pico W (or Pico 2 W).
+* **Hardware:** A Stage Kit (strobe/fog) modified with a Santroller/Fatsco board.
+* **Connectivity:** USB OTG Cable (Micro-USB to Micro-USB) to connect the Pico to the Stage Kit.
+* **Power:** A generic 5V 2A USB power bank or wall adapter for the Pico.
 
-### Firmware Installation
+### Installation Steps
+1.  **Install CircuitPython:**
+    * Download the latest CircuitPython `.uf2` for Pico W from [circuitpython.org](https://circuitpython.org).
+    * Hold the `BOOTSEL` button on the Pico while plugging it into your PC.
+    * Drag the `.uf2` file onto the `RPI-RP2` drive. The device will reboot as `CIRCUITPY`.
+2.  **Configure Firmware:**
+    * Open `circuitpython_stagekit.py` from this repo in a text editor.
+    * Locate the WiFi configuration section near the top:
+        ```python
+        WIFI_SSID = "YOUR_NETWORK_NAME"
+        WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
+        ```
+    * Update these with your 2.4GHz WiFi credentials.
+3.  **Flash Code:**
+    * Rename your edited file to `code.py`.
+    * Copy `code.py` to the root of the `CIRCUITPY` drive.
+4.  **Connect:**
+    * Plug the Stage Kit into the Pico using the OTG cable.
+    * Power on the Pico.
 
-1. **Prepare the Pico**
-   - Download CircuitPython for your board from [circuitpython.org](https://circuitpython.org)
-   - Hold BOOTSEL while plugging the Pico into your computer
-   - Drag the `.uf2` file onto the RPI-RP2 drive
-   - The Pico reboots as CIRCUITPY
-
-2. **Install the Firmware**
-   - Open `circuitpython_stagekit.py` in a text editor
-   - Configure your WiFi credentials:
-     ```python
-     WIFI_SSID = "YourNetworkName"
-     WIFI_PASSWORD = "YourPassword"
-     ```
-   - Save as `code.py` on the CIRCUITPY drive
-
-3. **Connect Hardware**
-   - Connect Stage Kit to Pico's micro-USB via OTG adapter
-   - Power on the Pico
-   - The Pico connects to WiFi and initializes the Stage Kit
-
-### LED Status Codes
-
-| LED Behavior | Status |
-|--------------|--------|
-| Fast Blinking | Connecting to WiFi |
-| Triple Blink | Stage Kit USB Device Found |
-| Slow Blink (2s) | Online & Ready |
-| Solid Off | Power Off / Error |
-
-### Advanced Configuration
-
-Variables at the top of `code.py`:
-- `UDP_LISTEN_PORT`: Default 21070 (RB3E standard port)
-- `SOURCE_IP_FILTER`: Filter packets to specific IP (default: None)
-- `DEBUG`: Enable serial printing (impacts performance)
+### LED Status Codes (Onboard LED)
+| Pattern | Status |
+| :--- | :--- |
+| **Fast Blink** | Connecting to WiFi... |
+| **Triple Blink** | Stage Kit USB Device Found |
+| **Slow Blink (2s)** | Online & Ready (Heartbeat) |
+| **Solid Off** | Error / Power Off |
 
 ---
 
-## Usage
+## 💻 Software Setup (Dashboard)
 
-### Getting Started
+### Prerequisites
+1.  **Python 3.8+**: Download from [python.org](https://www.python.org/).
+2.  **VLC Media Player**: Required for video playback.
+    * Windows/Mac: [videolan.org](https://www.videolan.org/vlc/)
+    * Linux: `sudo apt install vlc`
 
-1. Launch the dashboard: `python dashboard.py`
-2. Click **Start Listening** to begin receiving RB3Enhanced events
-3. The dashboard auto-detects your console's IP when RB3E sends data
-
-### Tabs
-
-| Tab | Description |
-|-----|-------------|
-| **Status** | Connection status, detected IP, VLC status |
-| **Song Browser** | Browse and search your song library |
-| **History** | Session history and all-time statistics |
-| **Stage Kit** | Monitor Picos and send manual commands |
-| **Settings** | API keys, video options, toggles |
-| **Log** | Event log for debugging |
-
-### Video Playback Settings
-
-- **Enable YouTube video playback**: Master toggle
-- **Start videos in fullscreen**: Opens VLC fullscreen
-- **Start videos muted**: Mutes video audio (game audio plays)
-- **Keep video always on top**: Video window stays visible
-- **Sync video start to song start**: Waits for gameplay to begin
-- **Auto-quit VLC on menu return**: Closes video when song ends
-- **Start delay**: Adjust timing offset (-10 to +10 seconds)
-
-### Song Database (Optional)
-
-Load a JSON song database to improve video duration matching:
-```json
-{
-  "songs": {
-    "songshortname": {
-      "name": "Song Title",
-      "artist": "Artist Name",
-      "duration_seconds": 240
-    }
-  }
-}
-```
+### Installation
+1.  Clone or download this repository.
+2.  Open a terminal/command prompt in the directory.
+3.  Run the dashboard:
+    ```bash
+    python dashboard.py
+    ```
+    *Note: On the first launch, the script will automatically attempt to install required Python dependencies (`yt_dlp`, `pypresence`, `google-api-python-client`, `Pillow`, `screeninfo`).*
 
 ---
 
-## Network Ports
+## ⚙️ Configuration
 
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| 21070 | UDP | RB3Enhanced events (game → dashboard) |
-| 21071 | UDP | Pico telemetry (Pico → dashboard) |
+Once the Dashboard is running, navigate to the **Settings** tab.
 
-Ensure these ports are open on your firewall.
+### 1. Music Video Playback
+To enable the "Music Video" feature, you need a **YouTube Data API v3 Key**.
+1.  Go to the [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
+2.  Create a project and enable "YouTube Data API v3".
+3.  Create an API Key (Credentials).
+4.  Paste the key into the Dashboard Settings.
 
----
+### 2. Album Art & Scrobbling
+To fetch album art and scrobble tracks:
+1.  Go to [Last.fm API Account Create](https://www.last.fm/api/account/create).
+2.  Create an API account to get an **API Key** and **Shared Secret**.
+3.  Enter these into the Dashboard Settings.
+4.  Click **Authorize Last.fm** to link your user account for scrobbling.
 
-## Troubleshooting
-
-### Dashboard won't start
-- Ensure Python 3.8+ is installed
-- Run from command line to see error messages
-
-### No events received
-- Check firewall settings for ports 21070/21071
-- Verify RB3Enhanced is running and broadcasting
-- Ensure dashboard and console are on same network
-
-### Videos not playing
-- Install VLC Media Player
-- Enter a valid YouTube Data API key
-- Check the Log tab for errors
-
-### Pico not connecting
-- Verify WiFi credentials in `code.py`
-- Check that Pico and dashboard are on same network
-- Watch the onboard LED for status codes
-
-### Last.fm not scrobbling
-- Complete the authorization flow (click "Authorize Last.fm")
-- Ensure both API Key and API Secret are entered
-- Check that scrobbling is enabled
+### 3. Network Ports
+Ensure your firewall allows UDP traffic on the following ports:
+* **21070:** Inbound (Game Events) & Outbound (Stage Kit Commands).
+* **21071:** Inbound (Pico Telemetry).
 
 ---
 
-## Credits
+## 🕹️ Usage Guide
 
-- **TheFatBastid** - Stage Kit lights and [StageKitPied fork](https://github.com/TheFatBastid/StageKitPied)
-- **Blasteroids** - Original [StageKitPied](https://github.com/Blasteroids/StageKitPied)
-- **RB3Enhanced Team** - [RB3Enhanced](https://github.com/RBEnhanced/RB3Enhanced)
-- **Harmonix** - For Rock Band
+### Starting a Session
+1.  Ensure your RB3Enhanced console and PC are on the same network.
+2.  Launch `dashboard.py`.
+3.  Click **Start Listening** on the "Status" tab.
+4.  Start Rock Band 3 on your console.
+5.  The dashboard status should change to green, displaying the console's IP address.
+
+### Using the Stage Kit Manager
+* Navigate to the **Stage Kit** tab.
+* **Global Effects:** Use the buttons to manually trigger Fog, Strobe, or Flood colors on *all* connected Picos.
+* **Targeting:** In the "Status" tab, click a specific Pico in the list to target only that unit. Click "Clear Selection" (or deselect) to broadcast to all.
+
+### Browser & History
+* **Song Browser:** Once connected, click "Refresh Song List" to pull the database from the game. Double-clicking a song will tell the game to jump directly to that track (if supported by your RB3E build).
+* **History:** Songs are logged automatically. Use "Export" to save your session data to CSV for spreadsheets.
 
 ---
 
-## License
+## 🧩 Troubleshooting
+
+**Dashboard won't start?**
+* Ensure you have Python 3.8 or newer installed.
+* If dependencies fail to install automatically, run:
+    ```bash
+    pip install google-api-python-client yt-dlp Pillow pypresence screeninfo requests
+    ```
+
+**Videos aren't playing?**
+* Verify VLC is installed.
+* Check that your YouTube API Key is valid.
+* Check the **Log** tab in the dashboard for "Search error" or "VLC not found" messages.
+
+**Pico LED is blinking fast forever?**
+* It cannot connect to WiFi. Check the `WIFI_SSID` and `WIFI_PASSWORD` in `code.py`.
+* Ensure the network is 2.4GHz (Pico W does not support 5GHz).
+
+**Last.fm Art is missing?**
+* Ensure the API Key is entered.
+* Some custom songs may have metadata that doesn't match Last.fm's database.
+
+---
+
+## 📄 License & Credits
+
+* **Original StageKitPied:** [Blasteroids](https://github.com/Blasteroids/StageKitPied)
+* **Lighting Logic & Fork:** TheFatBastid
+* **RB3Enhanced:** [RB3Enhanced Team](https://github.com/RBEnhanced/RB3Enhanced)
 
 This project is provided as-is for the Rock Band community.
