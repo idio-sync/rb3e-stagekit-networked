@@ -772,8 +772,8 @@ class SongHistory:
         self.enabled = True
         self.total_time_seconds = 0
 
-    def add_song(self, artist: str, song: str, album: str = "", shortname: str = "", duration: int = 0):
-        """Add a song to the history"""
+    def add_song(self, artist: str, song: str, album: str = "", shortname: str = ""):
+        """Add a song to the history (duration updated when song ends)"""
         if not self.enabled:
             return
 
@@ -783,10 +783,15 @@ class SongHistory:
             'song': song,
             'album': album,
             'shortname': shortname,
-            'duration': duration
+            'duration': 0  # Updated when song ends
         }
         self.history.append(entry)
-        self.total_time_seconds += duration
+
+    def update_last_song_duration(self, duration: int):
+        """Update the duration of the last song and add to total time"""
+        if self.history:
+            self.history[-1]['duration'] = duration
+            self.total_time_seconds += duration
 
     def get_history(self) -> list:
         """Get the full history (newest first)"""
@@ -1727,12 +1732,14 @@ class UnifiedRB3EListener:
 
     def __init__(self, gui_callback=None, ip_detected_callback=None,
                  song_update_callback=None, stagekit_callback=None,
-                 song_started_callback=None, game_info_callback=None):
+                 song_started_callback=None, song_ended_callback=None,
+                 game_info_callback=None):
         self.gui_callback = gui_callback
         self.ip_detected_callback = ip_detected_callback
         self.song_update_callback = song_update_callback
         self.stagekit_callback = stagekit_callback
         self.song_started_callback = song_started_callback
+        self.song_ended_callback = song_ended_callback
         self.game_info_callback = game_info_callback
 
         self.sock = None
@@ -1746,6 +1753,7 @@ class UnifiedRB3EListener:
         self.current_artist = ""
         self.current_shortname = ""
         self.game_state = 0
+        self.song_start_time = None  # Track when song started for elapsed time
 
         # Live game info (protected by _state_lock)
         self.current_score = 0
@@ -1961,6 +1969,10 @@ class UnifiedRB3EListener:
                 if self.gui_callback:
                     self.gui_callback("Song starting!")
 
+                # Record start time for elapsed time tracking
+                with self._state_lock:
+                    self.song_start_time = time.time()
+
                 # Notify that song has started (for history/scrobbling)
                 if self.song_started_callback and (song or artist):
                     self.song_started_callback(artist, song, shortname)
@@ -1969,8 +1981,19 @@ class UnifiedRB3EListener:
                     self.start_pending_video()
 
             elif old_state == 1 and new_state == 0:
+                # Calculate elapsed time
+                elapsed_seconds = 0
+                with self._state_lock:
+                    if self.song_start_time:
+                        elapsed_seconds = int(time.time() - self.song_start_time)
+                    self.song_start_time = None
+
                 if self.gui_callback:
                     self.gui_callback("Returned to menus")
+
+                # Notify that song has ended with elapsed time
+                if self.song_ended_callback and (song or artist):
+                    self.song_ended_callback(artist, song, shortname, elapsed_seconds)
 
                 if video_enabled and auto_quit:
                     if self.vlc_player:
@@ -3191,18 +3214,16 @@ class RB3Dashboard:
         if not artist and not song:
             return
 
-        # Try to get duration from database (used by both session and persistent stats)
-        duration = 0
-        if self.song_database:
-            duration = self.song_database.get_song_duration(shortname, artist, song) or 0
-
-        # Track in session history
+        # Track in session history (duration updated when song ends)
         if self.song_history and self.song_history.enabled:
-            self.song_history.add_song(artist, song, "", shortname, duration)
+            self.song_history.add_song(artist, song, "", shortname)
             self.root.after(0, self.refresh_history_display)
 
-        # Track in persistent stats
+        # Track in persistent stats (use database duration as estimate)
         if self.play_stats and self.settings.get('stats_enabled', True):
+            duration = 0
+            if self.song_database:
+                duration = self.song_database.get_song_duration(shortname, artist, song) or 0
             self.play_stats.record_play(artist, song, duration)
 
         # Last.fm scrobbling - update now playing
@@ -3241,6 +3262,19 @@ class RB3Dashboard:
         """Perform the actual scrobble"""
         if self.scrobbler and self.scrobbler.enabled:
             self.scrobbler.scrobble(artist, song)
+
+    def on_song_ended(self, artist, song, shortname, elapsed_seconds):
+        """Called when a song ends (game state 1->0) with actual elapsed time"""
+        if elapsed_seconds > 0:
+            # Update session history with actual elapsed time
+            if self.song_history and self.song_history.enabled:
+                self.song_history.update_last_song_duration(elapsed_seconds)
+                self.root.after(0, self.refresh_history_display)
+
+            # Log the actual playtime
+            minutes = elapsed_seconds // 60
+            seconds = elapsed_seconds % 60
+            self.root.after(0, lambda: self.log_message(f"Song played for {minutes}:{seconds:02d}"))
 
     def on_ip_detected(self, ip_address):
         """Called when RB3Enhanced IP is detected"""
@@ -3636,6 +3670,7 @@ class RB3Dashboard:
                 ip_detected_callback=self.on_ip_detected,
                 song_update_callback=self.on_song_update,
                 song_started_callback=self.on_song_started,
+                song_ended_callback=self.on_song_ended,
                 game_info_callback=self.on_game_info
             )
 
