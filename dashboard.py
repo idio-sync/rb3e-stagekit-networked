@@ -2507,24 +2507,33 @@ class RB3Dashboard:
         self.notebook.add(log_frame, text="Log")
         self.create_log_tab(log_frame)
 
-        # Activity info overlay - positioned to the right of tabs
+        # Activity info overlay - positioned inline with tabs
         self.create_activity_bar(container)
 
     def create_activity_bar(self, parent):
-        """Create the Activity info bar positioned to the right of notebook tabs"""
-        # NOTE: Score, stars, and band info events are defined in RB3Enhanced
-        # but not actually implemented/sent. Keeping variables for future compatibility.
+        """Create the Activity info bar positioned inline with tabs"""
+        # Data vars
         self.score_var = tk.StringVar(value="0")
         self.stars_var = tk.StringVar(value="☆☆☆☆☆")
         self.band_labels = {}
 
-        # Create activity frame with distinct styling
-        self.activity_frame = ttk.LabelFrame(parent, text="Activity", padding=(5, 2))
-        self.activity_frame.place(relx=1.0, y=0, anchor='ne')
+        # Main container for the bar (placed in top-right of parent)
+        # We use a standard Frame (not LabelFrame) to layout the Label and Box side-by-side
+        self.activity_frame = ttk.Frame(parent)
+        # y=2 aligns it visually with standard tab text height
+        self.activity_frame.place(relx=1.0, y=2, anchor='ne')
 
-        # Inner frame for content (pack left to right)
-        inner_frame = ttk.Frame(self.activity_frame)
-        inner_frame.pack(fill='x')
+        # 1. "Activity" Label to the left of the box
+        ttk.Label(self.activity_frame, text="Activity", 
+                 font=("TkDefaultFont", 9, "bold")).pack(side='left', padx=(0, 5))
+
+        # 2. The "Box" (Frame with border to look like a container)
+        box_frame = ttk.Frame(self.activity_frame, relief='groove', borderwidth=1)
+        box_frame.pack(side='left', fill='y')
+
+        # Inner content with padding
+        inner_frame = ttk.Frame(box_frame, padding=(5, 2))
+        inner_frame.pack(fill='both')
 
         # Waiting message (shown when RB3E not detected)
         self.activity_waiting_label = ttk.Label(inner_frame, text="Waiting for RB3Enhanced...",
@@ -2534,21 +2543,23 @@ class RB3Dashboard:
         # Song activity frame (hidden until RB3E detected)
         self.activity_content_frame = ttk.Frame(inner_frame)
 
-        # Song info (Artist - Song) - shown first when playing
+        # Song info (Artist - Song)
         self.activity_song_label = ttk.Label(self.activity_content_frame, text="",
                                              font=("TkDefaultFont", 9, "bold"))
         self.activity_song_label.pack(side='left')
 
-        # Separator between song and venue (only when song playing)
+        # Separator
         self.activity_separator = ttk.Separator(self.activity_content_frame, orient='vertical')
 
         # Venue
         self.venue_frame = ttk.Frame(self.activity_content_frame)
-        self.venue_frame.pack(side='left', padx=(0, 10))
+        self.venue_frame.pack(side='left', padx=(0, 15))
         ttk.Label(self.venue_frame, text="Venue:", font=("TkDefaultFont", 9)).pack(side='left')
         self.venue_var = tk.StringVar(value="-")
+        
+        # WIDTH INCREASED 1.5x (12 -> 18)
         self.venue_label = ttk.Label(self.venue_frame, textvariable=self.venue_var,
-                                     font=("TkDefaultFont", 9), width=12, anchor='w')
+                                     font=("TkDefaultFont", 9), width=18, anchor='w')
         self.venue_label.pack(side='left', padx=(3, 0))
 
         # Screen
@@ -2556,8 +2567,10 @@ class RB3Dashboard:
         self.screen_frame.pack(side='left')
         ttk.Label(self.screen_frame, text="Screen:", font=("TkDefaultFont", 9)).pack(side='left')
         self.screen_var = tk.StringVar(value="-")
+        
+        # WIDTH INCREASED 1.5x (10 -> 15)
         self.screen_label = ttk.Label(self.screen_frame, textvariable=self.screen_var,
-                                      font=("TkDefaultFont", 9), width=10, anchor='w')
+                                      font=("TkDefaultFont", 9), width=15, anchor='w')
         self.screen_label.pack(side='left', padx=(3, 0))
 
     def create_stagekit_tab(self, parent):
