@@ -1864,6 +1864,8 @@ class UnifiedRB3EListener:
 
             elif packet_type == RB3E_EVENT_SCORE:
                 # Score packet: total_score (4 bytes), member_scores (4x4 bytes), stars (1 byte)
+                if self.gui_callback:
+                    self.gui_callback(f"[DEBUG] Score packet received, len={len(data)}")
                 if len(data) >= 29:
                     total_score = struct.unpack('>I', data[8:12])[0]
                     member1 = struct.unpack('>I', data[12:16])[0]
@@ -1883,9 +1885,14 @@ class UnifiedRB3EListener:
                             'members': [member1, member2, member3, member4],
                             'stars': stars
                         })
+                else:
+                    if self.gui_callback:
+                        self.gui_callback(f"[DEBUG] Score packet too short: {len(data)} bytes")
 
             elif packet_type == RB3E_EVENT_BAND_INFO:
                 # Band info: member_exists (4 bytes), difficulties (4 bytes), instruments (4 bytes)
+                if self.gui_callback:
+                    self.gui_callback(f"[DEBUG] Band info packet received, len={len(data)}")
                 if len(data) >= 20:
                     members = [bool(data[8]), bool(data[9]), bool(data[10]), bool(data[11])]
                     difficulties = [data[12], data[13], data[14], data[15]]
@@ -1904,6 +1911,9 @@ class UnifiedRB3EListener:
                             'difficulties': difficulties,
                             'instruments': instruments
                         })
+                else:
+                    if self.gui_callback:
+                        self.gui_callback(f"[DEBUG] Band info packet too short: {len(data)} bytes")
 
             elif packet_type == RB3E_EVENT_VENUE_NAME:
                 with self._state_lock:
