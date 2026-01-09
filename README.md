@@ -1,8 +1,9 @@
 # RB3Enhanced Tools
 
-This repository consists of two parts:
+This repository consists of three parts:
 1. A unified dashboard application for Rock Band 3 Enhanced that combines Stage Kit wireless control, YouTube music video playback, song tracking, and social integrations.
-2. Pico W firmware that turns wired Fatsco/Santroller Stage Kit devices into a wireless networked device.
+2. A simple dashboard that only handles Stage Kit wireless control.
+3. Pico W firmware that turns wired Fatsco/Santroller Stage Kit devices into a wireless networked device.
 
 ## Dashboard Features
 
