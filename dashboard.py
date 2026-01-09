@@ -2530,21 +2530,6 @@ class RB3Dashboard:
                                            font=("Arial", 9))
         self.pico_target_label.pack(pady=(0, 5))
 
-        # Instructions
-        instructions_frame = ttk.LabelFrame(parent, text="Setup", padding=10)
-        instructions_frame.pack(fill='x', padx=10, pady=5)
-
-        instructions = """1. Enter YouTube API key in Settings (for video playback)
-2. Configure RB3Enhanced: [Events] EnableEvents=true, BroadcastTarget=255.255.255.255
-3. Click "Start Listening" and play a song in Rock Band 3"""
-
-        instructions_text = tk.Text(instructions_frame, wrap='word', height=4,
-                                    background=self.text_bg_color,
-                                    foreground=self.text_fg_color, relief='flat')
-        instructions_text.pack(fill='x')
-        instructions_text.insert('1.0', instructions)
-        instructions_text.config(state='disabled')
-
     def create_stagekit_tab(self, parent):
         """Create Stage Kit controls tab"""
         # Main Controls
