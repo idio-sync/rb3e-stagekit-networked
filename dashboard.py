@@ -1547,8 +1547,8 @@ class AlbumArtManager:
                 photo = ImageTk.PhotoImage(img)
                 self.cache.set(cache_key, photo)
                 return photo
-        except Exception:
-            pass
+        except Exception as e:
+            self.safe_callback(f"Error loading album art from DB: {e}")
         finally:
             try:
                 conn.close()
@@ -2593,6 +2593,7 @@ class RB3Dashboard:
         """Create song browser tab"""
         self.song_browser = SongBrowser(gui_callback=self.log_message)
         self.album_art_manager = AlbumArtManager(gui_callback=self.log_message)
+        self._tree_image_refs = {}  # Keep strong references to PhotoImages to prevent GC
 
         lastfm_key = self.settings.get('lastfm_api_key', '')
         if lastfm_key:
@@ -3455,6 +3456,9 @@ class RB3Dashboard:
         for item in self.song_tree.get_children():
             self.song_tree.delete(item)
 
+        # Clear old image references to allow GC of old images
+        self._tree_image_refs.clear()
+
         if not self.song_browser.artists_index:
             return
 
@@ -3501,6 +3505,8 @@ class RB3Dashboard:
                                                  tags=(shortname, song_tag))
 
                 if album_art:
+                    # Keep strong reference to prevent garbage collection
+                    self._tree_image_refs[song_item] = album_art
                     self.song_tree.item(song_item, image=album_art)
 
                 row_index += 1
