@@ -2474,8 +2474,12 @@ class RB3Dashboard:
 
     def create_widgets(self):
         """Create all GUI widgets"""
-        # Now Playing bar at top (always visible)
-        self.create_now_playing_bar()
+        # Top header frame containing tabs and now playing info
+        header_frame = ttk.Frame(self.root)
+        header_frame.pack(fill='x', padx=10, pady=(5, 0))
+
+        # Now Playing info on the right side of header
+        self.create_now_playing_bar(header_frame)
 
         # Main notebook for tabs
         self.notebook = ttk.Notebook(self.root)
@@ -2506,32 +2510,11 @@ class RB3Dashboard:
         self.notebook.add(log_frame, text="Log")
         self.create_log_tab(log_frame)
 
-    def create_now_playing_bar(self):
-        """Create the Now Playing bar at top of window"""
-        np_frame = ttk.LabelFrame(self.root, text="Now Playing", padding=5)
-        np_frame.pack(fill="x", padx=10, pady=5)
-
-        # Main container with two columns
-        main_container = ttk.Frame(np_frame)
-        main_container.pack(fill="x", expand=True)
-
-        # Left side: Song/Artist info
-        song_frame = ttk.Frame(main_container)
-        song_frame.pack(side="left", fill="both", expand=True)
-
-        # Song name
-        self.ent_song = ttk.Entry(song_frame, textvariable=self.song_var,
-                                  state="readonly", font=("Arial", 14, "bold"))
-        self.ent_song.pack(fill="x", pady=(0, 2))
-
-        # Artist name
-        self.ent_artist = ttk.Entry(song_frame, textvariable=self.artist_var,
-                                    state="readonly", font=("Arial", 11))
-        self.ent_artist.pack(fill="x")
-
-        # Right side: Game info panel
-        game_info_frame = ttk.Frame(main_container)
-        game_info_frame.pack(side="right", padx=(10, 0))
+    def create_now_playing_bar(self, parent):
+        """Create the Now Playing info in the header area"""
+        # Container for now playing - aligned right
+        np_frame = ttk.Frame(parent)
+        np_frame.pack(side='right', pady=(0, 2))
 
         # NOTE: Score, stars, and band info events are defined in RB3Enhanced
         # but not actually implemented/sent. Keeping variables for future compatibility.
@@ -2539,25 +2522,28 @@ class RB3Dashboard:
         self.stars_var = tk.StringVar(value="☆☆☆☆☆")
         self.band_labels = {}
 
-        # Venue display
-        venue_frame = ttk.Frame(game_info_frame)
-        venue_frame.pack(side="left", padx=(0, 15))
-
-        ttk.Label(venue_frame, text="Venue", font=("Arial", 8)).pack()
+        # Venue and Screen on the right
         self.venue_var = tk.StringVar(value="-")
-        self.venue_label = ttk.Label(venue_frame, textvariable=self.venue_var,
-                                     font=("Arial", 10))
-        self.venue_label.pack()
+        ttk.Label(np_frame, text="Venue:", font=("TkDefaultFont", 9)).pack(side='left')
+        self.venue_label = ttk.Label(np_frame, textvariable=self.venue_var,
+                                     font=("TkDefaultFont", 9), width=12)
+        self.venue_label.pack(side='left', padx=(2, 10))
 
-        # Screen display
-        screen_frame = ttk.Frame(game_info_frame)
-        screen_frame.pack(side="left")
-
-        ttk.Label(screen_frame, text="Screen", font=("Arial", 8)).pack()
         self.screen_var = tk.StringVar(value="-")
-        self.screen_label = ttk.Label(screen_frame, textvariable=self.screen_var,
-                                      font=("Arial", 10))
-        self.screen_label.pack()
+        ttk.Label(np_frame, text="Screen:", font=("TkDefaultFont", 9)).pack(side='left')
+        self.screen_label = ttk.Label(np_frame, textvariable=self.screen_var,
+                                      font=("TkDefaultFont", 9), width=10)
+        self.screen_label.pack(side='left', padx=(2, 15))
+
+        # Separator
+        ttk.Separator(np_frame, orient='vertical').pack(side='left', fill='y', padx=(0, 15))
+
+        # Now Playing: Artist - Song
+        ttk.Label(np_frame, text="Now Playing:", font=("TkDefaultFont", 9, "bold")).pack(side='left')
+
+        self.now_playing_label = ttk.Label(np_frame, text="Waiting for game...",
+                                           font=("TkDefaultFont", 9))
+        self.now_playing_label.pack(side='left', padx=(5, 0))
 
     def create_stagekit_tab(self, parent):
         """Create Stage Kit tab with Status and Test sub-tabs"""
@@ -3333,7 +3319,20 @@ class RB3Dashboard:
 
     def on_song_update(self, song, artist):
         """Called when song/artist info updates"""
-        self.root.after(0, lambda: self.song_var.set(song if song else "Waiting for game..."))
+        # Update the now playing label
+        if song and artist:
+            now_playing_text = f"{artist} - {song}"
+        elif song:
+            now_playing_text = song
+        elif artist:
+            now_playing_text = artist
+        else:
+            now_playing_text = "Waiting for game..."
+
+        self.root.after(0, lambda: self.now_playing_label.config(text=now_playing_text))
+
+        # Keep these for other uses (Discord, etc.)
+        self.root.after(0, lambda: self.song_var.set(song if song else ""))
         self.root.after(0, lambda: self.artist_var.set(artist if artist else ""))
 
         # Set Discord to idle state and cancel pending scrobble when returning to menu
