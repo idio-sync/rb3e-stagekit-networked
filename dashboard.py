@@ -224,7 +224,8 @@ class YouTubeSearcher:
     def __init__(self, api_key: str, song_database=None, gui_callback=None):
         self.api_key = api_key
         self.youtube = None
-        self.search_cache: Dict[str, str] = {}
+        self.search_cache: Dict[str, str] = {}  # search_key -> video_id
+        self.title_cache: Dict[str, str] = {}   # video_id -> video_title
         self.song_database = song_database
         self.gui_callback = gui_callback
 
@@ -233,6 +234,10 @@ class YouTubeSearcher:
                 self.youtube = build('youtube', 'v3', developerKey=api_key)
         except Exception as e:
             raise Exception(f"Failed to initialize YouTube API: {e}")
+
+    def get_cached_title(self, video_id: str) -> Optional[str]:
+        """Get cached video title for a video ID"""
+        return self.title_cache.get(video_id)
 
     def parse_youtube_duration(self, duration_str):
         """Parse YouTube duration from ISO 8601 format to seconds"""
@@ -395,8 +400,16 @@ class YouTubeSearcher:
         clean_artist, clean_song, song_attributes = self.clean_search_terms(artist, song)
         search_key = f"{clean_artist.lower()} - {clean_song.lower()}"
 
+        # Log the search request
+        if self.gui_callback:
+            self.gui_callback(f"Video search: '{artist} - {song}' -> key: '{search_key}'")
+
         if search_key in self.search_cache:
-            return self.search_cache[search_key]
+            cached_id = self.search_cache[search_key]
+            cached_title = self.title_cache.get(cached_id, "Unknown")
+            if self.gui_callback:
+                self.gui_callback(f"Video cache hit: '{cached_title}'")
+            return cached_id
 
         target_duration = None
         if self.song_database and self.song_database.is_loaded():
@@ -411,6 +424,7 @@ class YouTubeSearcher:
             ]
 
             best_video_id = None
+            best_video_title = None
             best_score = -1
             all_candidates = []  # Track all candidates for fallback
 
@@ -532,6 +546,7 @@ class YouTubeSearcher:
                     if total_score > best_score:
                         best_score = total_score
                         best_video_id = video_id
+                        best_video_title = video_title
 
                 if best_video_id and best_score > 50:
                     break
@@ -545,6 +560,10 @@ class YouTubeSearcher:
 
             if best_video_id:
                 self.search_cache[search_key] = best_video_id
+                if best_video_title:
+                    self.title_cache[best_video_id] = best_video_title
+                if self.gui_callback:
+                    self.gui_callback(f"Video selected: '{best_video_title}' (score: {best_score})")
                 return best_video_id
 
             return None
@@ -607,7 +626,7 @@ class VLCPlayer:
             finally:
                 self.current_process = None
 
-    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None):
+    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None, video_title: str = None):
         """Play video with VLC"""
         if not self.vlc_path:
             if self.gui_callback:
@@ -615,6 +634,7 @@ class VLCPlayer:
             return
 
         self.stop_current_video()
+        self.current_video_title = video_title  # Store for logging
 
         try:
             vlc_cmd = [
@@ -677,6 +697,8 @@ class VLCPlayer:
 
             if self.gui_callback:
                 self.gui_callback(f"Playing: {artist} - {song}")
+                if video_title:
+                    self.gui_callback(f"Video: '{video_title}'")
 
         except Exception as e:
             if self.gui_callback:
@@ -690,14 +712,30 @@ class VLCPlayer:
 class StreamExtractor:
     """Gets direct video URLs from YouTube"""
 
-    def __init__(self, gui_callback=None):
+    # Supported browsers for cookie extraction
+    SUPPORTED_BROWSERS = ['chrome', 'firefox', 'edge', 'brave', 'opera', 'vivaldi', 'chromium']
+
+    def __init__(self, gui_callback=None, cookie_browser: str = None):
         self.gui_callback = gui_callback
+        self.cookie_browser = cookie_browser
         self.ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'format': 'bestvideo+bestaudio/best',
             'noplaylist': True,
         }
+        # Add cookie extraction from browser if specified
+        if cookie_browser and cookie_browser.lower() in self.SUPPORTED_BROWSERS:
+            self.ydl_opts['cookiesfrombrowser'] = (cookie_browser.lower(),)
+
+    def set_cookie_browser(self, browser: str):
+        """Set browser to extract cookies from for age-restricted videos"""
+        if browser and browser.lower() in self.SUPPORTED_BROWSERS:
+            self.cookie_browser = browser.lower()
+            self.ydl_opts['cookiesfrombrowser'] = (self.cookie_browser,)
+        else:
+            self.cookie_browser = None
+            self.ydl_opts.pop('cookiesfrombrowser', None)
 
     def get_stream_url(self, video_id: str) -> Optional[str]:
         """Get direct stream URL for a YouTube video"""
@@ -1045,8 +1083,9 @@ class LastFmScrobbler:
 class DiscordPresence:
     """Discord Rich Presence integration with auto-reconnect"""
 
-    # Default Discord Application ID (users can create their own)
-    DEFAULT_CLIENT_ID = "1234567890123456789"  # Placeholder - user should set their own
+    # Default Discord Application ID - uses RB3 Deluxe app which has proper assets
+    # Users can create their own at discord.com/developers/applications
+    DEFAULT_CLIENT_ID = "1125571051607298190"  # RB3 Deluxe Discord Application
 
     # Reconnection settings
     MAX_RECONNECT_ATTEMPTS = 5
@@ -1073,9 +1112,9 @@ class DiscordPresence:
                 self.gui_callback("Discord Rich Presence not available (pypresence not installed)")
             return False
 
-        if not self.client_id or self.client_id == self.DEFAULT_CLIENT_ID:
+        if not self.client_id:
             if self.gui_callback:
-                self.gui_callback("Discord: No valid Client ID configured")
+                self.gui_callback("Discord: No Client ID configured")
             return False
 
         try:
@@ -1156,8 +1195,8 @@ class DiscordPresence:
                 self.rpc.update(
                     details=details,
                     state=state_text,
-                    large_image="rb3",
-                    large_text="Rock Band 3",
+                    large_image="guitar",
+                    large_text="Rock Band 3 Deluxe",
                     start=int(self.start_time) if self.start_time else None
                 )
             except Exception:
@@ -1197,16 +1236,20 @@ class DiscordPresence:
             details = f"{song}"[:128] if song else "Unknown Song"
             state_text = f"by {artist}"[:128] if artist else state
 
-            self.rpc.update(
+            # Update Discord Rich Presence
+            result = self.rpc.update(
                 details=details,
                 state=state_text,
-                large_image="rb3",  # Image key from Discord app
-                large_text="Rock Band 3",
+                large_image="guitar",  # RB3 Deluxe app asset
+                large_text="Rock Band 3 Deluxe",
                 start=int(self.start_time)
             )
 
             if self.gui_callback:
                 self.gui_callback(f"Discord: Now playing - {artist} - {song}")
+                # Log result for debugging
+                if result:
+                    self.gui_callback(f"Discord: Update response received")
 
         except Exception as e:
             self.connected = False
@@ -1246,8 +1289,8 @@ class DiscordPresence:
             self.rpc.update(
                 details="Browsing Songs",
                 state="In Menus",
-                large_image="rb3",
-                large_text="Rock Band 3"
+                large_image="guitar",
+                large_text="Rock Band 3 Deluxe"
             )
         except Exception:
             self.connected = False
@@ -1667,12 +1710,13 @@ class UnifiedRB3EListener:
 
     def __init__(self, gui_callback=None, ip_detected_callback=None,
                  song_update_callback=None, stagekit_callback=None,
-                 song_started_callback=None):
+                 song_started_callback=None, game_info_callback=None):
         self.gui_callback = gui_callback
         self.ip_detected_callback = ip_detected_callback
         self.song_update_callback = song_update_callback
         self.stagekit_callback = stagekit_callback
         self.song_started_callback = song_started_callback
+        self.game_info_callback = game_info_callback
 
         self.sock = None
         self.running = False
@@ -1685,6 +1729,18 @@ class UnifiedRB3EListener:
         self.current_artist = ""
         self.current_shortname = ""
         self.game_state = 0
+
+        # Live game info (protected by _state_lock)
+        self.current_score = 0
+        self.current_stars = 0
+        self.member_scores = [0, 0, 0, 0]
+        self.band_info = {
+            'members': [False, False, False, False],
+            'instruments': [0, 0, 0, 0],
+            'difficulties': [0, 0, 0, 0]
+        }
+        self.current_venue = ""
+        self.current_screen = ""
 
         # RB3E connection
         self.rb3_ip_address = None
@@ -1806,6 +1862,63 @@ class UnifiedRB3EListener:
                     right_weight = data[9]
                     self.stagekit_callback(left_weight, right_weight)
 
+            elif packet_type == RB3E_EVENT_SCORE:
+                # Score packet: total_score (4 bytes), member_scores (4x4 bytes), stars (1 byte)
+                if len(data) >= 29:
+                    total_score = struct.unpack('>I', data[8:12])[0]
+                    member1 = struct.unpack('>I', data[12:16])[0]
+                    member2 = struct.unpack('>I', data[16:20])[0]
+                    member3 = struct.unpack('>I', data[20:24])[0]
+                    member4 = struct.unpack('>I', data[24:28])[0]
+                    stars = data[28]
+
+                    with self._state_lock:
+                        self.current_score = total_score
+                        self.current_stars = stars
+                        self.member_scores = [member1, member2, member3, member4]
+
+                    if self.game_info_callback:
+                        self.game_info_callback('score', {
+                            'total': total_score,
+                            'members': [member1, member2, member3, member4],
+                            'stars': stars
+                        })
+
+            elif packet_type == RB3E_EVENT_BAND_INFO:
+                # Band info: member_exists (4 bytes), difficulties (4 bytes), instruments (4 bytes)
+                if len(data) >= 20:
+                    members = [bool(data[8]), bool(data[9]), bool(data[10]), bool(data[11])]
+                    difficulties = [data[12], data[13], data[14], data[15]]
+                    instruments = [data[16], data[17], data[18], data[19]]
+
+                    with self._state_lock:
+                        self.band_info = {
+                            'members': members,
+                            'difficulties': difficulties,
+                            'instruments': instruments
+                        }
+
+                    if self.game_info_callback:
+                        self.game_info_callback('band', {
+                            'members': members,
+                            'difficulties': difficulties,
+                            'instruments': instruments
+                        })
+
+            elif packet_type == RB3E_EVENT_VENUE_NAME:
+                with self._state_lock:
+                    self.current_venue = packet_data
+
+                if self.game_info_callback:
+                    self.game_info_callback('venue', packet_data)
+
+            elif packet_type == RB3E_EVENT_SCREEN_NAME:
+                with self._state_lock:
+                    self.current_screen = packet_data
+
+                if self.game_info_callback:
+                    self.game_info_callback('screen', packet_data)
+
         except Exception as e:
             if self.gui_callback:
                 self.gui_callback(f"Error processing packet: {e}")
@@ -1889,13 +2002,16 @@ class UnifiedRB3EListener:
             video_id = self.youtube_searcher.search_video(artist, song)
 
             if video_id:
+                # Get the video title from cache for logging
+                video_title = self.youtube_searcher.get_cached_title(video_id)
+
                 if self.gui_callback:
                     self.gui_callback("Getting video stream...")
                 stream_url = self.stream_extractor.get_stream_url(video_id)
 
                 if stream_url:
                     with self._state_lock:
-                        self.pending_video = (stream_url, video_id, artist, song, shortname)
+                        self.pending_video = (stream_url, video_id, artist, song, shortname, video_title)
                         current_game_state = self.game_state
 
                     if self.gui_callback:
@@ -1913,7 +2029,8 @@ class UnifiedRB3EListener:
         with self._state_lock:
             if not self.pending_video or not self.vlc_player:
                 return
-            stream_url, video_id, artist, song, shortname = self.pending_video
+            # Unpack with video_title (6 elements)
+            stream_url, video_id, artist, song, shortname, video_title = self.pending_video
             delay = self.video_settings.get('video_start_delay', 0.0)
 
         if delay > 0:
@@ -1921,13 +2038,13 @@ class UnifiedRB3EListener:
                 self.gui_callback(f"Waiting {delay}s before starting video...")
             # Use threading.Timer to avoid blocking the listener thread
             timer = threading.Timer(delay, self._play_video_now,
-                                   args=(stream_url, video_id, artist, song, shortname))
+                                   args=(stream_url, video_id, artist, song, shortname, video_title))
             timer.daemon = True
             timer.start()
         else:
-            self._play_video_now(stream_url, video_id, artist, song, shortname)
+            self._play_video_now(stream_url, video_id, artist, song, shortname, video_title)
 
-    def _play_video_now(self, stream_url, video_id, artist, song, shortname):
+    def _play_video_now(self, stream_url, video_id, artist, song, shortname, video_title=None):
         """Actually play the video (called after delay if any, thread-safe)"""
         if not self.vlc_player or not self.running:
             return
@@ -1936,7 +2053,7 @@ class UnifiedRB3EListener:
             video_settings = self.video_settings.copy()
 
         self.vlc_player.play_video(stream_url, video_id, artist, song,
-                                   video_settings, shortname)
+                                   video_settings, shortname, video_title)
 
         with self._state_lock:
             self.pending_video = None
@@ -2273,15 +2390,83 @@ class RB3Dashboard:
         np_frame = ttk.LabelFrame(self.root, text="Now Playing", padding=5)
         np_frame.pack(fill="x", padx=10, pady=5)
 
+        # Main container with two columns
+        main_container = ttk.Frame(np_frame)
+        main_container.pack(fill="x", expand=True)
+
+        # Left side: Song/Artist info
+        song_frame = ttk.Frame(main_container)
+        song_frame.pack(side="left", fill="both", expand=True)
+
         # Song name
-        self.ent_song = ttk.Entry(np_frame, textvariable=self.song_var,
+        self.ent_song = ttk.Entry(song_frame, textvariable=self.song_var,
                                   state="readonly", font=("Arial", 14, "bold"))
         self.ent_song.pack(fill="x", pady=(0, 2))
 
         # Artist name
-        self.ent_artist = ttk.Entry(np_frame, textvariable=self.artist_var,
+        self.ent_artist = ttk.Entry(song_frame, textvariable=self.artist_var,
                                     state="readonly", font=("Arial", 11))
         self.ent_artist.pack(fill="x")
+
+        # Right side: Game info panel
+        game_info_frame = ttk.Frame(main_container)
+        game_info_frame.pack(side="right", padx=(10, 0))
+
+        # Score display
+        score_frame = ttk.Frame(game_info_frame)
+        score_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(score_frame, text="Score", font=("Arial", 8)).pack()
+        self.score_var = tk.StringVar(value="0")
+        self.score_label = ttk.Label(score_frame, textvariable=self.score_var,
+                                     font=("Arial", 16, "bold"), foreground="#3498db")
+        self.score_label.pack()
+
+        # Stars display
+        stars_frame = ttk.Frame(game_info_frame)
+        stars_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(stars_frame, text="Stars", font=("Arial", 8)).pack()
+        self.stars_var = tk.StringVar(value="☆☆☆☆☆")
+        self.stars_label = ttk.Label(stars_frame, textvariable=self.stars_var,
+                                     font=("Arial", 14), foreground="#f1c40f")
+        self.stars_label.pack()
+
+        # Band info display
+        band_frame = ttk.Frame(game_info_frame)
+        band_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(band_frame, text="Band", font=("Arial", 8)).pack()
+        self.band_labels = {}
+        band_icons_frame = ttk.Frame(band_frame)
+        band_icons_frame.pack()
+
+        instruments = [('G', 'guitar'), ('B', 'bass'), ('D', 'drums'), ('K', 'keys'), ('V', 'vocals')]
+        for abbrev, inst in instruments:
+            lbl = ttk.Label(band_icons_frame, text=abbrev, font=("Arial", 9, "bold"),
+                           foreground="#7f8c8d", width=2)
+            lbl.pack(side="left", padx=1)
+            self.band_labels[inst] = lbl
+
+        # Venue display
+        venue_frame = ttk.Frame(game_info_frame)
+        venue_frame.pack(side="left", padx=(0, 15))
+
+        ttk.Label(venue_frame, text="Venue", font=("Arial", 8)).pack()
+        self.venue_var = tk.StringVar(value="-")
+        self.venue_label = ttk.Label(venue_frame, textvariable=self.venue_var,
+                                     font=("Arial", 10))
+        self.venue_label.pack()
+
+        # Screen display
+        screen_frame = ttk.Frame(game_info_frame)
+        screen_frame.pack(side="left")
+
+        ttk.Label(screen_frame, text="Screen", font=("Arial", 8)).pack()
+        self.screen_var = tk.StringVar(value="-")
+        self.screen_label = ttk.Label(screen_frame, textvariable=self.screen_var,
+                                      font=("Arial", 10))
+        self.screen_label.pack()
 
     def create_control_tab(self, parent):
         """Create control panel tab"""
@@ -2794,6 +2979,23 @@ class RB3Dashboard:
         ttk.Button(monitor_frame, text="↻", width=2,
                   command=self.refresh_monitor_list).pack(side='left', padx=(3, 0))
 
+        # Cookie browser for age-restricted videos
+        cookie_frame = ttk.Frame(video_frame)
+        cookie_frame.pack(fill='x', pady=(5, 0))
+        ttk.Label(cookie_frame, text="Browser cookies:").pack(side='left')
+
+        self.cookie_browser_var = tk.StringVar(value=self.settings.get('cookie_browser', ''))
+        cookie_options = ['None (may fail age-restricted)', 'chrome', 'firefox', 'edge', 'brave']
+        self.cookie_combo = ttk.Combobox(cookie_frame, textvariable=self.cookie_browser_var,
+                                         values=cookie_options, state='readonly', width=22)
+        self.cookie_combo.pack(side='left', padx=(5, 0))
+        # Set display value
+        if not self.cookie_browser_var.get():
+            self.cookie_combo.set('None (may fail age-restricted)')
+
+        ttk.Label(video_frame, text="For age-restricted videos, select a browser where you're logged into YouTube",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
+
         # History & Statistics
         history_frame = ttk.LabelFrame(right_col, text="History & Statistics", padding=10)
         history_frame.pack(fill='x', pady=5)
@@ -2822,17 +3024,30 @@ class RB3Dashboard:
         ttk.Checkbutton(discord_frame, text="Enable Discord Rich Presence",
                        variable=self.discord_enabled_var).pack(anchor='w')
 
-        ttk.Label(discord_frame, text="Discord Application ID:").pack(anchor='w', pady=(5, 0))
-        self.discord_client_id_var = tk.StringVar(value=self.settings.get('discord_client_id', ''))
-        ttk.Entry(discord_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
+        ttk.Label(discord_frame, text="Uses RB3 Deluxe app by default",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
 
-        discord_link = ttk.Label(discord_frame, text="discord.com/developers/applications",
-                                foreground='#6699cc', cursor='hand2', font=('TkDefaultFont', 8))
-        discord_link.pack(anchor='w')
-        discord_link.bind('<Button-1>', lambda e: webbrowser.open('https://discord.com/developers/applications'))
+        # Optional custom app ID (collapsed by default)
+        custom_app_frame = ttk.Frame(discord_frame)
+        custom_app_frame.pack(fill='x', pady=(5, 0))
+
+        ttk.Label(custom_app_frame, text="Custom App ID (optional):",
+                 font=('TkDefaultFont', 8)).pack(anchor='w')
+        # Only show non-default values in the entry
+        default_id = DiscordPresence.DEFAULT_CLIENT_ID
+        current_id = self.settings.get('discord_client_id', '')
+        display_id = '' if current_id == default_id else current_id
+        self.discord_client_id_var = tk.StringVar(value=display_id)
+        ttk.Entry(custom_app_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
 
         self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
         self.discord_status_label.pack(anchor='w', pady=(5, 0))
+
+        # Discord settings requirement note
+        ttk.Label(discord_frame, text="Requires Discord desktop app with Activity Status enabled",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(3, 0))
+        ttk.Label(discord_frame, text="(Settings → Activity Privacy → Display current activity)",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
 
         # Save button at bottom of right column
         ttk.Button(right_col, text="Save Settings",
@@ -3057,6 +3272,74 @@ class RB3Dashboard:
         self.ip_status_label.config(text=f"RB3Enhanced: {ip_address}", foreground='green')
         self.web_ui_button.config(state='normal')
         self.load_songs_button.config(state='normal')
+
+    def on_game_info(self, info_type, data):
+        """Called when game info updates (score, band, venue, screen)"""
+        self.root.after(0, lambda: self._update_game_info(info_type, data))
+
+    def _update_game_info(self, info_type, data):
+        """Update game info UI (called on main thread)"""
+        try:
+            if info_type == 'score':
+                # Update score display
+                total = data.get('total', 0)
+                stars = data.get('stars', 0)
+
+                self.score_var.set(f"{total:,}")
+
+                # Update stars display
+                filled = min(stars, 5)
+                empty = 5 - filled
+                self.stars_var.set("★" * filled + "☆" * empty)
+
+            elif info_type == 'band':
+                # Update band member display
+                members = data.get('members', [False, False, False, False])
+                instruments = data.get('instruments', [0, 0, 0, 0])
+
+                # Instrument type mapping: 0=guitar, 1=bass, 2=drums, 3=vocals, 4=keys
+                inst_map = {0: 'guitar', 1: 'bass', 2: 'drums', 3: 'vocals', 4: 'keys'}
+                inst_colors = {
+                    'guitar': '#e74c3c',
+                    'bass': '#e67e22',
+                    'drums': '#9b59b6',
+                    'keys': '#2ecc71',
+                    'vocals': '#3498db'
+                }
+
+                # Reset all labels to inactive
+                for inst, lbl in self.band_labels.items():
+                    lbl.config(foreground="#7f8c8d")
+
+                # Activate instruments that are being played
+                for i, (is_member, inst_type) in enumerate(zip(members, instruments)):
+                    if is_member and inst_type in inst_map:
+                        inst_name = inst_map[inst_type]
+                        if inst_name in self.band_labels:
+                            self.band_labels[inst_name].config(
+                                foreground=inst_colors.get(inst_name, "#3498db")
+                            )
+
+            elif info_type == 'venue':
+                # Format venue name
+                venue = self._format_display_name(data) if data else "-"
+                self.venue_var.set(venue[:15])  # Truncate if too long
+
+            elif info_type == 'screen':
+                # Format screen name
+                screen = self._format_display_name(data) if data else "-"
+                self.screen_var.set(screen[:12])  # Truncate if too long
+
+        except Exception as e:
+            # Silently ignore UI update errors
+            pass
+
+    def _format_display_name(self, name):
+        """Format a venue or screen name for display"""
+        if not name:
+            return "-"
+        # Remove underscores, capitalize words
+        return name.replace('_', ' ').title()
 
     def open_web_ui(self):
         """Open RB3Enhanced web interface"""
@@ -3352,7 +3635,11 @@ class RB3Dashboard:
                     self.youtube_searcher = YouTubeSearcher(api_key,
                                                             song_database=self.song_database,
                                                             gui_callback=self.log_message)
-                    self.stream_extractor = StreamExtractor(gui_callback=self.log_message)
+                    cookie_browser = self.settings.get('cookie_browser', '')
+                    self.stream_extractor = StreamExtractor(gui_callback=self.log_message,
+                                                            cookie_browser=cookie_browser)
+                    if cookie_browser:
+                        self.log_message(f"Using {cookie_browser} cookies for age-restricted videos")
                 else:
                     self.log_message("YouTube API key not set - video search disabled")
                     self.vlc_status_label.config(text="VLC: No API key", foreground='orange')
@@ -3364,7 +3651,8 @@ class RB3Dashboard:
                 gui_callback=self.log_message,
                 ip_detected_callback=self.on_ip_detected,
                 song_update_callback=self.on_song_update,
-                song_started_callback=self.on_song_started
+                song_started_callback=self.on_song_started,
+                game_info_callback=self.on_game_info
             )
 
             # Set video components if all are available
@@ -3470,6 +3758,14 @@ class RB3Dashboard:
     # SETTINGS
     # =========================================================================
 
+    def _get_cookie_browser_value(self):
+        """Get the actual browser name from the combo selection"""
+        value = self.cookie_browser_var.get()
+        # Return empty string if 'None' option is selected
+        if not value or value.startswith('None'):
+            return ''
+        return value.lower()
+
     def get_current_settings(self):
         """Get all current settings"""
         return {
@@ -3479,7 +3775,8 @@ class RB3Dashboard:
             'lastfm_session_key': self.lastfm_session_var.get().strip(),
             'scrobble_enabled': self.scrobble_enabled_var.get(),
             'discord_enabled': self.discord_enabled_var.get(),
-            'discord_client_id': self.discord_client_id_var.get().strip(),
+            # Use default RB3 Deluxe app ID if custom ID not specified
+            'discord_client_id': self.discord_client_id_var.get().strip() or DiscordPresence.DEFAULT_CLIENT_ID,
             'history_enabled': self.history_enabled_var.get(),
             'stats_enabled': self.stats_enabled_var.get(),
             'video_enabled': self.video_enabled_var.get(),
@@ -3490,6 +3787,7 @@ class RB3Dashboard:
             'auto_quit_on_menu': self.auto_quit_var.get(),
             'video_start_delay': self.delay_var.get(),
             'video_monitor': self.get_selected_monitor_index(),
+            'cookie_browser': self._get_cookie_browser_value(),
             'database_path': self.settings.get('database_path', '')
         }
 
@@ -3528,13 +3826,14 @@ class RB3Dashboard:
             if self.discord_presence:
                 old_enabled = self.discord_presence.enabled
                 new_enabled = settings.get('discord_enabled', False)
-                new_client_id = settings.get('discord_client_id', '')
+                # Always has a valid client_id (defaults to RB3 Deluxe app)
+                new_client_id = settings.get('discord_client_id', DiscordPresence.DEFAULT_CLIENT_ID)
 
                 self.discord_presence.client_id = new_client_id
                 self.discord_presence.enabled = new_enabled
 
                 # Connect/disconnect as needed
-                if new_enabled and not old_enabled and new_client_id:
+                if new_enabled and not old_enabled:
                     if self.discord_presence.connect():
                         self.discord_status_label.config(text="Connected", foreground='green')
                     else:
@@ -3542,8 +3841,13 @@ class RB3Dashboard:
                 elif not new_enabled and old_enabled:
                     self.discord_presence.disconnect()
                     self.discord_status_label.config(text="Disabled", foreground='gray')
-                elif not new_client_id:
-                    self.discord_status_label.config(text="No Client ID", foreground='orange')
+
+            # Update stream extractor cookie browser
+            if self.stream_extractor:
+                new_cookie_browser = settings.get('cookie_browser', '')
+                self.stream_extractor.set_cookie_browser(new_cookie_browser)
+                if new_cookie_browser:
+                    self.log_message(f"Updated cookie browser: {new_cookie_browser}")
 
             # Update listener if running
             if self.listener:
@@ -3567,7 +3871,7 @@ class RB3Dashboard:
             'lastfm_session_key': '',
             'scrobble_enabled': False,
             'discord_enabled': False,
-            'discord_client_id': '',
+            'discord_client_id': '',  # Empty = use RB3 Deluxe app by default
             'history_enabled': True,
             'stats_enabled': True,
             'video_enabled': False,
@@ -3578,6 +3882,7 @@ class RB3Dashboard:
             'auto_quit_on_menu': True,
             'video_start_delay': 0.0,
             'video_monitor': 0,
+            'cookie_browser': '',
             'database_path': ''
         }
 
