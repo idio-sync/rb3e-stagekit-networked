@@ -161,8 +161,9 @@ Ensure your firewall allows UDP traffic on the following ports:
 
 ## 📄 License & Credits
 
+* **Lighting Logic & Fork:** [TheFatBastid](https://github.com/TheFatBastid/StageKitPied)
 * **Original StageKitPied:** [Blasteroids](https://github.com/Blasteroids/StageKitPied)
-* **Lighting Logic & Fork:** TheFatBastid
 * **RB3Enhanced:** [RB3Enhanced Team](https://github.com/RBEnhanced/RB3Enhanced)
+* **RB3 Deluxe:** [RB3E Deluxe Team](https://github.com/hmxmilohax/Rock-Band-3-Deluxe)
 
 This project is provided as-is for the Rock Band community.
