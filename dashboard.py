@@ -224,7 +224,8 @@ class YouTubeSearcher:
     def __init__(self, api_key: str, song_database=None, gui_callback=None):
         self.api_key = api_key
         self.youtube = None
-        self.search_cache: Dict[str, str] = {}
+        self.search_cache: Dict[str, str] = {}  # search_key -> video_id
+        self.title_cache: Dict[str, str] = {}   # video_id -> video_title
         self.song_database = song_database
         self.gui_callback = gui_callback
 
@@ -233,6 +234,10 @@ class YouTubeSearcher:
                 self.youtube = build('youtube', 'v3', developerKey=api_key)
         except Exception as e:
             raise Exception(f"Failed to initialize YouTube API: {e}")
+
+    def get_cached_title(self, video_id: str) -> Optional[str]:
+        """Get cached video title for a video ID"""
+        return self.title_cache.get(video_id)
 
     def parse_youtube_duration(self, duration_str):
         """Parse YouTube duration from ISO 8601 format to seconds"""
@@ -395,8 +400,16 @@ class YouTubeSearcher:
         clean_artist, clean_song, song_attributes = self.clean_search_terms(artist, song)
         search_key = f"{clean_artist.lower()} - {clean_song.lower()}"
 
+        # Log the search request
+        if self.gui_callback:
+            self.gui_callback(f"Video search: '{artist} - {song}' -> key: '{search_key}'")
+
         if search_key in self.search_cache:
-            return self.search_cache[search_key]
+            cached_id = self.search_cache[search_key]
+            cached_title = self.title_cache.get(cached_id, "Unknown")
+            if self.gui_callback:
+                self.gui_callback(f"Video cache hit: '{cached_title}'")
+            return cached_id
 
         target_duration = None
         if self.song_database and self.song_database.is_loaded():
@@ -411,6 +424,7 @@ class YouTubeSearcher:
             ]
 
             best_video_id = None
+            best_video_title = None
             best_score = -1
             all_candidates = []  # Track all candidates for fallback
 
@@ -532,6 +546,7 @@ class YouTubeSearcher:
                     if total_score > best_score:
                         best_score = total_score
                         best_video_id = video_id
+                        best_video_title = video_title
 
                 if best_video_id and best_score > 50:
                     break
@@ -545,6 +560,10 @@ class YouTubeSearcher:
 
             if best_video_id:
                 self.search_cache[search_key] = best_video_id
+                if best_video_title:
+                    self.title_cache[best_video_id] = best_video_title
+                if self.gui_callback:
+                    self.gui_callback(f"Video selected: '{best_video_title}' (score: {best_score})")
                 return best_video_id
 
             return None
@@ -607,7 +626,7 @@ class VLCPlayer:
             finally:
                 self.current_process = None
 
-    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None):
+    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None, video_title: str = None):
         """Play video with VLC"""
         if not self.vlc_path:
             if self.gui_callback:
@@ -615,6 +634,7 @@ class VLCPlayer:
             return
 
         self.stop_current_video()
+        self.current_video_title = video_title  # Store for logging
 
         try:
             vlc_cmd = [
@@ -677,6 +697,8 @@ class VLCPlayer:
 
             if self.gui_callback:
                 self.gui_callback(f"Playing: {artist} - {song}")
+                if video_title:
+                    self.gui_callback(f"Video: '{video_title}'")
 
         except Exception as e:
             if self.gui_callback:
@@ -1980,13 +2002,16 @@ class UnifiedRB3EListener:
             video_id = self.youtube_searcher.search_video(artist, song)
 
             if video_id:
+                # Get the video title from cache for logging
+                video_title = self.youtube_searcher.get_cached_title(video_id)
+
                 if self.gui_callback:
                     self.gui_callback("Getting video stream...")
                 stream_url = self.stream_extractor.get_stream_url(video_id)
 
                 if stream_url:
                     with self._state_lock:
-                        self.pending_video = (stream_url, video_id, artist, song, shortname)
+                        self.pending_video = (stream_url, video_id, artist, song, shortname, video_title)
                         current_game_state = self.game_state
 
                     if self.gui_callback:
@@ -2004,7 +2029,8 @@ class UnifiedRB3EListener:
         with self._state_lock:
             if not self.pending_video or not self.vlc_player:
                 return
-            stream_url, video_id, artist, song, shortname = self.pending_video
+            # Unpack with video_title (6 elements)
+            stream_url, video_id, artist, song, shortname, video_title = self.pending_video
             delay = self.video_settings.get('video_start_delay', 0.0)
 
         if delay > 0:
@@ -2012,13 +2038,13 @@ class UnifiedRB3EListener:
                 self.gui_callback(f"Waiting {delay}s before starting video...")
             # Use threading.Timer to avoid blocking the listener thread
             timer = threading.Timer(delay, self._play_video_now,
-                                   args=(stream_url, video_id, artist, song, shortname))
+                                   args=(stream_url, video_id, artist, song, shortname, video_title))
             timer.daemon = True
             timer.start()
         else:
-            self._play_video_now(stream_url, video_id, artist, song, shortname)
+            self._play_video_now(stream_url, video_id, artist, song, shortname, video_title)
 
-    def _play_video_now(self, stream_url, video_id, artist, song, shortname):
+    def _play_video_now(self, stream_url, video_id, artist, song, shortname, video_title=None):
         """Actually play the video (called after delay if any, thread-safe)"""
         if not self.vlc_player or not self.running:
             return
@@ -2027,7 +2053,7 @@ class UnifiedRB3EListener:
             video_settings = self.video_settings.copy()
 
         self.vlc_player.play_video(stream_url, video_id, artist, song,
-                                   video_settings, shortname)
+                                   video_settings, shortname, video_title)
 
         with self._state_lock:
             self.pending_video = None
