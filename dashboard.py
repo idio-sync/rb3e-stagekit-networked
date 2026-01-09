@@ -3301,10 +3301,10 @@ class RB3Dashboard:
         self.root.after(0, lambda: self.song_var.set(song if song else "Waiting for game..."))
         self.root.after(0, lambda: self.artist_var.set(artist if artist else ""))
 
-        # Clear Discord presence and cancel pending scrobble when returning to menu
+        # Set Discord to idle state and cancel pending scrobble when returning to menu
         if not song and not artist:
             if self.discord_presence and self.discord_presence.enabled:
-                self.discord_presence.clear_presence()
+                self.discord_presence.set_idle()
             # Cancel any pending scrobble (song ended early)
             if self.scrobble_timer_id:
                 try:
@@ -3961,6 +3961,8 @@ class RB3Dashboard:
                 if new_enabled and not old_enabled:
                     if self.discord_presence.connect():
                         self.discord_status_label.config(text="Connected", foreground='green')
+                        # Set idle presence immediately so it shows game is being played
+                        self.discord_presence.set_idle()
                     else:
                         self.discord_status_label.config(text="Connection failed", foreground='red')
                 elif not new_enabled and old_enabled:
