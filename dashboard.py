@@ -3160,10 +3160,19 @@ class RB3Dashboard:
 
     def create_log_tab(self, parent):
         """Create log display tab"""
-        self.log_text = scrolledtext.ScrolledText(parent, wrap='word', height=20)
-        self.log_text.pack(fill='both', expand=True, padx=10, pady=10)
+        # Controls frame at top
+        controls_frame = ttk.Frame(parent)
+        controls_frame.pack(fill='x', padx=10, pady=5)
 
-        ttk.Button(parent, text="Clear Log", command=self.clear_log).pack(pady=5)
+        self.log_stagekit_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(controls_frame, text="Show Stage Kit/Lighting Events",
+                       variable=self.log_stagekit_var).pack(side='left')
+
+        ttk.Button(controls_frame, text="Clear Log", command=self.clear_log).pack(side='right')
+
+        # Log text area
+        self.log_text = scrolledtext.ScrolledText(parent, wrap='word', height=20)
+        self.log_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
     # =========================================================================
     # CALLBACKS AND HELPERS
@@ -3459,6 +3468,36 @@ class RB3Dashboard:
             return "-"
         # Remove underscores, capitalize words
         return name.replace('_', ' ').title()
+
+    def on_stagekit_event(self, left_weight, right_weight):
+        """Called when stage kit/lighting event is received"""
+        if not self.log_stagekit_var.get():
+            return
+
+        # Decode the lighting data for display
+        # Left byte: fog (bit 4), strobe (bits 0-3 = speed)
+        # Right byte: LED colors (bits 0-3), LED state (bits 4-6)
+        fog = "ON" if (left_weight & 0x10) else "OFF"
+        strobe_speed = left_weight & 0x0F
+
+        led_colors = right_weight & 0x0F
+        led_state = (right_weight >> 4) & 0x07
+
+        color_names = []
+        if led_colors & 0x01:
+            color_names.append("Blue")
+        if led_colors & 0x02:
+            color_names.append("Green")
+        if led_colors & 0x04:
+            color_names.append("Yellow")
+        if led_colors & 0x08:
+            color_names.append("Red")
+        colors = ", ".join(color_names) if color_names else "None"
+
+        state_names = {0: "Off", 1: "Slow", 2: "Medium", 3: "Fast", 4: "Fastest"}
+        led_state_name = state_names.get(led_state, f"State {led_state}")
+
+        self.log_message(f"StageKit: Fog={fog} Strobe={strobe_speed} LEDs=[{colors}] Mode={led_state_name} (L=0x{left_weight:02X} R=0x{right_weight:02X})")
 
     def open_web_ui(self):
         """Open RB3Enhanced web interface"""
@@ -3775,6 +3814,7 @@ class RB3Dashboard:
                 gui_callback=self.log_message,
                 ip_detected_callback=self.on_ip_detected,
                 song_update_callback=self.on_song_update,
+                stagekit_callback=self.on_stagekit_event,
                 song_started_callback=self.on_song_started,
                 song_ended_callback=self.on_song_ended,
                 game_info_callback=self.on_game_info
