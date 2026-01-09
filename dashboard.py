@@ -2653,7 +2653,7 @@ class RB3Dashboard:
         tree_frame.pack(fill='both', expand=True)
 
         self.song_tree = ttk.Treeview(tree_frame,
-                                      columns=('song', 'artist'),
+                                      columns=('song', 'artist', 'album'),
                                       show='tree headings',
                                       style="Larger.Treeview")
 
@@ -2664,13 +2664,17 @@ class RB3Dashboard:
         self.song_tree.heading('#0', text='', anchor='w')
         self.song_tree.column('#0', width=70, minwidth=70, stretch=False)
 
-        # Song title - prominent, wider column
+        # Song title
         self.song_tree.heading('song', text='Song', anchor='w')
-        self.song_tree.column('song', width=400, minwidth=250)
+        self.song_tree.column('song', width=300, minwidth=200)
 
         # Artist
         self.song_tree.heading('artist', text='Artist', anchor='w')
-        self.song_tree.column('artist', width=300, minwidth=200)
+        self.song_tree.column('artist', width=200, minwidth=150)
+
+        # Album
+        self.song_tree.heading('album', text='Album', anchor='w')
+        self.song_tree.column('album', width=200, minwidth=150)
 
         v_scrollbar = ttk.Scrollbar(tree_frame, orient='vertical', command=self.song_tree.yview)
         self.song_tree.configure(yscrollcommand=v_scrollbar.set)
@@ -3529,7 +3533,7 @@ class RB3Dashboard:
 
             artist_tag = 'evenrow' if row_index % 2 == 0 else 'oddrow'
             artist_item = self.song_tree.insert('', 'end', text='',
-                                               values=(f"{artist} ({len(songs)} songs)", ""),
+                                               values=(f"{artist} ({len(songs)} songs)", "", ""),
                                                tags=(artist_tag,))
             row_index += 1
 
@@ -3544,9 +3548,8 @@ class RB3Dashboard:
                 if self.album_art_manager.api_key:
                     album_art = self.album_art_manager.get_album_art(artist, song_album)
 
-                # Columns: song, artist (album removed - we have album art)
                 song_item = self.song_tree.insert(artist_item, 'end', text='',
-                                                 values=(song_title, artist),
+                                                 values=(song_title, artist, song_album),
                                                  tags=(shortname, song_tag))
 
                 if album_art:
