@@ -1,0 +1,139 @@
+name: Build Executables
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: RB3E-Dashboard.exe
+            asset_name: RB3E-Dashboard-Windows.exe
+          - os: ubuntu-latest
+            artifact_name: RB3E-Dashboard
+            asset_name: RB3E-Dashboard-Linux
+          - os: macos-latest
+            artifact_name: RB3E-Dashboard
+            asset_name: RB3E-Dashboard-macOS
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller dashboard.spec --clean
+
+      - name: Rename artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mv dist/${{ matrix.artifact_name }} dist/${{ matrix.asset_name }}
+
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          move dist\${{ matrix.artifact_name }} dist\${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
+            artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux
+            artifacts/RB3E-Dashboard-macOS/RB3E-Dashboard-macOS
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+  # Auto-release on push to main (creates/updates a "latest" pre-release)
+  latest-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Delete existing latest release
+        uses: dev-drprasad/delete-tag-and-release@v1.1
+        with:
+          tag_name: latest
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          delete_release: true
+        continue-on-error: true
+
+      - name: Create Latest Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: |
+            This is an automated build from the latest commit on main.
+
+            **Note:** This is a pre-release build and may contain bugs.
+
+            ## Downloads
+            - **Windows:** RB3E-Dashboard-Windows.exe
+            - **Linux:** RB3E-Dashboard-Linux
+            - **macOS:** RB3E-Dashboard-macOS
+
+            ## Requirements
+            - VLC Media Player must be installed for video playback
+          files: |
+            artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
+            artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux
+            artifacts/RB3E-Dashboard-macOS/RB3E-Dashboard-macOS
+          prerelease: true
+          draft: false
