@@ -28,6 +28,11 @@ The project consists of three main components:
 * **UDP Protocol:** Listens for RB3E game events over WiFi on port `21070`.
 * **Telemetry:** Broadcasts device health (WiFi signal, Connection status) back to the dashboard on port `21071`.
 * **Fail-safes:** Auto-shutoff for lights/fog if network data stops to prevent "stuck" states.
+* **Performance Optimizations:**
+    * **Real-Time Response:** UDP queue draining ensures lights respond to the newest commands instantly, eliminating lag
+    * **Watchdog Timer:** Automatic recovery from freezes caused by electrical noise or glitches (8-second timeout)
+    * **High Performance WiFi:** Reduced packet latency by disabling power-saving modes
+    * **Secure Configuration:** WiFi credentials stored in `settings.toml` instead of hardcoded in firmware
 
 ---
 
@@ -46,16 +51,19 @@ This firmware turns a Raspberry Pi Pico W into a wireless receiver for your Stag
     * Download the latest CircuitPython `.uf2` for Pico W from [circuitpython.org](https://circuitpython.org).
     * Hold the `BOOTSEL` button on the Pico while plugging it into your PC.
     * Drag the `.uf2` file onto the `RPI-RP2` drive. The device will reboot as `CIRCUITPY`.
-2.  **Configure Firmware:**
-    * Open `circuitpython_stagekit.py` from this repo in a text editor.
-    * Locate the WiFi configuration section near the top:
-        ```python
-        WIFI_SSID = "YOUR_NETWORK_NAME"
-        WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
+2.  **Configure WiFi (Recommended Method):**
+    * Copy `settings.toml.example` from this repo to the root of the `CIRCUITPY` drive.
+    * Rename it to `settings.toml`.
+    * Edit `settings.toml` with your WiFi credentials:
+        ```toml
+        CIRCUITPY_WIFI_SSID = "YOUR_NETWORK_NAME"
+        CIRCUITPY_WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
         ```
-    * Update these with your 2.4GHz WiFi credentials.
+    * This keeps credentials secure and separate from the code.
+
+    **Alternative:** You can still edit WiFi credentials directly in `circuitpython_stagekit.py` if preferred.
 3.  **Flash Code:**
-    * Rename your edited file to `code.py`.
+    * Rename `circuitpython_stagekit.py` to `code.py`.
     * Copy `code.py` to the root of the `CIRCUITPY` drive.
 4.  **Connect:**
     * Plug the Stage Kit into the Pico using the OTG cable.

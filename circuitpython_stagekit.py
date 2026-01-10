@@ -6,11 +6,16 @@ import supervisor
 import microcontroller
 import gc
 import json
+import os
 
 # WiFi and networking
 import wifi
 import socketpool
 import ipaddress
+
+# Watchdog for auto-recovery
+from microcontroller import watchdog
+from watchdog import WatchDogMode
 
 # USB Host
 try:
@@ -22,12 +27,15 @@ except ImportError:
     print("WARNING: usb.core not available - USB host won't work!")
 
 # =============================================================================
-# CONFIGURATION - Edit these settings
+# CONFIGURATION - Edit settings.toml file instead
 # =============================================================================
 
-# WiFi Settings
-WIFI_SSID = "YOUR_NETWORK_NAME"
-WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
+# WiFi Settings - loaded from settings.toml
+# Create a settings.toml file in the root directory with:
+# CIRCUITPY_WIFI_SSID = "your_network_name"
+# CIRCUITPY_WIFI_PASSWORD = "your_password"
+WIFI_SSID = os.getenv("CIRCUITPY_WIFI_SSID", "YOUR_NETWORK_NAME")
+WIFI_PASSWORD = os.getenv("CIRCUITPY_WIFI_PASSWORD", "YOUR_NETWORK_PASSWORD")
 
 # Dashboard
 DASHBOARD_IP = "255.255.255.255"  # Broadcast address (sends to everyone on network)
@@ -70,6 +78,7 @@ RECONNECT_INTERVAL = 5.0
 SAFETY_TIMEOUT = 5.0
 GC_INTERVAL = 10.0
 LOOP_DELAY = 0.001
+WATCHDOG_TIMEOUT = 8.0  # Watchdog will reset Pico if loop freezes for 8 seconds
 
 # =============================================================================
 # Helper Functions
@@ -125,16 +134,29 @@ def get_mac_address():
 # =============================================================================
 
 def connect_wifi():
-    """Connect to WiFi network"""
+    """Connect to WiFi network with high performance mode"""
     print("\n" + "="*50)
     print("Stage Kit Controller - CircuitPython")
     print("="*50)
     print(f"MAC Address: {get_mac_address()}")
-    
+
     print(f"\nConnecting to WiFi: {WIFI_SSID}")
-    
+
     try:
+        # Enable high performance mode for minimum latency
+        wifi.radio.enabled = True
+        wifi.radio.tx_power = 8.5  # Maximum power for better signal
+
         wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD, timeout=30)
+
+        # Set to performance mode after connection (reduces packet latency)
+        try:
+            wifi.radio.power_mode = wifi.radio.PM_PERFORMANCE
+            print(f"✓ High performance WiFi mode enabled")
+        except AttributeError:
+            # Some CircuitPython versions don't support power_mode
+            print(f"⚠ Power mode setting not available (using default)")
+
         print(f"✓ Connected!")
         print(f"  IP Address: {wifi.radio.ipv4_address}")
         print(f"  Gateway: {wifi.radio.ipv4_gateway}")
@@ -319,32 +341,32 @@ class NetworkHandler:
     def receive_packet(self):
         """
         Try to receive a packet (non-blocking)
-        
+
         Returns:
             tuple: (left_weight, right_weight) or None if no packet
         """
         if self.socket is None:
             return None
-        
+
         try:
             # Try to receive data
             data, addr = self.socket.recvfrom(256)
             self.packets_received += 1
-            
+
             # Filter by source IP if configured
             if SOURCE_IP_FILTER and addr[0] != SOURCE_IP_FILTER:
                 debug_print(f"Ignoring packet from {addr[0]}")
                 return None
-            
+
             # Parse packet
             result = self.parse_rb3e_packet(data)
-            
+
             if result:
                 self.packets_processed += 1
                 debug_print(f"Packet from {addr[0]}: L=0x{result[0]:02x} R=0x{result[1]:02x}")
-            
+
             return result
-            
+
         except OSError:
             # No data available (non-blocking)
             return None
@@ -352,6 +374,31 @@ class NetworkHandler:
             self.errors += 1
             debug_print(f"Error receiving packet: {e}")
             return None
+
+    def drain_udp_queue(self):
+        """
+        Drain UDP queue and return only the newest packet for real-time response.
+        This prevents old/stale lighting commands from stacking up and causing lag.
+
+        Returns:
+            tuple: (left_weight, right_weight) or None if no packets
+        """
+        newest_packet = None
+        packets_drained = 0
+
+        # Keep reading until the queue is empty
+        while True:
+            packet = self.receive_packet()
+            if packet is None:
+                break  # Queue is empty
+            newest_packet = packet
+            packets_drained += 1
+
+        # Log if we discarded old packets (indicates queue buildup)
+        if packets_drained > 1:
+            debug_print(f"Drained {packets_drained} packets, using newest only")
+
+        return newest_packet
     
     def parse_rb3e_packet(self, data):
         """
@@ -437,6 +484,14 @@ def main():
     print("="*50)
     print("Press Ctrl+C to stop\n")
 
+    # Initialize watchdog timer for auto-recovery from freezes
+    try:
+        watchdog.timeout = WATCHDOG_TIMEOUT
+        watchdog.mode = WatchDogMode.RESET
+        print(f"✓ Watchdog enabled ({WATCHDOG_TIMEOUT}s timeout)")
+    except Exception as e:
+        print(f"⚠ Watchdog not available: {e}")
+
     # Status variables - Initialize all variables before use
     last_status_print = time.monotonic()
     last_reconnect_attempt = time.monotonic()
@@ -451,6 +506,12 @@ def main():
 
     try:
         while True:
+            # Feed watchdog to prevent automatic reset
+            try:
+                watchdog.feed()
+            except:
+                pass  # Watchdog might not be available
+
             current_time = time.monotonic()
 
             # Check WiFi status and reconnect if needed
@@ -467,13 +528,19 @@ def main():
                     heartbeat_led.direction = digitalio.Direction.OUTPUT
                     last_telemetry_time = current_time
                 else:
+                    # Feed watchdog during reconnection attempts
+                    try:
+                        watchdog.feed()
+                    except:
+                        pass
                     time.sleep(5.0)  # Wait before retry
                     continue
 
-            # Receive packet (single call - no duplication)
+            # REAL-TIME OPTIMIZATION: Drain UDP queue and only use newest packet
+            # This prevents old lighting commands from stacking up and causing lag
             packet_data = None
             try:
-                packet_data = network.receive_packet()
+                packet_data = network.drain_udp_queue()
             except OSError as e:
                 # If the socket dies (e.g. erratic wifi), try to restart the listener
                 print(f"Socket error: {e}")
