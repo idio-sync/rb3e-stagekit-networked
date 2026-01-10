@@ -63,6 +63,14 @@ SK_ALL_OFF = 0xFF
 # Debug Settings
 DEBUG = False  # Keeping disabled reduces response time of lighting
 
+# Timing constants
+HEARTBEAT_INTERVAL = 2.0
+TELEMETRY_INTERVAL = 1.0
+RECONNECT_INTERVAL = 5.0
+SAFETY_TIMEOUT = 5.0
+GC_INTERVAL = 10.0
+LOOP_DELAY = 0.001
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
@@ -103,7 +111,7 @@ def send_telemetry(socket, stage_kit_connected, wifi_rssi):
     try:
         # Send to broadcast address
         socket.sendto(payload, (DASHBOARD_IP, DASHBOARD_PORT))
-    except Exception as e:
+    except (OSError, RuntimeError):
         # Broadcasts can sometimes fail if wifi is busy, safe to ignore
         pass
 
@@ -400,120 +408,144 @@ class NetworkHandler:
 
 def main():
     """Main program loop"""
-    
+
     # Connect to WiFi
     if not connect_wifi():
         print("\n✗ Cannot continue without WiFi")
         print("  Edit code.py and update WIFI_SSID and WIFI_PASSWORD")
         return
-    
+
     # Initialize Stage Kit controller
     stage_kit = StageKitController()
-    
+
     if not stage_kit.find_and_connect():
         print("\n⚠ Stage Kit not found - will retry periodically")
         print("  Program will continue listening for packets")
     else:
         # Test lights on successful connection
         stage_kit.test_lights()
-    
+
     # Start network listener
     network = NetworkHandler(UDP_LISTEN_PORT)
-    
+
     if not network.start():
         print("\n✗ Cannot continue without network listener")
         return
-    
+
     print("\n" + "="*50)
     print("Ready! Waiting for lighting commands...")
     print("="*50)
     print("Press Ctrl+C to stop\n")
-    
-    # Status variables
+
+    # Status variables - Initialize all variables before use
     last_status_print = time.monotonic()
     last_reconnect_attempt = time.monotonic()
+    last_telemetry_time = time.monotonic()
+    last_packet_time = time.monotonic()
+    last_gc_time = time.monotonic()
+    lights_are_active = False
+
     led_state = False
     heartbeat_led = digitalio.DigitalInOut(board.LED)
     heartbeat_led.direction = digitalio.Direction.OUTPUT
-    
+
     try:
         while True:
             current_time = time.monotonic()
 
-            # Check WiFi status
+            # Check WiFi status and reconnect if needed
             if not wifi.radio.connected:
                 print("⚠ WiFi lost! Reconnecting...")
-                # Attempt reconnect logic here (similar to connect_wifi)
-                # You may need to re-initialize the UDP socket after reconnecting
-                continue
-            
+                heartbeat_led.value = False
+                heartbeat_led.deinit()
+
+                # Actually reconnect to WiFi
+                if connect_wifi():
+                    # Restart network listener after WiFi reconnect
+                    network.start()
+                    heartbeat_led = digitalio.DigitalInOut(board.LED)
+                    heartbeat_led.direction = digitalio.Direction.OUTPUT
+                    last_telemetry_time = current_time
+                else:
+                    time.sleep(5.0)  # Wait before retry
+                    continue
+
+            # Receive packet (single call - no duplication)
+            packet_data = None
             try:
                 packet_data = network.receive_packet()
             except OSError as e:
                 # If the socket dies (e.g. erratic wifi), try to restart the listener
                 print(f"Socket error: {e}")
-                network.start() 
+                network.start()
                 continue
-            
-            # Heartbeat LED (blink every 2 seconds to show it's alive)
-            if current_time - last_status_print > 2.0:
+
+            # Heartbeat LED (blink every HEARTBEAT_INTERVAL seconds to show it's alive)
+            if current_time - last_status_print > HEARTBEAT_INTERVAL:
                 heartbeat_led.value = led_state
                 led_state = not led_state
                 last_status_print = current_time
-                
+
                 # Print stats if debug enabled
                 if DEBUG:
                     network.print_stats()
-            
-            # Dashboard telemetry
-            if current_time - last_telemetry_time > 1.0: # Send every 1 second
-                rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
-                send_telemetry(network.socket, stage_kit.connected, rssi)
+
+            # Dashboard telemetry (every TELEMETRY_INTERVAL seconds)
+            if current_time - last_telemetry_time > TELEMETRY_INTERVAL:
+                # Safe WiFi access with error handling
+                try:
+                    rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
+                    send_telemetry(network.socket, stage_kit.connected, rssi)
+                except (OSError, RuntimeError, AttributeError):
+                    pass  # WiFi might be transitioning
                 last_telemetry_time = current_time
-            
+
             # Try to reconnect Stage Kit if disconnected
             if not stage_kit.connected:
-                if current_time - last_reconnect_attempt > 5.0:
+                if current_time - last_reconnect_attempt > RECONNECT_INTERVAL:
                     debug_print("Attempting to reconnect Stage Kit...")
                     stage_kit.find_and_connect()
                     last_reconnect_attempt = current_time
-            
-            # Check for incoming packets
-            packet_data = network.receive_packet()
-            
+
+            # Process incoming packets
             if packet_data:
                 left_weight, right_weight = packet_data
-                
+                last_packet_time = current_time  # Update packet timestamp
+
                 # Send to Stage Kit if connected
                 if stage_kit.connected:
                     success = stage_kit.send_command(left_weight, right_weight)
-                    if not success:
+                    if success:
+                        lights_are_active = True
+                    else:
                         print("⚠ Failed to send command - Stage Kit disconnected?")
                 else:
                     debug_print("Stage Kit not connected - ignoring command")
-                    # If NO packet was received, do garbage collection now
-                    # This ensures the pause happens when nothing is happening
+            else:
+                # No packet received - run garbage collection during idle time
+                if current_time - last_gc_time > GC_INTERVAL:
                     gc.collect()
-            
-            # Small delay to prevent CPU spinning
-            time.sleep(0.001)  # 1ms
+                    last_gc_time = current_time
 
-    # Turn off lights if no data is being recieved
-    current_time = time.monotonic()
-    if current_time - last_packet_time > 5.0 and lights_are_active:
-        print("No data received for 5s - Safety clearing lights")
-        stage_kit.send_command(0x00, SK_ALL_OFF)
-        lights_are_active = False
-    
+            # Safety timeout - turn off lights if no data received
+            if lights_are_active and (current_time - last_packet_time > SAFETY_TIMEOUT):
+                print("⚠ No data received for 5s - Safety clearing lights")
+                if stage_kit.connected:
+                    stage_kit.send_command(0x00, SK_ALL_OFF)
+                lights_are_active = False
+
+            # Small delay to prevent CPU spinning
+            time.sleep(LOOP_DELAY)
+
     except KeyboardInterrupt:
         print("\n\nShutting down...")
         network.print_stats()
-        
+
         # Turn off all lights
         if stage_kit.connected:
             print("Turning off Stage Kit lights...")
             stage_kit.send_command(0x00, SK_ALL_OFF)
-        
+
         heartbeat_led.value = False
         heartbeat_led.deinit()
         print("Goodbye!")
