@@ -1,0 +1,10 @@
+# RB3E Dashboard Dependencies
+google-api-python-client>=2.0.0
+yt-dlp>=2023.1.1
+Pillow>=9.0.0
+pypresence>=4.2.0
+screeninfo>=0.8.0
+requests>=2.28.0
+
+# Build dependencies (for creating executables)
+pyinstaller>=6.0.0

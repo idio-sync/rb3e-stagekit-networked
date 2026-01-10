@@ -74,19 +74,48 @@ This firmware turns a Raspberry Pi Pico W into a wireless receiver for your Stag
 ## 💻 Software Setup (Dashboard)
 
 ### Prerequisites
-1.  **Python 3.8+**: Download from [python.org](https://www.python.org/).
-2.  **VLC Media Player**: Required for video playback.
-    * Windows/Mac: [videolan.org](https://www.videolan.org/vlc/)
-    * Linux: `sudo apt install vlc`
+**VLC Media Player** is required for video playback on all platforms:
+* Windows/Mac: [videolan.org](https://www.videolan.org/vlc/)
+* Linux: `sudo apt install vlc`
 
-### Installation
-1.  Clone or download this repository.
-2.  Open a terminal/command prompt in the directory.
-3.  Run the dashboard:
+### Option 1: Pre-built Executable (Recommended)
+
+Download the latest pre-built executable for your platform from the [Releases page](../../releases/latest):
+
+| Platform | Download |
+| :--- | :--- |
+| **Windows** | `RB3E-Dashboard-Windows.exe` |
+| **macOS** | `RB3E-Dashboard-macOS` |
+| **Linux** | `RB3E-Dashboard-Linux` |
+
+Simply download and run - no Python installation required!
+
+### Option 2: Run from Source
+
+If you prefer to run from source or want to modify the code:
+
+1.  **Python 3.8+**: Download from [python.org](https://www.python.org/).
+2.  Clone or download this repository.
+3.  Open a terminal/command prompt in the directory.
+4.  Run the dashboard:
     ```bash
     python dashboard.py
     ```
     *Note: On the first launch, the script will automatically attempt to install required Python dependencies (`yt_dlp`, `pypresence`, `google-api-python-client`, `Pillow`, `screeninfo`).*
+
+### Option 3: Build Your Own Executable
+
+To build the executable yourself:
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Build executable
+pyinstaller dashboard.spec --clean
+```
+
+The executable will be created in the `dist/` directory.
 
 ---
 
@@ -138,10 +167,11 @@ Ensure your firewall allows UDP traffic on the following ports:
 ## 🧩 Troubleshooting
 
 **Dashboard won't start?**
-* Ensure you have Python 3.8 or newer installed.
+* Try the pre-built executable from the [Releases page](../../releases/latest) - no Python required.
+* If running from source, ensure you have Python 3.8 or newer installed.
 * If dependencies fail to install automatically, run:
     ```bash
-    pip install google-api-python-client yt-dlp Pillow pypresence screeninfo requests
+    pip install -r requirements.txt
     ```
 
 **Videos aren't playing?**
