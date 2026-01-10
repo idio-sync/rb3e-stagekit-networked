@@ -30,6 +30,10 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    defaults:
+      run:
+        working-directory: ./Dashboard
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,6 +43,7 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: Dashboard/requirements.txt
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -69,7 +74,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          path: Dashboard/dist/${{ matrix.asset_name }}
           retention-days: 30
 
   release:
@@ -122,8 +127,6 @@ jobs:
           body: |
             This is an automated build from the latest commit on main.
 
-            **Note:** This is a pre-release build and may contain bugs.
-
             ## Downloads
             - **Windows:** RB3E-Dashboard-Windows.exe
             - **Linux:** RB3E-Dashboard-Linux
@@ -135,5 +138,5 @@ jobs:
             artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
             artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux
             artifacts/RB3E-Dashboard-macOS/RB3E-Dashboard-macOS
-          prerelease: true
+          prerelease: false
           draft: false
