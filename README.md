@@ -7,7 +7,7 @@ This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges t
 The project consists of ttwo main components:
 
 1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
-2.  **Pico W Firmware (`Stagekit folder`):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
+2.  **Pico W Firmware (Stagekit folder):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
 
 ---
 
