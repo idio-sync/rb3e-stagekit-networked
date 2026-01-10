@@ -7,31 +7,29 @@ This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges t
 The project consists of ttwo main components:
 
 1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
-2.  **Pico W Firmware (Stagekit folder):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
+2.  **Pico W Firmware (Stagekit folder):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit device (only Santroller/Fatsco for now) into a wireless, networked UDP device.
 
 ---
 
 ## 🌟 Features
 
 ### 🖥️ Dashboard
-* **Video Sync:** Automatically searches for and plays official music videos (via YouTube/VLC) synced perfectly to your gameplay. Features intelligent filtering to avoid covers/tutorials.
-* **Song Library:** Browse your currently loaded RB3E song list directly on your PC, complete with album art fetched from Last.fm.
+* **Video Sync:** Automatically searches for and plays official music videos (via YouTube/VLC) synced to your gameplay. Features intelligent filtering to match songs reasonably well.
+* **Song Library:** Browse your RB3E song list directly on your PC, complete with album art fetched from Last.fm.
 * **Stats & History:** Tracks session playtime, song history, and all-time top statistics. Exportable to CSV/JSON.
 * **Social Integration:**
     * **Discord Rich Presence:** Displays your current song, artist, and elapsed time on your Discord profile.
     * **Last.fm:** Real-time "Now Playing" updates and automatic scrobbling (after 50% or 4 minutes of play).
-* **Fleet Management:** Auto-detects all wireless Stage Kit Picos on the network, monitoring their signal strength (RSSI) and USB status.
+* **Stage Kit Fleet Management:** Auto-detects all wireless Stage Kit Picos on the network, monitoring their signal strength (RSSI) and USB status. Individual functions are manually triggerable for testing purposes.
 
 ### 💡 Wireless Stage Kit (Pico W)
-* **Wireless Bridge:** Removes the need to run long USB cables from the console to the fog machine.
+* **Wireless Bridge:** Removes the need to run long USB cables from the console to the Stage Kit device.
 * **UDP Protocol:** Listens for RB3E game events over WiFi on port `21070`.
 * **Telemetry:** Broadcasts device health (WiFi signal, Connection status) back to the dashboard on port `21071`.
 * **Fail-safes:** Auto-shutoff for lights/fog if network data stops to prevent "stuck" states.
-* **Performance Optimizations:**
-    * **Real-Time Response:** UDP queue draining ensures lights respond to the newest commands instantly, eliminating lag
-    * **Watchdog Timer:** Automatic recovery from freezes caused by electrical noise or glitches (8-second timeout)
-    * **High Performance WiFi:** Reduced packet latency by disabling power-saving modes
-    * **Secure Configuration:** WiFi credentials stored in `settings.toml` instead of hardcoded in firmware
+* **Performance Optimizations:** Reduced packet latency by disabling Pico power-saving modes
+* **Real-Time Response:** UDP queue draining ensures lights respond to the newest commands instantly.
+* **Watchdog Timer:** Automatic recovery from freezes.
 
 ---
 
@@ -41,9 +39,50 @@ This firmware turns a Raspberry Pi Pico W into a wireless receiver for your Stag
 
 ### Requirements
 * **Microcontroller:** Raspberry Pi Pico W (or Pico 2 W).
-* **Hardware:** A Stage Kit (strobe/fog) modified with a Santroller/Fatsco board.
+* **Hardware:** A Santroller/Fatsco Stage Kit device (LEDs/strobe light/fog machine).
 * **Connectivity:** USB OTG Cable (Micro-USB to Micro-USB) to connect the Pico to the Stage Kit.
-* **Power:** A generic 5V 2A USB power bank or wall adapter for the Pico.
+* **Power:** A generic 5V 2A USB power bank or wall adapter for the Pico connected to.
+
+### Hardware Preperation
+## Method 1: The "Pass-Through" (Low Current)
+In this configuration, power is injected into the Pico's GPIO pins, flows through the PCB traces, and out the USB port to the Stage Kit device.
+
+### Wiring Diagram
+`[PSU 5V]` -> `[Pico Pin 40 (VBUS)]` -> `[Pico PCB]` -> `[USB Port]` -> `[Device]`
+
+### Instructions
+1.  **5V Source (+):** Connect to **Pin 40 (VBUS)**.
+2.  **Ground (-):** Connect to **Pin 38 (GND)**.
+3.  **Stability:** Solder a **470µF - 1000µF Capacitor** across Pin 40 & GND (Crucial for WiFi stability).
+4.  **Connection:** Plug USB OTG adapter into Pico Micro-USB port; plug device into adapter.
+
+### ⚠️ Limits
+* **Max Current:** ~1.2A total (Device + Pico W).
+
+## Method 2: The "Y-Split" (High Current)
+In this configuration, power is split *before* the Pico. The stage kit device draws current directly from the PSU, bypassing the Pico.
+
+### Wiring Diagram
+          /-> `[USB Device Power]` (High Current)
+`[PSU 5V]`
+          \-> `[Pico Pin 40 / VBUS]` (Low Current Logic)
+
+### Instructions
+**Option A: Commercial Cable**
+* Buy a **"Micro USB OTG Y-Cable with Power"**.
+* Connect PSU to the power leg, Device to the USB-A leg, and Pico to the Micro-USB leg.
+
+**Option B: DIY Splicing**
+1.  Strip the insulation mid-way on a standard OTG cable.
+2.  **Do not cut** the Green/White data wires.
+3.  Splice your **PSU 5V (+)** directly to the OTG's **Red** wire.
+4.  Splice your **PSU GND (-)** directly to the OTG's **Black** wire.
+5.  Tape/Heatshrink the junction.
+
+### ✅ Benefits
+* **Max Current:** Limited only by your PSU and wire gauge (5A+).
+* **Thermal:** Keeps the Pico cool.
+* **Stability:** Zero voltage drop on the Pico side when the USB device spikes.
 
 ### Installation Steps
 1.  **Install CircuitPython:**
