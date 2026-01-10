@@ -4,17 +4,16 @@ This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges t
 
 ## 📂 Project Structure
 
-The project consists of three main components:
+The project consists of ttwo main components:
 
-1.  **Unified Dashboard (`dashboard.py`):** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
-2.  **Pico W Firmware (`circuitpython_stagekit.py`):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
-3.  **Simple Dashboard (`simple_stagekit_dashboard.py`):** A lightweight alternative dashboard focused solely on lighting control and debugging network packets.
+1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
+2.  **Pico W Firmware (`Stagekit folder`):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
 
 ---
 
 ## 🌟 Features
 
-### 🖥️ Unified Dashboard
+### 🖥️ Dashboard
 * **Video Sync:** Automatically searches for and plays official music videos (via YouTube/VLC) synced perfectly to your gameplay. Features intelligent filtering to avoid covers/tutorials.
 * **Song Library:** Browse your currently loaded RB3E song list directly on your PC, complete with album art fetched from Last.fm.
 * **Stats & History:** Tracks session playtime, song history, and all-time top statistics. Exportable to CSV/JSON.
@@ -59,11 +58,7 @@ This firmware turns a Raspberry Pi Pico W into a wireless receiver for your Stag
         CIRCUITPY_WIFI_SSID = "YOUR_NETWORK_NAME"
         CIRCUITPY_WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
         ```
-    * This keeps credentials secure and separate from the code.
-
-    **Alternative:** You can still edit WiFi credentials directly in `circuitpython_stagekit.py` if preferred.
 3.  **Flash Code:**
-    * Rename `circuitpython_stagekit.py` to `code.py`.
     * Copy `code.py` to the root of the `CIRCUITPY` drive.
 4.  **Connect:**
     * Plug the Stage Kit into the Pico using the OTG cable.
