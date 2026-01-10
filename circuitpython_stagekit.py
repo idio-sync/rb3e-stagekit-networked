@@ -73,11 +73,13 @@ DEBUG = False  # Keeping disabled reduces response time of lighting
 
 # Timing constants
 HEARTBEAT_INTERVAL = 2.0
-TELEMETRY_INTERVAL = 1.0
+TELEMETRY_INTERVAL = 2.0  # Reduced overhead: 2s instead of 1s
 RECONNECT_INTERVAL = 5.0
 SAFETY_TIMEOUT = 5.0
-GC_INTERVAL = 10.0
-LOOP_DELAY = 0.001
+GC_INTERVAL = 10.0  # Also run GC after 10s of no packets (between songs)
+GC_MEMORY_THRESHOLD = 50000  # Run GC if free memory drops below 50KB
+LOOP_DELAY_ACTIVE = 0.0001  # 0.1ms when processing packets (10x faster)
+LOOP_DELAY_IDLE = 0.001  # 1ms when idle (energy efficient)
 WATCHDOG_TIMEOUT = 8.0  # Watchdog will reset Pico if loop freezes for 8 seconds
 
 # =============================================================================
@@ -402,42 +404,35 @@ class NetworkHandler:
     
     def parse_rb3e_packet(self, data):
         """
-        Parse RB3Enhanced packet
-        
+        Parse RB3Enhanced packet with fast-fail validation
+
         Args:
             data: Raw packet bytes
-            
+
         Returns:
             tuple: (left_weight, right_weight) or None
         """
-        # Need at least header (8 bytes) + data (2 bytes)
+        # Fast rejection: Need at least header (8 bytes) + data (2 bytes)
         if len(data) < 10:
             return None
-        
+
         try:
-            # Parse header
-            # struct: >I = big-endian unsigned int (4 bytes)
-            magic = struct.unpack('>I', data[0:4])[0]
-            
-            # Verify magic number
-            if magic != RB3E_MAGIC:
-                debug_print(f"Invalid magic: 0x{magic:08x}")
+            # Fast-fail: Check magic bytes directly (faster than struct.unpack)
+            # RB3E_MAGIC = 0x52423345 = b'RB3E' in big-endian
+            if data[0] != 0x52 or data[1] != 0x42 or data[2] != 0x33 or data[3] != 0x45:
                 return None
-            
-            # Get packet type
+
+            # Fast-fail: Only process Stage Kit events (type 6)
             packet_type = data[5]
-            
-            # Only process Stage Kit events
             if packet_type != RB3E_EVENT_STAGEKIT:
-                debug_print(f"Ignoring packet type: {packet_type}")
                 return None
-            
-            # Extract Stage Kit data
+
+            # Extract Stage Kit data (only if we passed all checks)
             left_weight = data[8]
             right_weight = data[9]
-            
+
             return (left_weight, right_weight)
-            
+
         except Exception as e:
             debug_print(f"Error parsing packet: {e}")
             return None
@@ -500,6 +495,9 @@ def main():
     last_gc_time = time.monotonic()
     lights_are_active = False
 
+    # Telemetry optimization: track last values to only send when changed
+    last_telemetry_values = None
+
     led_state = False
     heartbeat_led = digitalio.DigitalInOut(board.LED)
     heartbeat_led.direction = digitalio.Direction.OUTPUT
@@ -557,12 +555,17 @@ def main():
                 if DEBUG:
                     network.print_stats()
 
-            # Dashboard telemetry (every TELEMETRY_INTERVAL seconds)
+            # Dashboard telemetry (reduced overhead: only send when values change or every 2s)
             if current_time - last_telemetry_time > TELEMETRY_INTERVAL:
                 # Safe WiFi access with error handling
                 try:
                     rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
-                    send_telemetry(network.socket, stage_kit.connected, rssi)
+                    current_telemetry = (stage_kit.connected, rssi)
+
+                    # Only send if values changed (reduces CPU/network overhead)
+                    if current_telemetry != last_telemetry_values:
+                        send_telemetry(network.socket, stage_kit.connected, rssi)
+                        last_telemetry_values = current_telemetry
                 except (OSError, RuntimeError, AttributeError):
                     pass  # WiFi might be transitioning
                 last_telemetry_time = current_time
@@ -588,11 +591,18 @@ def main():
                         print("⚠ Failed to send command - Stage Kit disconnected?")
                 else:
                     debug_print("Stage Kit not connected - ignoring command")
-            else:
-                # No packet received - run garbage collection during idle time
-                if current_time - last_gc_time > GC_INTERVAL:
-                    gc.collect()
-                    last_gc_time = current_time
+            # Smarter garbage collection: run when memory low OR idle for 10s (between songs)
+            should_gc = False
+            if gc.mem_free() < GC_MEMORY_THRESHOLD:
+                should_gc = True  # Memory pressure
+            elif current_time - last_gc_time > GC_INTERVAL:
+                should_gc = True  # Periodic maintenance
+            elif current_time - last_packet_time > GC_INTERVAL and not lights_are_active:
+                should_gc = True  # Idle for 10s between songs
+
+            if should_gc:
+                gc.collect()
+                last_gc_time = current_time
 
             # Safety timeout - turn off lights if no data received
             if lights_are_active and (current_time - last_packet_time > SAFETY_TIMEOUT):
@@ -601,8 +611,11 @@ def main():
                     stage_kit.send_command(0x00, SK_ALL_OFF)
                 lights_are_active = False
 
-            # Small delay to prevent CPU spinning
-            time.sleep(LOOP_DELAY)
+            # Adaptive loop delay: faster when active, slower when idle
+            if packet_data:
+                time.sleep(LOOP_DELAY_ACTIVE)  # 0.1ms = 10x faster response
+            else:
+                time.sleep(LOOP_DELAY_IDLE)  # 1ms = energy efficient
 
     except KeyboardInterrupt:
         print("\n\nShutting down...")
