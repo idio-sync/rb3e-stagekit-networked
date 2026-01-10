@@ -50,9 +50,6 @@ datas = []
 datas += collect_data_files('googleapiclient')
 datas += collect_data_files('yt_dlp')
 
-# Add the HTML documentation file
-datas += [('rb3e_index.html', '.')]
-
 a = Analysis(
     ['dashboard.py'],
     pathex=[],
