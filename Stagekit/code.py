@@ -6,11 +6,16 @@ import supervisor
 import microcontroller
 import gc
 import json
+import os
 
 # WiFi and networking
 import wifi
 import socketpool
 import ipaddress
+
+# Watchdog for auto-recovery
+from microcontroller import watchdog
+from watchdog import WatchDogMode
 
 # USB Host
 try:
@@ -22,12 +27,15 @@ except ImportError:
     print("WARNING: usb.core not available - USB host won't work!")
 
 # =============================================================================
-# CONFIGURATION - Edit these settings
+# CONFIGURATION - Edit settings.toml file instead
 # =============================================================================
 
-# WiFi Settings
-WIFI_SSID = "YOUR_NETWORK_NAME"
-WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
+# WiFi Settings - loaded from settings.toml
+# Create a settings.toml file in the root directory with:
+# CIRCUITPY_WIFI_SSID = "your_network_name"
+# CIRCUITPY_WIFI_PASSWORD = "your_password"
+WIFI_SSID = os.getenv("CIRCUITPY_WIFI_SSID", "YOUR_NETWORK_NAME")
+WIFI_PASSWORD = os.getenv("CIRCUITPY_WIFI_PASSWORD", "YOUR_NETWORK_PASSWORD")
 
 # Dashboard
 DASHBOARD_IP = "255.255.255.255"  # Broadcast address (sends to everyone on network)
@@ -62,6 +70,17 @@ SK_ALL_OFF = 0xFF
 
 # Debug Settings
 DEBUG = False  # Keeping disabled reduces response time of lighting
+
+# Timing constants
+HEARTBEAT_INTERVAL = 2.0
+TELEMETRY_INTERVAL = 2.0  # Reduced overhead: 2s instead of 1s
+RECONNECT_INTERVAL = 5.0
+SAFETY_TIMEOUT = 5.0
+GC_INTERVAL = 10.0  # Also run GC after 10s of no packets (between songs)
+GC_MEMORY_THRESHOLD = 50000  # Run GC if free memory drops below 50KB
+LOOP_DELAY_ACTIVE = 0.0001  # 0.1ms when processing packets (10x faster)
+LOOP_DELAY_IDLE = 0.001  # 1ms when idle (energy efficient)
+WATCHDOG_TIMEOUT = 8.0  # Watchdog will reset Pico if loop freezes for 8 seconds
 
 # =============================================================================
 # Helper Functions
@@ -103,7 +122,7 @@ def send_telemetry(socket, stage_kit_connected, wifi_rssi):
     try:
         # Send to broadcast address
         socket.sendto(payload, (DASHBOARD_IP, DASHBOARD_PORT))
-    except Exception as e:
+    except (OSError, RuntimeError):
         # Broadcasts can sometimes fail if wifi is busy, safe to ignore
         pass
 
@@ -117,16 +136,29 @@ def get_mac_address():
 # =============================================================================
 
 def connect_wifi():
-    """Connect to WiFi network"""
+    """Connect to WiFi network with high performance mode"""
     print("\n" + "="*50)
     print("Stage Kit Controller - CircuitPython")
     print("="*50)
     print(f"MAC Address: {get_mac_address()}")
-    
+
     print(f"\nConnecting to WiFi: {WIFI_SSID}")
-    
+
     try:
+        # Enable high performance mode for minimum latency
+        wifi.radio.enabled = True
+        wifi.radio.tx_power = 8.5  # Maximum power for better signal
+
         wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD, timeout=30)
+
+        # Set to performance mode after connection (reduces packet latency)
+        try:
+            wifi.radio.power_mode = wifi.radio.PM_PERFORMANCE
+            print(f"✓ High performance WiFi mode enabled")
+        except AttributeError:
+            # Some CircuitPython versions don't support power_mode
+            print(f"⚠ Power mode setting not available (using default)")
+
         print(f"✓ Connected!")
         print(f"  IP Address: {wifi.radio.ipv4_address}")
         print(f"  Gateway: {wifi.radio.ipv4_gateway}")
@@ -311,32 +343,32 @@ class NetworkHandler:
     def receive_packet(self):
         """
         Try to receive a packet (non-blocking)
-        
+
         Returns:
             tuple: (left_weight, right_weight) or None if no packet
         """
         if self.socket is None:
             return None
-        
+
         try:
             # Try to receive data
             data, addr = self.socket.recvfrom(256)
             self.packets_received += 1
-            
+
             # Filter by source IP if configured
             if SOURCE_IP_FILTER and addr[0] != SOURCE_IP_FILTER:
                 debug_print(f"Ignoring packet from {addr[0]}")
                 return None
-            
+
             # Parse packet
             result = self.parse_rb3e_packet(data)
-            
+
             if result:
                 self.packets_processed += 1
                 debug_print(f"Packet from {addr[0]}: L=0x{result[0]:02x} R=0x{result[1]:02x}")
-            
+
             return result
-            
+
         except OSError:
             # No data available (non-blocking)
             return None
@@ -344,45 +376,63 @@ class NetworkHandler:
             self.errors += 1
             debug_print(f"Error receiving packet: {e}")
             return None
+
+    def drain_udp_queue(self):
+        """
+        Drain UDP queue and return only the newest packet for real-time response.
+        This prevents old/stale lighting commands from stacking up and causing lag.
+
+        Returns:
+            tuple: (left_weight, right_weight) or None if no packets
+        """
+        newest_packet = None
+        packets_drained = 0
+
+        # Keep reading until the queue is empty
+        while True:
+            packet = self.receive_packet()
+            if packet is None:
+                break  # Queue is empty
+            newest_packet = packet
+            packets_drained += 1
+
+        # Log if we discarded old packets (indicates queue buildup)
+        if packets_drained > 1:
+            debug_print(f"Drained {packets_drained} packets, using newest only")
+
+        return newest_packet
     
     def parse_rb3e_packet(self, data):
         """
-        Parse RB3Enhanced packet
-        
+        Parse RB3Enhanced packet with fast-fail validation
+
         Args:
             data: Raw packet bytes
-            
+
         Returns:
             tuple: (left_weight, right_weight) or None
         """
-        # Need at least header (8 bytes) + data (2 bytes)
+        # Fast rejection: Need at least header (8 bytes) + data (2 bytes)
         if len(data) < 10:
             return None
-        
+
         try:
-            # Parse header
-            # struct: >I = big-endian unsigned int (4 bytes)
-            magic = struct.unpack('>I', data[0:4])[0]
-            
-            # Verify magic number
-            if magic != RB3E_MAGIC:
-                debug_print(f"Invalid magic: 0x{magic:08x}")
+            # Fast-fail: Check magic bytes directly (faster than struct.unpack)
+            # RB3E_MAGIC = 0x52423345 = b'RB3E' in big-endian
+            if data[0] != 0x52 or data[1] != 0x42 or data[2] != 0x33 or data[3] != 0x45:
                 return None
-            
-            # Get packet type
+
+            # Fast-fail: Only process Stage Kit events (type 6)
             packet_type = data[5]
-            
-            # Only process Stage Kit events
             if packet_type != RB3E_EVENT_STAGEKIT:
-                debug_print(f"Ignoring packet type: {packet_type}")
                 return None
-            
-            # Extract Stage Kit data
+
+            # Extract Stage Kit data (only if we passed all checks)
             left_weight = data[8]
             right_weight = data[9]
-            
+
             return (left_weight, right_weight)
-            
+
         except Exception as e:
             debug_print(f"Error parsing packet: {e}")
             return None
@@ -400,120 +450,182 @@ class NetworkHandler:
 
 def main():
     """Main program loop"""
-    
+
     # Connect to WiFi
     if not connect_wifi():
         print("\n✗ Cannot continue without WiFi")
         print("  Edit code.py and update WIFI_SSID and WIFI_PASSWORD")
         return
-    
+
     # Initialize Stage Kit controller
     stage_kit = StageKitController()
-    
+
     if not stage_kit.find_and_connect():
         print("\n⚠ Stage Kit not found - will retry periodically")
         print("  Program will continue listening for packets")
     else:
         # Test lights on successful connection
         stage_kit.test_lights()
-    
+
     # Start network listener
     network = NetworkHandler(UDP_LISTEN_PORT)
-    
+
     if not network.start():
         print("\n✗ Cannot continue without network listener")
         return
-    
+
     print("\n" + "="*50)
     print("Ready! Waiting for lighting commands...")
     print("="*50)
     print("Press Ctrl+C to stop\n")
-    
-    # Status variables
+
+    # Initialize watchdog timer for auto-recovery from freezes
+    try:
+        watchdog.timeout = WATCHDOG_TIMEOUT
+        watchdog.mode = WatchDogMode.RESET
+        print(f"✓ Watchdog enabled ({WATCHDOG_TIMEOUT}s timeout)")
+    except Exception as e:
+        print(f"⚠ Watchdog not available: {e}")
+
+    # Status variables - Initialize all variables before use
     last_status_print = time.monotonic()
     last_reconnect_attempt = time.monotonic()
+    last_telemetry_time = time.monotonic()
+    last_packet_time = time.monotonic()
+    last_gc_time = time.monotonic()
+    lights_are_active = False
+
+    # Telemetry optimization: track last values to only send when changed
+    last_telemetry_values = None
+
     led_state = False
     heartbeat_led = digitalio.DigitalInOut(board.LED)
     heartbeat_led.direction = digitalio.Direction.OUTPUT
-    
+
     try:
         while True:
+            # Feed watchdog to prevent automatic reset
+            try:
+                watchdog.feed()
+            except:
+                pass  # Watchdog might not be available
+
             current_time = time.monotonic()
 
-            # Check WiFi status
+            # Check WiFi status and reconnect if needed
             if not wifi.radio.connected:
                 print("⚠ WiFi lost! Reconnecting...")
-                # Attempt reconnect logic here (similar to connect_wifi)
-                # You may need to re-initialize the UDP socket after reconnecting
-                continue
-            
+                heartbeat_led.value = False
+                heartbeat_led.deinit()
+
+                # Actually reconnect to WiFi
+                if connect_wifi():
+                    # Restart network listener after WiFi reconnect
+                    network.start()
+                    heartbeat_led = digitalio.DigitalInOut(board.LED)
+                    heartbeat_led.direction = digitalio.Direction.OUTPUT
+                    last_telemetry_time = current_time
+                else:
+                    # Feed watchdog during reconnection attempts
+                    try:
+                        watchdog.feed()
+                    except:
+                        pass
+                    time.sleep(5.0)  # Wait before retry
+                    continue
+
+            # REAL-TIME OPTIMIZATION: Drain UDP queue and only use newest packet
+            # This prevents old lighting commands from stacking up and causing lag
+            packet_data = None
             try:
-                packet_data = network.receive_packet()
+                packet_data = network.drain_udp_queue()
             except OSError as e:
                 # If the socket dies (e.g. erratic wifi), try to restart the listener
                 print(f"Socket error: {e}")
-                network.start() 
+                network.start()
                 continue
-            
-            # Heartbeat LED (blink every 2 seconds to show it's alive)
-            if current_time - last_status_print > 2.0:
+
+            # Heartbeat LED (blink every HEARTBEAT_INTERVAL seconds to show it's alive)
+            if current_time - last_status_print > HEARTBEAT_INTERVAL:
                 heartbeat_led.value = led_state
                 led_state = not led_state
                 last_status_print = current_time
-                
+
                 # Print stats if debug enabled
                 if DEBUG:
                     network.print_stats()
-            
-            # Dashboard telemetry
-            if current_time - last_telemetry_time > 1.0: # Send every 1 second
-                rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
-                send_telemetry(network.socket, stage_kit.connected, rssi)
+
+            # Dashboard telemetry (reduced overhead: only send when values change or every 2s)
+            if current_time - last_telemetry_time > TELEMETRY_INTERVAL:
+                # Safe WiFi access with error handling
+                try:
+                    rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
+                    current_telemetry = (stage_kit.connected, rssi)
+
+                    # Only send if values changed (reduces CPU/network overhead)
+                    if current_telemetry != last_telemetry_values:
+                        send_telemetry(network.socket, stage_kit.connected, rssi)
+                        last_telemetry_values = current_telemetry
+                except (OSError, RuntimeError, AttributeError):
+                    pass  # WiFi might be transitioning
                 last_telemetry_time = current_time
-            
+
             # Try to reconnect Stage Kit if disconnected
             if not stage_kit.connected:
-                if current_time - last_reconnect_attempt > 5.0:
+                if current_time - last_reconnect_attempt > RECONNECT_INTERVAL:
                     debug_print("Attempting to reconnect Stage Kit...")
                     stage_kit.find_and_connect()
                     last_reconnect_attempt = current_time
-            
-            # Check for incoming packets
-            packet_data = network.receive_packet()
-            
+
+            # Process incoming packets
             if packet_data:
                 left_weight, right_weight = packet_data
-                
+                last_packet_time = current_time  # Update packet timestamp
+
                 # Send to Stage Kit if connected
                 if stage_kit.connected:
                     success = stage_kit.send_command(left_weight, right_weight)
-                    if not success:
+                    if success:
+                        lights_are_active = True
+                    else:
                         print("⚠ Failed to send command - Stage Kit disconnected?")
                 else:
                     debug_print("Stage Kit not connected - ignoring command")
-                    # If NO packet was received, do garbage collection now
-                    # This ensures the pause happens when nothing is happening
-                    gc.collect()
-            
-            # Small delay to prevent CPU spinning
-            time.sleep(0.001)  # 1ms
+            # Smarter garbage collection: run when memory low OR idle for 10s (between songs)
+            should_gc = False
+            if gc.mem_free() < GC_MEMORY_THRESHOLD:
+                should_gc = True  # Memory pressure
+            elif current_time - last_gc_time > GC_INTERVAL:
+                should_gc = True  # Periodic maintenance
+            elif current_time - last_packet_time > GC_INTERVAL and not lights_are_active:
+                should_gc = True  # Idle for 10s between songs
 
-    # Turn off lights if no data is being recieved
-    current_time = time.monotonic()
-    if current_time - last_packet_time > 5.0 and lights_are_active:
-        print("No data received for 5s - Safety clearing lights")
-        stage_kit.send_command(0x00, SK_ALL_OFF)
-        lights_are_active = False
-    
+            if should_gc:
+                gc.collect()
+                last_gc_time = current_time
+
+            # Safety timeout - turn off lights if no data received
+            if lights_are_active and (current_time - last_packet_time > SAFETY_TIMEOUT):
+                print("⚠ No data received for 5s - Safety clearing lights")
+                if stage_kit.connected:
+                    stage_kit.send_command(0x00, SK_ALL_OFF)
+                lights_are_active = False
+
+            # Adaptive loop delay: faster when active, slower when idle
+            if packet_data:
+                time.sleep(LOOP_DELAY_ACTIVE)  # 0.1ms = 10x faster response
+            else:
+                time.sleep(LOOP_DELAY_IDLE)  # 1ms = energy efficient
+
     except KeyboardInterrupt:
         print("\n\nShutting down...")
         network.print_stats()
-        
+
         # Turn off all lights
         if stage_kit.connected:
             print("Turning off Stage Kit lights...")
             stage_kit.send_command(0x00, SK_ALL_OFF)
-        
+
         heartbeat_led.value = False
         heartbeat_led.deinit()
         print("Goodbye!")

@@ -4,17 +4,16 @@ This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges t
 
 ## 📂 Project Structure
 
-The project consists of three main components:
+The project consists of ttwo main components:
 
-1.  **Unified Dashboard (`dashboard.py`):** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
-2.  **Pico W Firmware (`circuitpython_stagekit.py`):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
-3.  **Simple Dashboard (`simple_stagekit_dashboard.py`):** A lightweight alternative dashboard focused solely on lighting control and debugging network packets.
+1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
+2.  **Pico W Firmware (Stagekit folder):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit (Santroller/Fatsco) into a wireless, networked UDP device.
 
 ---
 
 ## 🌟 Features
 
-### 🖥️ Unified Dashboard
+### 🖥️ Dashboard
 * **Video Sync:** Automatically searches for and plays official music videos (via YouTube/VLC) synced perfectly to your gameplay. Features intelligent filtering to avoid covers/tutorials.
 * **Song Library:** Browse your currently loaded RB3E song list directly on your PC, complete with album art fetched from Last.fm.
 * **Stats & History:** Tracks session playtime, song history, and all-time top statistics. Exportable to CSV/JSON.
@@ -28,6 +27,11 @@ The project consists of three main components:
 * **UDP Protocol:** Listens for RB3E game events over WiFi on port `21070`.
 * **Telemetry:** Broadcasts device health (WiFi signal, Connection status) back to the dashboard on port `21071`.
 * **Fail-safes:** Auto-shutoff for lights/fog if network data stops to prevent "stuck" states.
+* **Performance Optimizations:**
+    * **Real-Time Response:** UDP queue draining ensures lights respond to the newest commands instantly, eliminating lag
+    * **Watchdog Timer:** Automatic recovery from freezes caused by electrical noise or glitches (8-second timeout)
+    * **High Performance WiFi:** Reduced packet latency by disabling power-saving modes
+    * **Secure Configuration:** WiFi credentials stored in `settings.toml` instead of hardcoded in firmware
 
 ---
 
@@ -46,16 +50,15 @@ This firmware turns a Raspberry Pi Pico W into a wireless receiver for your Stag
     * Download the latest CircuitPython `.uf2` for Pico W from [circuitpython.org](https://circuitpython.org).
     * Hold the `BOOTSEL` button on the Pico while plugging it into your PC.
     * Drag the `.uf2` file onto the `RPI-RP2` drive. The device will reboot as `CIRCUITPY`.
-2.  **Configure Firmware:**
-    * Open `circuitpython_stagekit.py` from this repo in a text editor.
-    * Locate the WiFi configuration section near the top:
-        ```python
-        WIFI_SSID = "YOUR_NETWORK_NAME"
-        WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
+2.  **Configure WiFi (Recommended Method):**
+    * Copy `settings.toml.example` from this repo to the root of the `CIRCUITPY` drive.
+    * Rename it to `settings.toml`.
+    * Edit `settings.toml` with your WiFi credentials:
+        ```toml
+        CIRCUITPY_WIFI_SSID = "YOUR_NETWORK_NAME"
+        CIRCUITPY_WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
         ```
-    * Update these with your 2.4GHz WiFi credentials.
 3.  **Flash Code:**
-    * Rename your edited file to `code.py`.
     * Copy `code.py` to the root of the `CIRCUITPY` drive.
 4.  **Connect:**
     * Plug the Stage Kit into the Pico using the OTG cable.
