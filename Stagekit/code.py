@@ -508,6 +508,24 @@ def main():
         print("  Edit code.py and update WIFI_SSID and WIFI_PASSWORD")
         return
 
+    # Auto-calulate broadcast address
+    try:
+        # Get the IP and Subnet Mask from the radio
+        ip = wifi.radio.ipv4_address
+        mask = wifi.radio.ipv4_subnet
+        
+        # Create a network object (strict=False allows using the host IP to define the network)
+        # This calculates the broadcast address for this specific subnet (e.g., 192.168.1.255)
+        network_info = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+        
+        # Update the global DASHBOARD_IP variable to use this new specific broadcast address
+        global DASHBOARD_IP
+        DASHBOARD_IP = str(network_info.broadcast_address)
+        
+        print(f"✓ Auto-configured Broadcast IP: {DASHBOARD_IP}")
+    except Exception as e:
+        print(f"⚠ Could not calculate broadcast IP, using default: {e}")
+    
     # Initialize Stage Kit controller
     stage_kit = StageKitController()
 
