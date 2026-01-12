@@ -540,11 +540,19 @@ def main():
             network.pool.SOCK_DGRAM
         )
         # Enable broadcast mode - this is critical for UDP broadcasts to work!
-        telemetry_socket.setsockopt(
-            network.pool.SOL_SOCKET,
-            network.pool.SO_BROADCAST,
-            1
-        )
+        # Try to set SO_BROADCAST if available (CircuitPython may not support this)
+        try:
+            # Standard socket constants (may not exist in CircuitPython)
+            SOL_SOCKET = 1
+            SO_BROADCAST = 6
+            telemetry_socket.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
+            print(f"✓ SO_BROADCAST enabled")
+        except (AttributeError, OSError, NotImplementedError) as e:
+            # CircuitPython may not support setsockopt or broadcasting
+            # Some implementations allow broadcast by default for UDP
+            print(f"  Note: setsockopt not available ({e})")
+            print(f"  Attempting broadcast without SO_BROADCAST flag...")
+
         print(f"✓ Telemetry socket ready (broadcasting to {DASHBOARD_IP}:{DASHBOARD_PORT})")
     except Exception as e:
         print(f"⚠ Telemetry socket setup failed: {e}")
