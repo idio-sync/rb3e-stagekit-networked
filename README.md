@@ -15,7 +15,7 @@ The project consists of ttwo main components:
 
 ### 🖥️ Dashboard
 * **Video Sync:** Automatically searches for and plays official music videos (via YouTube/VLC) synced to your gameplay. Features intelligent filtering to match songs reasonably well.
-* **Song Library:** Browse your RB3E song list directly on your PC, complete with album art fetched from Last.fm.
+* **Song Library:** Browse your RB3E song list directly on your PC, complete with album art fetched from Last.fm. Click to jump to song in RB3E song list.
 * **Stats & History:** Tracks session playtime, song history, and all-time top statistics. Exportable to CSV/JSON.
 * **Social Integration:**
     * **Discord Rich Presence:** Displays your current song, artist, and elapsed time on your Discord profile.
@@ -43,7 +43,7 @@ This firmware turns a Raspberry Pi Pico W into a wireless receiver for your Stag
 * **Connectivity:** USB OTG Cable (Micro-USB to Micro-USB) to connect the Pico to the Stage Kit.
 * **Power:** A generic 5V 2A USB power bank or wall adapter for the Pico connected to.
 
-### Hardware Preperation
+### Pico Hardware Preperation
 ## Method 1: The "Pass-Through" (Low Current)
 In this configuration, power is injected into the Pico's GPIO pins, flows through the PCB traces, and out the USB port to the Stage Kit device.
 
@@ -54,7 +54,7 @@ In this configuration, power is injected into the Pico's GPIO pins, flows throug
 1.  **5V Source (+):** Connect to **Pin 40 (VBUS)**.
 2.  **Ground (-):** Connect to **Pin 38 (GND)**.
 3.  **Stability:** Solder a **470µF - 1000µF Capacitor** across Pin 40 & GND (Crucial for WiFi stability).
-4.  **Connection:** Plug USB OTG adapter into Pico Micro-USB port; plug device into adapter.
+4.  **Connection:** Plug USB OTG adapter into Pico Micro-USB port; plug stage kit device into adapter.
 
 ### ⚠️ Limits
 * **Max Current:** ~1.2A total (Device + Pico W).
@@ -63,10 +63,11 @@ In this configuration, power is injected into the Pico's GPIO pins, flows throug
 In this configuration, power is split *before* the Pico. The stage kit device draws current directly from the PSU, bypassing the Pico.
 
 ### Wiring Diagram
-          /-> `[USB Device Power]` (High Current)
-`[PSU 5V]`
-          \-> `[Pico Pin 40 / VBUS]` (Low Current Logic)
-
+```
+         /-> `[USB Device Power]` (High Current)
+[PSU 5V]
+         \-> [Pico Power] (Low Current)
+```
 ### Instructions
 **Option A: Commercial Cable**
 * Buy a **"Micro USB OTG Y-Cable with Power"**.
@@ -209,7 +210,7 @@ Ensure your firewall allows UDP traffic on the following ports:
 ## 🧩 Troubleshooting
 
 **Dashboard won't start?**
-* Try the pre-built executable from the [Releases page](../../releases/latest) - no Python required.
+* Try the pre-built executable from the [Releases page](../../releases/latest) with Python and dependancies already included.
 * If running from source, ensure you have Python 3.8 or newer installed.
 * If dependencies fail to install automatically, run:
     ```bash
@@ -233,9 +234,10 @@ Ensure your firewall allows UDP traffic on the following ports:
 
 ## 📄 License & Credits
 
-* **Lighting Logic & Fork:** [TheFatBastid](https://github.com/TheFatBastid/StageKitPied)
+* **Lighting Hardware & StageKitPied Fork:** [TheFatBastid](https://github.com/TheFatBastid/StageKitPied)
 * **Original StageKitPied:** [Blasteroids](https://github.com/Blasteroids/StageKitPied)
 * **RB3Enhanced:** [RB3Enhanced Team](https://github.com/RBEnhanced/RB3Enhanced)
 * **RB3 Deluxe:** [RB3E Deluxe Team](https://github.com/hmxmilohax/Rock-Band-3-Deluxe)
+* **Harmonix** For Rock Band
 
 This project is provided as-is for the Rock Band community.
