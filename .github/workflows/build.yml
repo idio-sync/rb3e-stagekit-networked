@@ -125,7 +125,7 @@ jobs:
           tag_name: latest
           name: Latest Build
           body: |
-            This is an automated build from the latest commit on main.
+            This is an automated build of the dashboard from the latest commit on main. Concurrent version of the Pico firmware is located in the source zip.
 
             ## Downloads
             - **Windows:** RB3E-Dashboard-Windows.exe
