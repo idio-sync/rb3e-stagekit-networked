@@ -70,6 +70,7 @@ SK_ALL_OFF = 0xFF
 
 # Debug Settings
 DEBUG = False  # Keeping disabled reduces response time of lighting
+MOCK_MODE = False  # Set True to test without physical Stage Kit (prints commands instead)
 
 # Timing constants
 HEARTBEAT_INTERVAL = 2.0
@@ -104,11 +105,11 @@ def blink_led(times=3, delay=0.2):
     
     led.deinit()
 
-def send_telemetry(socket, stage_kit_connected, wifi_rssi):
+def send_telemetry(telemetry_socket, stage_kit_connected, wifi_rssi):
     """Broadcasts status to the entire network"""
     # Create a unique ID based on the MAC address so the dashboard can tell Picos apart
     mac_id = get_mac_address()
-    
+
     status = {
         "id": mac_id,
         "name": f"Pico {mac_id[-5:]}", # Friendly name like "Pico ab:12"
@@ -116,14 +117,16 @@ def send_telemetry(socket, stage_kit_connected, wifi_rssi):
         "wifi_signal": wifi_rssi,
         "uptime": time.monotonic()
     }
-    
+
     payload = json.dumps(status).encode('utf-8')
-    
+
     try:
         # Send to broadcast address
-        socket.sendto(payload, (DASHBOARD_IP, DASHBOARD_PORT))
-    except (OSError, RuntimeError):
+        telemetry_socket.sendto(payload, (DASHBOARD_IP, DASHBOARD_PORT))
+        debug_print(f"Telemetry sent: {status}")
+    except (OSError, RuntimeError) as e:
         # Broadcasts can sometimes fail if wifi is busy, safe to ignore
+        debug_print(f"Telemetry send failed: {e}")
         pass
 
 def get_mac_address():
@@ -230,14 +233,18 @@ class StageKitController:
     def send_command(self, left_weight, right_weight):
         """
         Send HID report to Stage Kit
-        
+
         Args:
             left_weight: LED pattern byte (which LEDs 1-8 are on)
             right_weight: Command byte (color/strobe/fog)
         """
+        # MOCK MODE: Print what would be sent instead of sending to hardware
+        if MOCK_MODE:
+            return self._mock_send_command(left_weight, right_weight)
+
         if not self.connected or self.device is None:
             return False
-        
+
         try:
             # Santroller Stage Kit HID report format
             report = bytes([
@@ -246,7 +253,7 @@ class StageKitController:
                 left_weight,  # LED pattern
                 right_weight  # Color/command
             ])
-            
+
             # Send HID OUTPUT report
             # bmRequestType: 0x21 = Host to Device, Class, Interface
             # bRequest: 0x09 = SET_REPORT
@@ -259,9 +266,9 @@ class StageKitController:
                 0,         # wIndex (Interface 0)
                 report     # data
             )
-            
+
             return result == len(report)
-            
+
         except usb.core.USBError as e:
             debug_print(f"USB Error: {e}")
             self.connected = False
@@ -269,6 +276,50 @@ class StageKitController:
         except Exception as e:
             debug_print(f"Error sending command: {e}")
             return False
+
+    def _mock_send_command(self, left_weight, right_weight):
+        """
+        Mock mode: Decode and print what would be sent to the Stage Kit
+        This allows testing without physical hardware
+        """
+        # Decode LED pattern
+        led_pattern = []
+        for i in range(8):
+            if left_weight & (1 << i):
+                led_pattern.append(str(i+1))
+        led_str = ",".join(led_pattern) if led_pattern else "none"
+
+        # Decode right_weight (color/special commands)
+        command_str = "UNKNOWN"
+        if right_weight == SK_FOG_ON:
+            command_str = "🌫️  FOG ON"
+        elif right_weight == SK_FOG_OFF:
+            command_str = "🌫️  FOG OFF"
+        elif right_weight == SK_STROBE_SPEED_1:
+            command_str = "⚡ STROBE SLOW"
+        elif right_weight == SK_STROBE_SPEED_2:
+            command_str = "⚡ STROBE MEDIUM"
+        elif right_weight == SK_STROBE_SPEED_3:
+            command_str = "⚡ STROBE FAST"
+        elif right_weight == SK_STROBE_SPEED_4:
+            command_str = "⚡ STROBE FASTEST"
+        elif right_weight == SK_STROBE_OFF:
+            command_str = "⚡ STROBE OFF"
+        elif right_weight == SK_LED_BLUE:
+            command_str = "💙 BLUE"
+        elif right_weight == SK_LED_GREEN:
+            command_str = "💚 GREEN"
+        elif right_weight == SK_LED_YELLOW:
+            command_str = "💛 YELLOW"
+        elif right_weight == SK_LED_RED:
+            command_str = "❤️  RED"
+        elif right_weight == SK_ALL_OFF:
+            command_str = "⚫ ALL OFF"
+        else:
+            command_str = f"0x{right_weight:02x}"
+
+        print(f"[MOCK] LEDs:[{led_str}] CMD:{command_str} (L=0x{left_weight:02x} R=0x{right_weight:02x})")
+        return True
     
     def test_lights(self):
         """Test all Stage Kit colors"""
@@ -460,9 +511,16 @@ def main():
     # Initialize Stage Kit controller
     stage_kit = StageKitController()
 
-    if not stage_kit.find_and_connect():
+    if MOCK_MODE:
+        print("\n*** MOCK MODE ENABLED ***")
+        print("  Commands will be printed to console instead of sent to hardware")
+        print("  Stage Kit USB connection is not required")
+        # In mock mode, pretend we're always connected
+        stage_kit.connected = True
+    elif not stage_kit.find_and_connect():
         print("\n⚠ Stage Kit not found - will retry periodically")
         print("  Program will continue listening for packets")
+        print("  Tip: Enable MOCK_MODE in code.py to test without hardware")
     else:
         # Test lights on successful connection
         stage_kit.test_lights()
@@ -474,8 +532,37 @@ def main():
         print("\n✗ Cannot continue without network listener")
         return
 
+    # Create dedicated socket for telemetry broadcasts
+    print("\nSetting up telemetry broadcast...")
+    try:
+        telemetry_socket = network.pool.socket(
+            network.pool.AF_INET,
+            network.pool.SOCK_DGRAM
+        )
+        # Enable broadcast mode - this is critical for UDP broadcasts to work!
+        # Try to set SO_BROADCAST if available (CircuitPython may not support this)
+        try:
+            # Standard socket constants (may not exist in CircuitPython)
+            SOL_SOCKET = 1
+            SO_BROADCAST = 6
+            telemetry_socket.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
+            print(f"✓ SO_BROADCAST enabled")
+        except (AttributeError, OSError, NotImplementedError) as e:
+            # CircuitPython may not support setsockopt or broadcasting
+            # Some implementations allow broadcast by default for UDP
+            print(f"  Note: setsockopt not available ({e})")
+            print(f"  Attempting broadcast without SO_BROADCAST flag...")
+
+        print(f"✓ Telemetry socket ready (broadcasting to {DASHBOARD_IP}:{DASHBOARD_PORT})")
+    except Exception as e:
+        print(f"⚠ Telemetry socket setup failed: {e}")
+        print("  Telemetry broadcasts may not work")
+        telemetry_socket = None
+
     print("\n" + "="*50)
     print("Ready! Waiting for lighting commands...")
+    if MOCK_MODE:
+        print("*** MOCK MODE ENABLED - Commands will be printed, not sent to hardware ***")
     print("="*50)
     print("Press Ctrl+C to stop\n")
 
@@ -563,15 +650,15 @@ def main():
                     current_telemetry = (stage_kit.connected, rssi)
 
                     # Only send if values changed (reduces CPU/network overhead)
-                    if current_telemetry != last_telemetry_values:
-                        send_telemetry(network.socket, stage_kit.connected, rssi)
+                    if current_telemetry != last_telemetry_values and telemetry_socket:
+                        send_telemetry(telemetry_socket, stage_kit.connected, rssi)
                         last_telemetry_values = current_telemetry
                 except (OSError, RuntimeError, AttributeError):
                     pass  # WiFi might be transitioning
                 last_telemetry_time = current_time
 
-            # Try to reconnect Stage Kit if disconnected
-            if not stage_kit.connected:
+            # Try to reconnect Stage Kit if disconnected (skip in MOCK_MODE)
+            if not stage_kit.connected and not MOCK_MODE:
                 if current_time - last_reconnect_attempt > RECONNECT_INTERVAL:
                     debug_print("Attempting to reconnect Stage Kit...")
                     stage_kit.find_and_connect()
