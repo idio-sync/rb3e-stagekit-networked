@@ -105,8 +105,8 @@ def blink_led(times=3, delay=0.2):
     
     led.deinit()
 
-def send_telemetry(telemetry_socket, stage_kit_connected, wifi_rssi):
-    """Broadcasts status to the entire network"""
+def send_telemetry(telemetry_socket, stage_kit_connected, wifi_rssi, target_ip=None):
+    """Sends status to the dashboard (unicast if discovered, broadcast as fallback)"""
     # Create a unique ID based on the MAC address so the dashboard can tell Picos apart
     mac_id = get_mac_address()
 
@@ -120,10 +120,12 @@ def send_telemetry(telemetry_socket, stage_kit_connected, wifi_rssi):
 
     payload = json.dumps(status).encode('utf-8')
 
+    # Use discovered dashboard IP (unicast) or fall back to broadcast
+    dest_ip = target_ip if target_ip else DASHBOARD_IP
+
     try:
-        # Send to broadcast address
-        telemetry_socket.sendto(payload, (DASHBOARD_IP, DASHBOARD_PORT))
-        debug_print(f"Telemetry sent: {status}")
+        telemetry_socket.sendto(payload, (dest_ip, DASHBOARD_PORT))
+        debug_print(f"Telemetry sent to {dest_ip}: {status}")
     except (OSError, RuntimeError) as e:
         # Broadcasts can sometimes fail if wifi is busy, safe to ignore
         debug_print(f"Telemetry send failed: {e}")
@@ -577,6 +579,24 @@ def main():
         print("  Telemetry broadcasts may not work")
         telemetry_socket = None
 
+    # Create discovery listener socket on same port (21071)
+    # This allows the dashboard to send discovery packets that tell us its IP
+    discovery_socket = None
+    discovered_dashboard_ip = None
+    print("\nSetting up discovery listener...")
+    try:
+        discovery_socket = network.pool.socket(
+            network.pool.AF_INET,
+            network.pool.SOCK_DGRAM
+        )
+        discovery_socket.bind(('0.0.0.0', DASHBOARD_PORT))
+        discovery_socket.setblocking(False)
+        print(f"✓ Discovery listener ready on port {DASHBOARD_PORT}")
+    except Exception as e:
+        print(f"⚠ Discovery socket setup failed: {e}")
+        print("  Will use broadcast-only mode for telemetry")
+        discovery_socket = None
+
     print("\n" + "="*50)
     print("Ready! Waiting for lighting commands...")
     if MOCK_MODE:
@@ -647,6 +667,23 @@ def main():
                 network.start()
                 continue
 
+            # Check for discovery packets from dashboard (non-blocking)
+            if discovery_socket:
+                try:
+                    disc_data, disc_addr = discovery_socket.recvfrom(256)
+                    # Parse discovery packet
+                    try:
+                        disc_msg = json.loads(disc_data.decode())
+                        if disc_msg.get('type') == 'discovery':
+                            new_ip = disc_addr[0]
+                            if new_ip != discovered_dashboard_ip:
+                                discovered_dashboard_ip = new_ip
+                                print(f"✓ Dashboard discovered at {discovered_dashboard_ip}")
+                    except (ValueError, KeyError):
+                        pass  # Not a valid discovery packet
+                except OSError:
+                    pass  # No data available (non-blocking)
+
             # Heartbeat LED (blink every HEARTBEAT_INTERVAL seconds to show it's alive)
             if current_time - last_status_print > HEARTBEAT_INTERVAL:
                 heartbeat_led.value = led_state
@@ -662,7 +699,7 @@ def main():
                 try:
                     rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
                     if telemetry_socket:
-                        send_telemetry(telemetry_socket, stage_kit.connected, rssi)
+                        send_telemetry(telemetry_socket, stage_kit.connected, rssi, discovered_dashboard_ip)
                 except (OSError, RuntimeError, AttributeError):
                     pass  # WiFi might be transitioning
                 last_telemetry_time = current_time

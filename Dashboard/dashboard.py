@@ -3616,14 +3616,29 @@ class RB3Dashboard:
         self.send_stagekit_cmd(left_pattern, self.selected_color.get())
 
     def listen_telemetry(self):
-        """Listen for Pico telemetry broadcasts"""
+        """Listen for Pico telemetry broadcasts and send discovery packets"""
+        last_discovery_time = 0
+        discovery_interval = 5.0  # Send discovery every 5 seconds
+        discovery_packet = json.dumps({"type": "discovery"}).encode('utf-8')
+
         while self.is_running:
             try:
                 data, addr = self.sock_telemetry.recvfrom(1024)
                 ip = addr[0]
                 status = json.loads(data.decode())
+                # Ignore discovery packets (we only care about telemetry)
+                if status.get('type') == 'discovery':
+                    continue
                 self.root.after(0, self.update_pico_device, ip, status)
             except socket.timeout:
+                # On timeout, check if we should send discovery broadcast
+                now = time.time()
+                if now - last_discovery_time > discovery_interval:
+                    try:
+                        self.sock_telemetry.sendto(discovery_packet, ("255.255.255.255", TELEMETRY_PORT))
+                    except Exception:
+                        pass  # Ignore send errors
+                    last_discovery_time = now
                 continue
             except Exception:
                 pass
