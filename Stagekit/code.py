@@ -644,6 +644,40 @@ def main():
                 if connect_wifi():
                     # Restart network listener after WiFi reconnect
                     network.start()
+
+                    # Recreate telemetry socket with new pool
+                    try:
+                        telemetry_socket = network.pool.socket(
+                            network.pool.AF_INET,
+                            network.pool.SOCK_DGRAM
+                        )
+                        try:
+                            SOL_SOCKET = 1
+                            SO_BROADCAST = 6
+                            telemetry_socket.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
+                        except (AttributeError, OSError, NotImplementedError):
+                            pass
+                        print("✓ Telemetry socket recreated")
+                    except Exception as e:
+                        print(f"⚠ Telemetry socket recreation failed: {e}")
+                        telemetry_socket = None
+
+                    # Recreate discovery socket with new pool
+                    try:
+                        discovery_socket = network.pool.socket(
+                            network.pool.AF_INET,
+                            network.pool.SOCK_DGRAM
+                        )
+                        discovery_socket.bind(('0.0.0.0', DASHBOARD_PORT))
+                        discovery_socket.setblocking(False)
+                        print("✓ Discovery socket recreated")
+                    except Exception as e:
+                        print(f"⚠ Discovery socket recreation failed: {e}")
+                        discovery_socket = None
+
+                    # Reset discovered dashboard IP - will be rediscovered
+                    discovered_dashboard_ip = None
+
                     heartbeat_led = digitalio.DigitalInOut(board.LED)
                     heartbeat_led.direction = digitalio.Direction.OUTPUT
                     last_telemetry_time = current_time
