@@ -3905,12 +3905,14 @@ class RB3Dashboard:
             self.listener_thread.daemon = True
             self.listener_thread.start()
 
+            # Set is_running BEFORE starting telemetry thread to avoid race condition
+            self.is_running = True
+
             # Start telemetry listener for Picos
             self.telemetry_thread = threading.Thread(target=self.listen_telemetry)
             self.telemetry_thread.daemon = True
             self.telemetry_thread.start()
 
-            self.is_running = True
             self.status_label.config(text="Listening", foreground='green')
 
             # Start device cleanup
