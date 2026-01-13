@@ -365,30 +365,38 @@ class NetworkHandler:
         self.packets_received = 0
         self.packets_processed = 0
         self.errors = 0
-        
+
     def start(self):
         """Start UDP listener"""
         print(f"\nStarting UDP listener on port {self.port}...")
-        
+
+        # Close existing socket if any (prevents resource leak on reconnect)
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
+
         try:
             self.pool = socketpool.SocketPool(wifi.radio)
             self.socket = self.pool.socket(
                 self.pool.AF_INET,
                 self.pool.SOCK_DGRAM
             )
-            
+
             # Bind to all interfaces
             self.socket.bind(('0.0.0.0', self.port))
-            
+
             # Set non-blocking
             self.socket.setblocking(False)
-            
+
             print(f"✓ UDP listener ready")
             print(f"  Port: {self.port}")
             print(f"  Waiting for RB3Enhanced packets...")
-            
+
             return True
-            
+
         except Exception as e:
             print(f"✗ Failed to start UDP listener: {e}")
             return False
@@ -759,14 +767,13 @@ def main():
                         print("⚠ Failed to send command - Stage Kit disconnected?")
                 else:
                     debug_print("Stage Kit not connected - ignoring command")
-            # Smarter garbage collection: run when memory low OR idle for 10s (between songs)
+            # Garbage collection: only when memory is low OR between songs (idle)
+            # Avoids GC stutter during active lighting
             should_gc = False
             if gc.mem_free() < GC_MEMORY_THRESHOLD:
-                should_gc = True  # Memory pressure
-            elif current_time - last_gc_time > GC_INTERVAL:
-                should_gc = True  # Periodic maintenance
+                should_gc = True  # Memory critically low - must collect
             elif current_time - last_packet_time > GC_INTERVAL and not lights_are_active:
-                should_gc = True  # Idle for 10s between songs
+                should_gc = True  # Idle for 10s between songs - safe to collect
 
             if should_gc:
                 gc.collect()
