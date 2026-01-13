@@ -3649,7 +3649,7 @@ class RB3Dashboard:
         now = time.time()
         items_to_remove = []
         for ip, info in self.devices.items():
-            if now - info['last_seen'] > 5.0:
+            if now - info['last_seen'] > 10.0:
                 self.pico_tree.set(ip, "status", "OFFLINE")
             if now - info['last_seen'] > 30.0:
                 items_to_remove.append(ip)

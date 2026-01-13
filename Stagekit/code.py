@@ -74,7 +74,7 @@ MOCK_MODE = False  # Set True to test without physical Stage Kit (prints command
 
 # Timing constants
 HEARTBEAT_INTERVAL = 2.0
-TELEMETRY_INTERVAL = 2.0  # Reduced overhead: 2s instead of 1s
+TELEMETRY_INTERVAL = 5.0  # Send status every 5s (dashboard marks offline after 10s)
 RECONNECT_INTERVAL = 5.0
 SAFETY_TIMEOUT = 5.0
 GC_INTERVAL = 10.0  # Also run GC after 10s of no packets (between songs)
@@ -600,9 +600,6 @@ def main():
     last_gc_time = time.monotonic()
     lights_are_active = False
 
-    # Telemetry optimization: track last values to only send when changed
-    last_telemetry_values = None
-
     led_state = False
     heartbeat_led = digitalio.DigitalInOut(board.LED)
     heartbeat_led.direction = digitalio.Direction.OUTPUT
@@ -660,17 +657,12 @@ def main():
                 if DEBUG:
                     network.print_stats()
 
-            # Dashboard telemetry (reduced overhead: only send when values change or every 2s)
+            # Dashboard telemetry - always send every interval as heartbeat
             if current_time - last_telemetry_time > TELEMETRY_INTERVAL:
-                # Safe WiFi access with error handling
                 try:
                     rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
-                    current_telemetry = (stage_kit.connected, rssi)
-
-                    # Only send if values changed (reduces CPU/network overhead)
-                    if current_telemetry != last_telemetry_values and telemetry_socket:
+                    if telemetry_socket:
                         send_telemetry(telemetry_socket, stage_kit.connected, rssi)
-                        last_telemetry_values = current_telemetry
                 except (OSError, RuntimeError, AttributeError):
                     pass  # WiFi might be transitioning
                 last_telemetry_time = current_time
