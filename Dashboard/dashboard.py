@@ -3616,14 +3616,49 @@ class RB3Dashboard:
         self.send_stagekit_cmd(left_pattern, self.selected_color.get())
 
     def listen_telemetry(self):
-        """Listen for Pico telemetry broadcasts"""
+        """Listen for Pico telemetry broadcasts and send discovery packets"""
+        last_discovery_time = 0
+        discovery_interval = 5.0  # Send discovery every 5 seconds
+        discovery_packet = json.dumps({"type": "discovery"}).encode('utf-8')
+
+        # Calculate subnet broadcast address for more reliable discovery on multi-NIC systems
+        subnet_broadcast = None
+        try:
+            # Get local IP by creating a dummy connection (doesn't actually send data)
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            # Calculate subnet broadcast (assumes /24, e.g., 192.168.1.50 -> 192.168.1.255)
+            subnet_broadcast = local_ip.rsplit('.', 1)[0] + '.255'
+        except Exception:
+            pass  # Fall back to global broadcast only
+
         while self.is_running:
             try:
                 data, addr = self.sock_telemetry.recvfrom(1024)
                 ip = addr[0]
                 status = json.loads(data.decode())
+                # Ignore discovery packets (we only care about telemetry)
+                if status.get('type') == 'discovery':
+                    continue
                 self.root.after(0, self.update_pico_device, ip, status)
             except socket.timeout:
+                # On timeout, check if we should send discovery broadcast
+                now = time.time()
+                if now - last_discovery_time > discovery_interval:
+                    # Send to global broadcast
+                    try:
+                        self.sock_telemetry.sendto(discovery_packet, ("255.255.255.255", TELEMETRY_PORT))
+                    except Exception:
+                        pass
+                    # Also send to subnet broadcast for better multi-NIC compatibility
+                    if subnet_broadcast:
+                        try:
+                            self.sock_telemetry.sendto(discovery_packet, (subnet_broadcast, TELEMETRY_PORT))
+                        except Exception:
+                            pass
+                    last_discovery_time = now
                 continue
             except Exception:
                 pass
@@ -3649,7 +3684,7 @@ class RB3Dashboard:
         now = time.time()
         items_to_remove = []
         for ip, info in self.devices.items():
-            if now - info['last_seen'] > 5.0:
+            if now - info['last_seen'] > 10.0:
                 self.pico_tree.set(ip, "status", "OFFLINE")
             if now - info['last_seen'] > 30.0:
                 items_to_remove.append(ip)

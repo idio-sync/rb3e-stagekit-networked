@@ -74,7 +74,7 @@ MOCK_MODE = False  # Set True to test without physical Stage Kit (prints command
 
 # Timing constants
 HEARTBEAT_INTERVAL = 2.0
-TELEMETRY_INTERVAL = 2.0  # Reduced overhead: 2s instead of 1s
+TELEMETRY_INTERVAL = 5.0  # Send status every 5s (dashboard marks offline after 10s)
 RECONNECT_INTERVAL = 5.0
 SAFETY_TIMEOUT = 5.0
 GC_INTERVAL = 10.0  # Also run GC after 10s of no packets (between songs)
@@ -105,8 +105,8 @@ def blink_led(times=3, delay=0.2):
     
     led.deinit()
 
-def send_telemetry(telemetry_socket, stage_kit_connected, wifi_rssi):
-    """Broadcasts status to the entire network"""
+def send_telemetry(telemetry_socket, stage_kit_connected, wifi_rssi, target_ip=None):
+    """Sends status to the dashboard (unicast if discovered, broadcast as fallback)"""
     # Create a unique ID based on the MAC address so the dashboard can tell Picos apart
     mac_id = get_mac_address()
 
@@ -120,10 +120,12 @@ def send_telemetry(telemetry_socket, stage_kit_connected, wifi_rssi):
 
     payload = json.dumps(status).encode('utf-8')
 
+    # Use discovered dashboard IP (unicast) or fall back to broadcast
+    dest_ip = target_ip if target_ip else DASHBOARD_IP
+
     try:
-        # Send to broadcast address
-        telemetry_socket.sendto(payload, (DASHBOARD_IP, DASHBOARD_PORT))
-        debug_print(f"Telemetry sent: {status}")
+        telemetry_socket.sendto(payload, (dest_ip, DASHBOARD_PORT))
+        debug_print(f"Telemetry sent to {dest_ip}: {status}")
     except (OSError, RuntimeError) as e:
         # Broadcasts can sometimes fail if wifi is busy, safe to ignore
         debug_print(f"Telemetry send failed: {e}")
@@ -363,30 +365,38 @@ class NetworkHandler:
         self.packets_received = 0
         self.packets_processed = 0
         self.errors = 0
-        
+
     def start(self):
         """Start UDP listener"""
         print(f"\nStarting UDP listener on port {self.port}...")
-        
+
+        # Close existing socket if any (prevents resource leak on reconnect)
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
+
         try:
             self.pool = socketpool.SocketPool(wifi.radio)
             self.socket = self.pool.socket(
                 self.pool.AF_INET,
                 self.pool.SOCK_DGRAM
             )
-            
+
             # Bind to all interfaces
             self.socket.bind(('0.0.0.0', self.port))
-            
+
             # Set non-blocking
             self.socket.setblocking(False)
-            
+
             print(f"✓ UDP listener ready")
             print(f"  Port: {self.port}")
             print(f"  Waiting for RB3Enhanced packets...")
-            
+
             return True
-            
+
         except Exception as e:
             print(f"✗ Failed to start UDP listener: {e}")
             return False
@@ -577,6 +587,24 @@ def main():
         print("  Telemetry broadcasts may not work")
         telemetry_socket = None
 
+    # Create discovery listener socket on same port (21071)
+    # This allows the dashboard to send discovery packets that tell us its IP
+    discovery_socket = None
+    discovered_dashboard_ip = None
+    print("\nSetting up discovery listener...")
+    try:
+        discovery_socket = network.pool.socket(
+            network.pool.AF_INET,
+            network.pool.SOCK_DGRAM
+        )
+        discovery_socket.bind(('0.0.0.0', DASHBOARD_PORT))
+        discovery_socket.setblocking(False)
+        print(f"✓ Discovery listener ready on port {DASHBOARD_PORT}")
+    except Exception as e:
+        print(f"⚠ Discovery socket setup failed: {e}")
+        print("  Will use broadcast-only mode for telemetry")
+        discovery_socket = None
+
     print("\n" + "="*50)
     print("Ready! Waiting for lighting commands...")
     if MOCK_MODE:
@@ -599,9 +627,6 @@ def main():
     last_packet_time = time.monotonic()
     last_gc_time = time.monotonic()
     lights_are_active = False
-
-    # Telemetry optimization: track last values to only send when changed
-    last_telemetry_values = None
 
     led_state = False
     heartbeat_led = digitalio.DigitalInOut(board.LED)
@@ -627,6 +652,40 @@ def main():
                 if connect_wifi():
                     # Restart network listener after WiFi reconnect
                     network.start()
+
+                    # Recreate telemetry socket with new pool
+                    try:
+                        telemetry_socket = network.pool.socket(
+                            network.pool.AF_INET,
+                            network.pool.SOCK_DGRAM
+                        )
+                        try:
+                            SOL_SOCKET = 1
+                            SO_BROADCAST = 6
+                            telemetry_socket.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
+                        except (AttributeError, OSError, NotImplementedError):
+                            pass
+                        print("✓ Telemetry socket recreated")
+                    except Exception as e:
+                        print(f"⚠ Telemetry socket recreation failed: {e}")
+                        telemetry_socket = None
+
+                    # Recreate discovery socket with new pool
+                    try:
+                        discovery_socket = network.pool.socket(
+                            network.pool.AF_INET,
+                            network.pool.SOCK_DGRAM
+                        )
+                        discovery_socket.bind(('0.0.0.0', DASHBOARD_PORT))
+                        discovery_socket.setblocking(False)
+                        print("✓ Discovery socket recreated")
+                    except Exception as e:
+                        print(f"⚠ Discovery socket recreation failed: {e}")
+                        discovery_socket = None
+
+                    # Reset discovered dashboard IP - will be rediscovered
+                    discovered_dashboard_ip = None
+
                     heartbeat_led = digitalio.DigitalInOut(board.LED)
                     heartbeat_led.direction = digitalio.Direction.OUTPUT
                     last_telemetry_time = current_time
@@ -650,6 +709,23 @@ def main():
                 network.start()
                 continue
 
+            # Check for discovery packets from dashboard (non-blocking)
+            if discovery_socket:
+                try:
+                    disc_data, disc_addr = discovery_socket.recvfrom(256)
+                    # Parse discovery packet
+                    try:
+                        disc_msg = json.loads(disc_data.decode())
+                        if disc_msg.get('type') == 'discovery':
+                            new_ip = disc_addr[0]
+                            if new_ip != discovered_dashboard_ip:
+                                discovered_dashboard_ip = new_ip
+                                print(f"✓ Dashboard discovered at {discovered_dashboard_ip}")
+                    except (ValueError, KeyError):
+                        pass  # Not a valid discovery packet
+                except OSError:
+                    pass  # No data available (non-blocking)
+
             # Heartbeat LED (blink every HEARTBEAT_INTERVAL seconds to show it's alive)
             if current_time - last_status_print > HEARTBEAT_INTERVAL:
                 heartbeat_led.value = led_state
@@ -660,17 +736,12 @@ def main():
                 if DEBUG:
                     network.print_stats()
 
-            # Dashboard telemetry (reduced overhead: only send when values change or every 2s)
+            # Dashboard telemetry - always send every interval as heartbeat
             if current_time - last_telemetry_time > TELEMETRY_INTERVAL:
-                # Safe WiFi access with error handling
                 try:
                     rssi = wifi.radio.ap_info.rssi if wifi.radio.ap_info else 0
-                    current_telemetry = (stage_kit.connected, rssi)
-
-                    # Only send if values changed (reduces CPU/network overhead)
-                    if current_telemetry != last_telemetry_values and telemetry_socket:
-                        send_telemetry(telemetry_socket, stage_kit.connected, rssi)
-                        last_telemetry_values = current_telemetry
+                    if telemetry_socket:
+                        send_telemetry(telemetry_socket, stage_kit.connected, rssi, discovered_dashboard_ip)
                 except (OSError, RuntimeError, AttributeError):
                     pass  # WiFi might be transitioning
                 last_telemetry_time = current_time
@@ -696,14 +767,13 @@ def main():
                         print("⚠ Failed to send command - Stage Kit disconnected?")
                 else:
                     debug_print("Stage Kit not connected - ignoring command")
-            # Smarter garbage collection: run when memory low OR idle for 10s (between songs)
+            # Garbage collection: only when memory is low OR between songs (idle)
+            # Avoids GC stutter during active lighting
             should_gc = False
             if gc.mem_free() < GC_MEMORY_THRESHOLD:
-                should_gc = True  # Memory pressure
-            elif current_time - last_gc_time > GC_INTERVAL:
-                should_gc = True  # Periodic maintenance
+                should_gc = True  # Memory critically low - must collect
             elif current_time - last_packet_time > GC_INTERVAL and not lights_are_active:
-                should_gc = True  # Idle for 10s between songs
+                should_gc = True  # Idle for 10s between songs - safe to collect
 
             if should_gc:
                 gc.collect()
