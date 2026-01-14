@@ -8,6 +8,7 @@
 #include "rb3e_protocol.h"
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
+#include "hardware/watchdog.h"
 #include "lwip/udp.h"
 #include "lwip/pbuf.h"
 #include "lwip/ip_addr.h"
@@ -144,29 +145,56 @@ bool network_connect_wifi(void)
     printf("Network: Connecting to '%s'...\n", wifi_config.ssid);
     net_state = NETWORK_STATE_CONNECTING;
 
-    // Connect to WiFi
-    int result = cyw43_arch_wifi_connect_timeout_ms(
+    // Start async WiFi connection (non-blocking)
+    int result = cyw43_arch_wifi_connect_async(
         wifi_config.ssid,
         wifi_config.password,
-        CYW43_AUTH_WPA2_AES_PSK,
-        WIFI_CONNECT_TIMEOUT_MS
+        CYW43_AUTH_WPA2_AES_PSK
     );
 
     if (result != 0) {
-        printf("Network: WiFi connect failed (err=%d)\n", result);
+        printf("Network: WiFi connect start failed (err=%d)\n", result);
         net_state = NETWORK_STATE_ERROR;
         return false;
     }
 
-    // Get RSSI
-    cyw43_wifi_get_rssi(&cyw43_state, &net_stats.wifi_rssi);
+    // Poll for connection with watchdog updates
+    // This prevents the watchdog from firing during long connects
+    printf("Network: Waiting for connection...\n");
+    absolute_time_t timeout = make_timeout_time_ms(WIFI_CONNECT_TIMEOUT_MS);
 
-    printf("Network: Connected! IP=%s RSSI=%d dBm\n",
-           ip4addr_ntoa(netif_ip4_addr(netif_default)),
-           net_stats.wifi_rssi);
+    while (!time_reached(timeout)) {
+        // Feed the watchdog to prevent reset
+        watchdog_update();
 
-    net_state = NETWORK_STATE_CONNECTED;
-    return true;
+        // Check connection status
+        int status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+
+        if (status == CYW43_LINK_UP) {
+            // Connected successfully!
+            cyw43_wifi_get_rssi(&cyw43_state, &net_stats.wifi_rssi);
+            printf("Network: Connected! IP=%s RSSI=%d dBm\n",
+                   ip4addr_ntoa(netif_ip4_addr(netif_default)),
+                   net_stats.wifi_rssi);
+            net_state = NETWORK_STATE_CONNECTED;
+            return true;
+        } else if (status == CYW43_LINK_FAIL || status == CYW43_LINK_BADAUTH ||
+                   status == CYW43_LINK_NONET) {
+            // Connection failed
+            printf("Network: WiFi connect failed (status=%d)\n", status);
+            net_state = NETWORK_STATE_ERROR;
+            return false;
+        }
+
+        // Still connecting - poll CYW43 and wait a bit
+        cyw43_arch_poll();
+        sleep_ms(100);
+    }
+
+    // Timeout
+    printf("Network: WiFi connect timeout\n");
+    net_state = NETWORK_STATE_ERROR;
+    return false;
 }
 
 bool network_start_listener(stagekit_packet_cb callback)

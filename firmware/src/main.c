@@ -110,26 +110,32 @@ static void heartbeat_led_toggle(void)
 
 int main(void)
 {
-    // Initialize stdio
+    // Initialize stdio FIRST - before anything else
     stdio_init_all();
 
-    // Wait for USB serial to connect (optional, for debugging)
-    sleep_ms(2000);
+    // Short delay for USB enumeration
+    sleep_ms(1000);
 
-    printf("\n");
+    printf("\n\n");
     printf("==================================================\n");
     printf("RB3E StageKit Bridge - Pico W Firmware\n");
+    printf("Build: " __DATE__ " " __TIME__ "\n");
     printf("==================================================\n");
+    printf("DEBUG: stdio initialized\n");
 
     // Initialize CYW43 early for LED support
     // This must happen before any blink_led() calls
-    printf("Initializing CYW43 for LED support...\n");
-    if (cyw43_arch_init()) {
+    printf("DEBUG: About to init CYW43...\n");
+    int cyw43_result = cyw43_arch_init();
+    printf("DEBUG: CYW43 init returned %d\n", cyw43_result);
+    if (cyw43_result) {
         printf("ERROR: CYW43 init failed - LEDs will not work\n");
         // Continue anyway, but LEDs won't function
     } else {
+        printf("DEBUG: CYW43 OK, blinking LED...\n");
         // Quick blink to show we're alive
         blink_led(1, 100);
+        printf("DEBUG: LED blink done\n");
     }
 
     // Initialize watchdog
