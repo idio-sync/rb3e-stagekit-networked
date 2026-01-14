@@ -1,6 +1,6 @@
 # Build Pico SDK firmware (standalone)
 #
-# This workflow builds the C firmware for Pico W and uploads the UF2 artifact.
+# This workflow builds the C firmware for Pico W and Pico 2 W, uploading UF2 artifacts.
 # Use this for testing firmware changes on feature branches.
 # Note: Releases are handled by build.yml which includes both dashboard and firmware.
 
@@ -16,7 +16,17 @@ on:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: pico_w
+            display_name: Pico W
+          - board: pico2_w
+            display_name: Pico 2 W
+
     runs-on: ubuntu-latest
+    name: Build (${{ matrix.display_name }})
 
     steps:
       - name: Checkout repository
@@ -46,7 +56,8 @@ jobs:
           cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_FETCH_FROM_GIT=on
+            -DPICO_SDK_FETCH_FROM_GIT=on \
+            -DPICO_BOARD=${{ matrix.board }}
 
       - name: Build firmware
         working-directory: firmware/build
@@ -57,6 +68,6 @@ jobs:
       - name: Upload UF2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rb3e_stagekit_firmware
+          name: rb3e_stagekit_firmware_${{ matrix.board }}
           path: firmware/build/*.uf2
           if-no-files-found: error

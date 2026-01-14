@@ -78,6 +78,15 @@ jobs:
           retention-days: 30
 
   build-firmware:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: pico_w
+            display_name: Pico W
+          - board: pico2_w
+            display_name: Pico 2 W
+
     runs-on: ubuntu-latest
 
     steps:
@@ -103,7 +112,8 @@ jobs:
           cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_FETCH_FROM_GIT=on
+            -DPICO_SDK_FETCH_FROM_GIT=on \
+            -DPICO_BOARD=${{ matrix.board }}
 
       - name: Build firmware
         working-directory: firmware/build
@@ -113,7 +123,7 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rb3e_stagekit_firmware
+          name: rb3e_stagekit_firmware_${{ matrix.board }}
           path: firmware/build/*.uf2
           if-no-files-found: error
 
@@ -135,7 +145,8 @@ jobs:
             artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
             artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux
             artifacts/RB3E-Dashboard-macOS/RB3E-Dashboard-macOS
-            artifacts/rb3e_stagekit_firmware/*.uf2
+            artifacts/rb3e_stagekit_firmware_pico_w/*.uf2
+            artifacts/rb3e_stagekit_firmware_pico2_w/*.uf2
           generate_release_notes: true
           draft: false
           prerelease: false
@@ -175,7 +186,8 @@ jobs:
             - **macOS:** RB3E-Dashboard-macOS
 
             ### Firmware
-            - **Pico W:** rb3e_stagekit.uf2
+            - **Pico W (RP2040):** rb3e_stagekit_pico_w.uf2
+            - **Pico 2 W (RP2350):** rb3e_stagekit_pico2_w.uf2
 
             ## Requirements
             - VLC Media Player must be installed for video playback
@@ -183,6 +195,7 @@ jobs:
             artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
             artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux
             artifacts/RB3E-Dashboard-macOS/RB3E-Dashboard-macOS
-            artifacts/rb3e_stagekit_firmware/*.uf2
+            artifacts/rb3e_stagekit_firmware_pico_w/*.uf2
+            artifacts/rb3e_stagekit_firmware_pico2_w/*.uf2
           prerelease: false
           draft: false
