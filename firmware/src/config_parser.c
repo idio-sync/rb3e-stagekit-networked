@@ -130,7 +130,9 @@ int config_load_wifi(wifi_config_t *config)
     }
 
     config->valid = 1;
-    printf("Config: Loaded WiFi config for SSID: %s\n", config->ssid);
+    printf("Config: Loaded WiFi config for SSID: '%s' (len=%d)\n",
+           config->ssid, (int)strlen(config->ssid));
+    printf("Config: Password length: %d chars\n", (int)strlen(config->password));
 
     return 0;
 }
