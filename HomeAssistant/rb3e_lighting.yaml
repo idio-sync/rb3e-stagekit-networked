@@ -1,0 +1,33 @@
+alias: "Rock Band 3 Lighting Control"
+trigger:
+  - platform: webhook
+    webhook_id: "rb3_event"
+    local_only: true
+    allowed_methods:
+      - POST
+action:
+  - choose:
+      # Case 1: Game Started (Playing)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.json.type == 'state' and trigger.json.status == 'playing' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: light.your_lights_here
+            data:
+              brightness_pct: 30
+              transition: 2
+
+      # Case 2: Game Ended (Menu)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.json.type == 'state' and trigger.json.status == 'menu' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: light.your_lights_here
+            data:
+              brightness_pct: 100
+              transition: 2
+mode: queued
