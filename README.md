@@ -135,14 +135,6 @@ Then flash the generated `wifi_config.uf2`:
 1.  Hold `BOOTSEL` and plug in the Pico again.
 2.  Drag `wifi_config.uf2` onto the `RPI-RP2` drive.
 
-**Option C: Create settings.toml Manually**
-
-If you have a way to write to the Pico's flash filesystem, create a file at `/settings.toml` with:
-```toml
-CIRCUITPY_WIFI_SSID = "YourNetwork"
-CIRCUITPY_WIFI_PASSWORD = "YourPassword"
-```
-
 #### Step 3: Connect Hardware
 1.  Plug the Stage Kit into the Pico using the OTG cable.
 2.  Power on the Pico.
