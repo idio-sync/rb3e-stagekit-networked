@@ -4,7 +4,7 @@ This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges t
 
 ## 📂 Project Structure
 
-The project consists of ttwo main components:
+The project consists of two main components:
 
 1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
 2.  **Pico W Firmware (Stagekit folder):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit device (only Santroller/Fatsco for now) into a wireless, networked UDP device.
@@ -17,6 +17,7 @@ The project consists of ttwo main components:
 * **Video Sync:** Automatically searches for and plays official music videos (via YouTube/VLC) synced to your gameplay. Features intelligent filtering to match songs reasonably well.
 * **Song Library:** Browse your RB3E song list directly on your PC, complete with album art fetched from Last.fm. Click to jump to song in RB3E song list.
 * **Stats & History:** Tracks session playtime, song history, and all-time top statistics. Exportable to CSV/JSON.
+* **Bridge to Home Assistant:** Allows you to automate your smart home devices—such as dimming lights when a song starts or displaying the current track on a dashboard—based on real-time game events.
 * **Social Integration:**
     * **Discord Rich Presence:** Displays your current song, artist, and elapsed time on your Discord profile.
     * **Last.fm:** Real-time "Now Playing" updates and automatic scrobbling (after 50% or 4 minutes of play).
@@ -179,6 +180,15 @@ To fetch album art and scrobble tracks:
 2.  Create an API account to get an **API Key** and **Shared Secret**.
 3.  Enter these into the Dashboard Settings.
 4.  Click **Authorize Last.fm** to link your user account for scrobbling.
+
+## 3. Home Assistant
+1.  Navigate to the **Settings** tab.
+2.  Locate the **Home Assistant Integration** section in the right column.
+3.  Enter your Home Assistant Webhook URL.
+    * **Format:** `http://<your-ha-ip>:8123/api/webhook/<your_webhook_id>`
+    * **Example:** `http://192.168.1.50:8123/api/webhook/rb3_event`
+4.  Click **Save Settings**. The listener handles the update immediately.
+5.  Create automation using the provided YAML in Home Assistant.
 
 ### 3. Network Ports
 Ensure your firewall allows UDP traffic on the following ports:
