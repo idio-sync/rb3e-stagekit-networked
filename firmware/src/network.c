@@ -22,6 +22,7 @@
 static network_state_t net_state = NETWORK_STATE_DISCONNECTED;
 static network_stats_t net_stats = {0};
 static wifi_config_t wifi_config;
+static wifi_fail_reason_t wifi_fail_reason = WIFI_FAIL_NONE;
 
 // UDP PCBs (Protocol Control Blocks)
 static struct udp_pcb *udp_listener = NULL;
@@ -142,6 +143,7 @@ bool network_connect_wifi(void)
         return true;
     }
 
+    wifi_fail_reason = WIFI_FAIL_NONE;
     printf("Network: Connecting to '%s'...\n", wifi_config.ssid);
     net_state = NETWORK_STATE_CONNECTING;
 
@@ -154,6 +156,7 @@ bool network_connect_wifi(void)
 
     if (result != 0) {
         printf("Network: WiFi connect start failed (err=%d)\n", result);
+        wifi_fail_reason = WIFI_FAIL_GENERAL;
         net_state = NETWORK_STATE_ERROR;
         return false;
     }
@@ -192,19 +195,26 @@ bool network_connect_wifi(void)
 
         if (status == CYW43_LINK_UP) {
             // Connected successfully with IP!
+            wifi_fail_reason = WIFI_FAIL_NONE;
             cyw43_wifi_get_rssi(&cyw43_state, &net_stats.wifi_rssi);
             printf("Network: Connected! IP=%s RSSI=%d dBm\n",
                    ip4addr_ntoa(netif_ip4_addr(netif_default)),
                    net_stats.wifi_rssi);
             net_state = NETWORK_STATE_CONNECTED;
             return true;
-        } else if (status < 0) {
-            // Negative status = error
-            const char *err_str = "unknown";
-            if (status == CYW43_LINK_FAIL) err_str = "LINK_FAIL";
-            else if (status == CYW43_LINK_NONET) err_str = "NONET (SSID not found)";
-            else if (status == CYW43_LINK_BADAUTH) err_str = "BADAUTH (wrong password)";
-            printf("Network: WiFi connect failed: %s (%d)\n", err_str, status);
+        } else if (status == CYW43_LINK_NONET) {
+            printf("Network: WiFi connect failed: SSID not found\n");
+            wifi_fail_reason = WIFI_FAIL_NONET;
+            net_state = NETWORK_STATE_ERROR;
+            return false;
+        } else if (status == CYW43_LINK_BADAUTH) {
+            printf("Network: WiFi connect failed: Wrong password\n");
+            wifi_fail_reason = WIFI_FAIL_BADAUTH;
+            net_state = NETWORK_STATE_ERROR;
+            return false;
+        } else if (status == CYW43_LINK_FAIL) {
+            printf("Network: WiFi connect failed: General failure\n");
+            wifi_fail_reason = WIFI_FAIL_GENERAL;
             net_state = NETWORK_STATE_ERROR;
             return false;
         }
@@ -216,6 +226,7 @@ bool network_connect_wifi(void)
     // Timeout - print final status
     int final_status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
     printf("Network: WiFi connect timeout (final status=%d)\n", final_status);
+    wifi_fail_reason = WIFI_FAIL_TIMEOUT;
     net_state = NETWORK_STATE_ERROR;
     return false;
 }
@@ -377,4 +388,9 @@ char* network_get_mac_string(char *buffer)
              mac_address[0], mac_address[1], mac_address[2],
              mac_address[3], mac_address[4], mac_address[5]);
     return buffer;
+}
+
+wifi_fail_reason_t network_get_wifi_fail_reason(void)
+{
+    return wifi_fail_reason;
 }
