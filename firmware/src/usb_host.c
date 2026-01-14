@@ -160,8 +160,8 @@ bool usb_send_stagekit_command(uint8_t left_weight, uint8_t right_weight)
             .type = TUSB_REQ_TYPE_CLASS,
             .direction = TUSB_DIR_OUT
         },
-        .bRequest = HID_SET_REPORT,
-        .wValue = (HID_REPORT_TYPE_OUTPUT << 8) | 0x00,
+        .bRequest = SK_HID_SET_REPORT,
+        .wValue = (SK_HID_REPORT_TYPE_OUTPUT << 8) | 0x00,
         .wIndex = 0,
         .wLength = 4
     };

@@ -24,10 +24,11 @@ extern "C" {
 
 //--------------------------------------------------------------------
 // HID Constants (USB HID Specification)
+// Note: Use SK_ prefix to avoid conflicts with TinyUSB's hid.h
 //--------------------------------------------------------------------
 
-#define HID_SET_REPORT          0x09
-#define HID_REPORT_TYPE_OUTPUT  0x02
+#define SK_HID_SET_REPORT          0x09
+#define SK_HID_REPORT_TYPE_OUTPUT  0x02
 
 //--------------------------------------------------------------------
 // USB Host State

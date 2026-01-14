@@ -8,6 +8,7 @@
 #define _NETWORK_H_
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include "config_parser.h"
 
