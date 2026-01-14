@@ -1,0 +1,74 @@
+# Build Pico SDK firmware
+#
+# This workflow builds the C firmware for Pico W and uploads the UF2 file.
+# It only runs when changes are merged to main (not on feature branches).
+
+name: Build Firmware
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/build-firmware.yml'
+  # Also build on release tags
+  release:
+    types: [created]
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install ARM toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '13.2.Rel1'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake python3
+
+      - name: Verify toolchain
+        run: |
+          arm-none-eabi-gcc --version
+          cmake --version
+
+      - name: Configure CMake
+        working-directory: firmware
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_FETCH_FROM_GIT=on
+
+      - name: Build firmware
+        working-directory: firmware/build
+        run: |
+          make -j$(nproc)
+          ls -la *.uf2 || echo "No UF2 files found"
+
+      - name: Upload UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rb3e_stagekit_firmware
+          path: firmware/build/*.uf2
+          if-no-files-found: error
+
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: firmware/build/*.uf2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
