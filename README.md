@@ -7,7 +7,7 @@ This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges t
 The project consists of two main components:
 
 1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
-2.  **Pico W Firmware (Stagekit folder):** Firmware for the Raspberry Pi Pico W that converts a wired USB Stage Kit device (only Santroller/Fatsco for now) into a wireless, networked UDP device.
+2.  **Pico W Firmware:** C firmware for the Raspberry Pi Pico W / Pico 2 W that converts a wired USB Stage Kit device (Santroller/Fatsco) into a wireless, networked UDP device.
 
 ---
 
@@ -23,12 +23,14 @@ The project consists of two main components:
     * **Last.fm:** Real-time "Now Playing" updates and automatic scrobbling (after 50% or 4 minutes of play).
 * **Stage Kit Fleet Management:** Auto-detects all wireless Stage Kit Picos on the network, monitoring their signal strength (RSSI) and USB status. Individual functions are manually triggerable for testing purposes.
 
-### 💡 Wireless Stage Kit (Pico W)
+### 💡 Wireless Stage Kit (Pico W / Pico 2 W)
+* **Native C Firmware:** High-performance firmware built with Pico SDK for minimal latency.
+* **Dual Board Support:** Works on both Pico W (RP2040) and Pico 2 W (RP2350).
 * **Wireless Bridge:** Removes the need to run long USB cables from the console to the Stage Kit device.
 * **UDP Protocol:** Listens for RB3E game events over WiFi on port `21070`.
-* **Telemetry:** Broadcasts device health (WiFi signal, Connection status) back to the dashboard on port `21071`.
+* **Telemetry:** Broadcasts device health (WiFi signal, connection status) back to the dashboard on port `21071`.
 * **Fail-safes:** Auto-shutoff for lights/fog if network data stops to prevent "stuck" states.
-* **Performance Optimizations:** Reduced packet latency by disabling Pico power-saving modes
+* **Performance Optimizations:** Reduced packet latency by disabling Pico power-saving modes.
 * **Real-Time Response:** UDP queue draining ensures lights respond to the newest commands instantly.
 * **Watchdog Timer:** Automatic recovery from freezes.
 
@@ -86,24 +88,72 @@ In this configuration, power is split *before* the Pico. The stage kit device dr
 * **Thermal:** Keeps the Pico cool.
 * **Stability:** Zero voltage drop on the Pico side when the USB device spikes.
 
-### Installation Steps
-1.  **Install CircuitPython:**
-    * Download the latest CircuitPython `.uf2` for Pico W from [circuitpython.org](https://circuitpython.org).
-    * Hold the `BOOTSEL` button on the Pico while plugging it into your PC.
-    * Drag the `.uf2` file onto the `RPI-RP2` drive. The device will reboot as `CIRCUITPY`.
-2.  **Configure WiFi (Recommended Method):**
-    * Copy `settings.toml.example` from this repo to the root of the `CIRCUITPY` drive.
-    * Rename it to `settings.toml`.
-    * Edit `settings.toml` with your WiFi credentials:
-        ```toml
-        CIRCUITPY_WIFI_SSID = "YOUR_NETWORK_NAME"
-        CIRCUITPY_WIFI_PASSWORD = "YOUR_NETWORK_PASSWORD"
-        ```
-3.  **Flash Code:**
-    * Copy `code.py` to the root of the `CIRCUITPY` drive.
-4.  **Connect:**
-    * Plug the Stage Kit into the Pico using the OTG cable.
-    * Power on the Pico.
+### Firmware Installation
+
+Download the pre-built firmware from the [Releases page](../../releases/latest):
+
+| Board | Firmware File |
+| :--- | :--- |
+| **Pico W** | `rb3e_stagekit_pico_w.uf2` |
+| **Pico 2 W** | `rb3e_stagekit_pico2_w.uf2` |
+
+#### Step 1: Flash the Firmware
+1.  Hold the `BOOTSEL` button on the Pico while plugging it into your PC.
+2.  A drive called `RPI-RP2` will appear.
+3.  Drag the appropriate `.uf2` file onto the drive.
+4.  The Pico will reboot automatically.
+
+#### Step 2: Configure WiFi Credentials
+
+**Option A: Generate a Config UF2 (Recommended)**
+
+Use the included Python tool to generate a UF2 containing your WiFi credentials:
+
+```bash
+cd firmware/tools
+pip install littlefs-python
+python generate_config_uf2.py --ssid "YourNetwork" --password "YourPassword"
+```
+
+For Pico 2 W, add `--board pico2_w`:
+```bash
+python generate_config_uf2.py --ssid "YourNetwork" --password "YourPassword" --board pico2_w
+```
+
+Then flash the generated `wifi_config.uf2`:
+1.  Hold `BOOTSEL` and plug in the Pico again.
+2.  Drag `wifi_config.uf2` onto the `RPI-RP2` drive.
+
+**Option B: Create settings.toml Manually**
+
+If you have a way to write to the Pico's flash filesystem, create a file at `/settings.toml` with:
+```toml
+CIRCUITPY_WIFI_SSID = "YourNetwork"
+CIRCUITPY_WIFI_PASSWORD = "YourPassword"
+```
+
+#### Step 3: Connect Hardware
+1.  Plug the Stage Kit into the Pico using the OTG cable.
+2.  Power on the Pico.
+
+### Building Firmware from Source (Optional)
+
+If you want to build the firmware yourself:
+
+```bash
+cd firmware
+mkdir build && cd build
+
+# For Pico W
+cmake .. -DPICO_BOARD=pico_w -DPICO_SDK_FETCH_FROM_GIT=on
+make -j$(nproc)
+
+# For Pico 2 W
+cmake .. -DPICO_BOARD=pico2_w -DPICO_SDK_FETCH_FROM_GIT=on
+make -j$(nproc)
+```
+
+Requires: ARM GCC toolchain, CMake 3.13+, and Python 3.
 
 ### LED Status Codes (Onboard LED)
 | Pattern | Status |
@@ -233,8 +283,9 @@ Ensure your firewall allows UDP traffic on the following ports:
 * Check the **Log** tab in the dashboard for "Search error" or "VLC not found" messages.
 
 **Pico LED is blinking fast forever?**
-* It cannot connect to WiFi. Check the `WIFI_SSID` and `WIFI_PASSWORD` in `code.py`.
+* It cannot connect to WiFi. Regenerate the `wifi_config.uf2` with correct credentials.
 * Ensure the network is 2.4GHz (Pico W does not support 5GHz).
+* Verify the `settings.toml` file exists with valid SSID and password.
 
 **Last.fm Art is missing?**
 * Ensure the API Key is entered.
