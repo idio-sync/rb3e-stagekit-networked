@@ -83,6 +83,11 @@ LOOP_DELAY_ACTIVE = 0.0001  # 0.1ms when processing packets (10x faster)
 LOOP_DELAY_IDLE = 0.001  # 1ms when idle (energy efficient)
 WATCHDOG_TIMEOUT = 8.0  # Watchdog will reset Pico if loop freezes for 8 seconds
 
+# CYW43439 WiFi Workaround: recvfrom() blocks until sendto() is called
+# See: https://github.com/orgs/micropython/discussions/13214
+# Sending a packet periodically "wakes" the WiFi RX path
+WIFI_WAKE_INTERVAL = 0.05  # 50ms - send dummy packet to unblock recvfrom()
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
@@ -627,6 +632,7 @@ def main():
     last_telemetry_time = time.monotonic()
     last_packet_time = time.monotonic()
     last_gc_time = time.monotonic()
+    last_wifi_wake_time = time.monotonic()  # CYW43439 workaround timer
     lights_are_active = False
 
     led_state = False
@@ -690,6 +696,7 @@ def main():
                     heartbeat_led = digitalio.DigitalInOut(board.LED)
                     heartbeat_led.direction = digitalio.Direction.OUTPUT
                     last_telemetry_time = current_time
+                    last_wifi_wake_time = current_time  # Reset wake timer after reconnect
                 else:
                     # Feed watchdog during reconnection attempts
                     try:
@@ -709,6 +716,19 @@ def main():
                 print(f"Socket error: {e}")
                 network.start()
                 continue
+
+            # CYW43439 WiFi Workaround: Send periodic packet to "wake" the RX path
+            # This fixes recvfrom() blocking despite settimeout(0)
+            # See: https://github.com/orgs/micropython/discussions/13214
+            if current_time - last_wifi_wake_time > WIFI_WAKE_INTERVAL:
+                try:
+                    if telemetry_socket:
+                        # Send minimal 1-byte packet to unblock WiFi RX
+                        # Using a high port that nothing listens on
+                        telemetry_socket.sendto(b'\x00', (DASHBOARD_IP, 65534))
+                except (OSError, RuntimeError):
+                    pass  # Ignore send failures - this is just a wake signal
+                last_wifi_wake_time = current_time
 
             # Check for discovery packets from dashboard (non-blocking)
             if discovery_socket:
