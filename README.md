@@ -105,7 +105,18 @@ Download the pre-built firmware from the [Releases page](../../releases/latest):
 
 #### Step 2: Configure WiFi Credentials
 
-**Option A: Generate a Config UF2 (Recommended)**
+**Option A: Use the Dashboard (Recommended)**
+
+1.  Open the RB3E Dashboard application.
+2.  Go to the **Stage Kit** tab → **Status** sub-tab.
+3.  Click **"Generate WiFi Credentials File"**.
+4.  Enter your WiFi SSID and password.
+5.  Select your board type (Pico W or Pico 2 W).
+6.  Click **Create** and save the `.uf2` file.
+7.  Hold `BOOTSEL` and plug in the Pico again.
+8.  Drag the generated `wifi_config.uf2` onto the `RPI-RP2` drive.
+
+**Option B: Use the Command-Line Tool**
 
 Use the included Python tool to generate a UF2 containing your WiFi credentials:
 
@@ -124,7 +135,7 @@ Then flash the generated `wifi_config.uf2`:
 1.  Hold `BOOTSEL` and plug in the Pico again.
 2.  Drag `wifi_config.uf2` onto the `RPI-RP2` drive.
 
-**Option B: Create settings.toml Manually**
+**Option C: Create settings.toml Manually**
 
 If you have a way to write to the Pico's flash filesystem, create a file at `/settings.toml` with:
 ```toml
