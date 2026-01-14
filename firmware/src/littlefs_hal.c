@@ -8,15 +8,26 @@
 #include "pico/stdlib.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
+#include <stdio.h>
 #include <string.h>
+
+// Verify flash size is defined
+#ifndef PICO_FLASH_SIZE_BYTES
+#error "PICO_FLASH_SIZE_BYTES not defined - check board configuration"
+#endif
 
 // Flash offset where filesystem starts (end of flash - LFS_FLASH_SIZE)
 // Pico W has 2MB flash, so offset is 2MB - 256KB = 0x1C0000
 #define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - LFS_FLASH_SIZE)
 
-// Read buffer for flash operations
-static uint8_t lfs_read_buffer[LFS_BLOCK_SIZE];
-static uint8_t lfs_prog_buffer[LFS_BLOCK_SIZE];
+// Sanity check - ensure we have at least 256KB for filesystem
+#if PICO_FLASH_SIZE_BYTES < LFS_FLASH_SIZE
+#error "Flash size too small for LittleFS"
+#endif
+
+// Read buffer for flash operations - use smaller cache to save RAM
+static uint8_t lfs_read_buffer[256];
+static uint8_t lfs_prog_buffer[256];
 static uint8_t lfs_lookahead_buffer[16];
 
 // LittleFS instance
@@ -80,7 +91,7 @@ static const struct lfs_config lfs_cfg = {
     .prog_size = FLASH_PAGE_SIZE,  // 256 bytes
     .block_size = LFS_BLOCK_SIZE,
     .block_count = LFS_BLOCK_COUNT,
-    .cache_size = LFS_BLOCK_SIZE,
+    .cache_size = 256,             // Must match buffer sizes
     .lookahead_size = 16,
     .block_cycles = 500,
 

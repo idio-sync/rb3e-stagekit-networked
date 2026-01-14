@@ -134,7 +134,7 @@ def create_littlefs_image(settings_content: bytes) -> bytes:
         block_count=LFS_BLOCK_COUNT,     # 64
         prog_size=256,                   # FLASH_PAGE_SIZE
         read_size=1,
-        cache_size=LFS_BLOCK_SIZE,       # Must match firmware (4096)
+        cache_size=256,                  # Must match firmware buffer size
         lookahead_size=16,               # Must match firmware
         block_cycles=500,                # Must match firmware
     )
