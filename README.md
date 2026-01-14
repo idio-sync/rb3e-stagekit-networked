@@ -181,7 +181,7 @@ To fetch album art and scrobble tracks:
 3.  Enter these into the Dashboard Settings.
 4.  Click **Authorize Last.fm** to link your user account for scrobbling.
 
-## 3. Home Assistant
+### 3. Home Assistant
 1.  Navigate to the **Settings** tab.
 2.  Locate the **Home Assistant Integration** section in the right column.
 3.  Enter your Home Assistant Webhook URL.
@@ -190,7 +190,7 @@ To fetch album art and scrobble tracks:
 4.  Click **Save Settings**. The listener handles the update immediately.
 5.  Create automation using the provided YAML in Home Assistant.
 
-### 3. Network Ports
+### 4. Network Ports
 Ensure your firewall allows UDP traffic on the following ports:
 * **21070:** Inbound (Game Events) & Outbound (Stage Kit Commands).
 * **21071:** Inbound (Pico Telemetry).
