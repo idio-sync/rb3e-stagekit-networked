@@ -99,23 +99,37 @@ int littlefs_mount(void)
     // Try to mount existing filesystem
     int err = lfs_mount(&lfs, &lfs_cfg);
 
-    // If mount fails, format and retry
     if (err < 0) {
-        printf("LittleFS: Mount failed (%d), formatting...\n", err);
-        err = lfs_format(&lfs, &lfs_cfg);
-        if (err < 0) {
-            printf("LittleFS: Format failed (%d)\n", err);
-            return err;
-        }
-        err = lfs_mount(&lfs, &lfs_cfg);
-        if (err < 0) {
-            printf("LittleFS: Mount after format failed (%d)\n", err);
-            return err;
-        }
+        printf("LittleFS: Mount failed (error %d)\n", err);
+        printf("LittleFS: This usually means no filesystem exists yet.\n");
+        printf("LittleFS: Flash a wifi_config.uf2 file to create the filesystem.\n");
+        return err;
     }
 
     lfs_mounted = 1;
     printf("LittleFS: Mounted successfully\n");
+    return 0;
+}
+
+int littlefs_format_and_mount(void)
+{
+    // Format filesystem (destroys all data!)
+    printf("LittleFS: Formatting filesystem...\n");
+    int err = lfs_format(&lfs, &lfs_cfg);
+    if (err < 0) {
+        printf("LittleFS: Format failed (%d)\n", err);
+        return err;
+    }
+
+    // Mount the freshly formatted filesystem
+    err = lfs_mount(&lfs, &lfs_cfg);
+    if (err < 0) {
+        printf("LittleFS: Mount after format failed (%d)\n", err);
+        return err;
+    }
+
+    lfs_mounted = 1;
+    printf("LittleFS: Formatted and mounted successfully\n");
     return 0;
 }
 

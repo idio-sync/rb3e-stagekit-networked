@@ -127,12 +127,16 @@ def create_littlefs_image(settings_content: bytes) -> bytes:
     if not LITTLEFS_AVAILABLE:
         raise ImportError("littlefs-python package is required")
 
-    # Create LittleFS with matching configuration
+    # Create LittleFS with configuration matching firmware exactly
+    # See firmware/src/littlefs_hal.c for the firmware's lfs_config
     fs = LittleFS(
-        block_size=LFS_BLOCK_SIZE,
-        block_count=LFS_BLOCK_COUNT,
-        prog_size=256,  # FLASH_PAGE_SIZE
+        block_size=LFS_BLOCK_SIZE,       # 4096
+        block_count=LFS_BLOCK_COUNT,     # 64
+        prog_size=256,                   # FLASH_PAGE_SIZE
         read_size=1,
+        cache_size=LFS_BLOCK_SIZE,       # Must match firmware (4096)
+        lookahead_size=16,               # Must match firmware
+        block_cycles=500,                # Must match firmware
     )
 
     # Format and mount

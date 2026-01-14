@@ -27,11 +27,23 @@ extern "C" {
 lfs_t* littlefs_init(void);
 
 /**
- * Mount LittleFS filesystem (format if needed)
+ * Mount LittleFS filesystem
+ *
+ * Attempts to mount an existing filesystem. Does NOT auto-format.
+ * If mount fails, flash a wifi_config.uf2 to create the filesystem.
  *
  * @return 0 on success, negative error code on failure
  */
 int littlefs_mount(void);
+
+/**
+ * Format and mount LittleFS filesystem
+ *
+ * WARNING: This erases all data! Only use for initial setup.
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int littlefs_format_and_mount(void);
 
 /**
  * Unmount LittleFS filesystem

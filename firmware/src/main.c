@@ -141,15 +141,16 @@ int main(void)
     printf("\nInitializing filesystem...\n");
     littlefs_init();
     if (littlefs_mount() != 0) {
-        printf("ERROR: Failed to mount filesystem\n");
-        printf("Creating default configuration...\n");
-        // Try formatting and remounting
-        if (littlefs_mount() != 0) {
-            printf("FATAL: Filesystem initialization failed\n");
-            while (1) {
-                watchdog_update();
-                blink_led(5, 500);
-            }
+        printf("\n");
+        printf("!!! NO FILESYSTEM FOUND !!!\n");
+        printf("You need to flash the WiFi credentials UF2 file.\n");
+        printf("Use the Dashboard or generate_config_uf2.py tool.\n");
+        printf("\n");
+        // Blink pattern: 5 fast blinks = no filesystem
+        while (1) {
+            watchdog_update();
+            blink_led(5, 200);
+            sleep_ms(1000);
         }
     }
 
