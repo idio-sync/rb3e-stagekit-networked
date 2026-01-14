@@ -66,19 +66,22 @@ def create_littlefs_image(settings_content: bytes) -> bytes:
     """
     Create a minimal LittleFS image with the settings.toml file.
 
-    This is a simplified implementation that creates a valid LittleFS v2 image
-    with just the settings.toml file. It uses the same configuration as the
-    firmware (4KB blocks, 256KB total size).
+    This creates a valid LittleFS v2 image with the settings.toml file.
+    Configuration MUST match firmware/src/littlefs_hal.c exactly!
     """
     try:
         from littlefs import LittleFS
 
-        # Create LittleFS with matching configuration
+        # Create LittleFS with configuration matching firmware exactly
+        # See firmware/src/littlefs_hal.c for the firmware's lfs_config
         fs = LittleFS(
-            block_size=LFS_BLOCK_SIZE,
-            block_count=LFS_BLOCK_COUNT,
-            prog_size=256,  # FLASH_PAGE_SIZE
+            block_size=LFS_BLOCK_SIZE,       # 4096
+            block_count=LFS_BLOCK_COUNT,     # 64
+            prog_size=256,                   # FLASH_PAGE_SIZE
             read_size=1,
+            cache_size=LFS_BLOCK_SIZE,       # Must match firmware (4096)
+            lookahead_size=16,               # Must match firmware
+            block_cycles=500,                # Must match firmware
         )
 
         # Format and mount
