@@ -1855,6 +1855,9 @@ class UnifiedRB3EListener:
         self.rb3_ip_address = None
         self.last_packet_time = None
 
+        # Homeassistant connection
+        self.webhook_url = None
+
         # Video player components (set externally)
         self.youtube_searcher = None
         self.vlc_player = None
@@ -1947,6 +1950,10 @@ class UnifiedRB3EListener:
                 with self._state_lock:
                     self.current_song = packet_data
                     song, artist = self.current_song, self.current_artist
+                
+                # Trigger HA Webhook (Song Name)
+                self.trigger_webhook("song", packet_data)
+                
                 if self.song_update_callback:
                     self.song_update_callback(song, artist)
                 self.check_song_ready()
@@ -2052,6 +2059,9 @@ class UnifiedRB3EListener:
             if old_state == 0 and new_state == 1:
                 if self.gui_callback:
                     self.gui_callback("Song starting!")
+                
+                # Trigger HA Webhook (Playing)
+                self.trigger_webhook("state", "playing")
 
                 # Record start time for elapsed time tracking
                 with self._state_lock:
@@ -2074,6 +2084,9 @@ class UnifiedRB3EListener:
 
                 if self.gui_callback:
                     self.gui_callback("Returned to menus")
+
+                # Trigger HA Webhook (Menu)
+                self.trigger_webhook("state", "menu")
 
                 # Notify that song has ended with elapsed time
                 if self.song_ended_callback and (song or artist):
@@ -2193,6 +2206,32 @@ class UnifiedRB3EListener:
         time_since_last = datetime.now() - self.last_packet_time
         return time_since_last.total_seconds() < 30
 
+    def set_webhook_url(self, url):
+        """Set the Home Assistant Webhook URL"""
+        self.webhook_url = url
+
+    def trigger_webhook(self, event_type, value):
+        """Send webhook to Home Assistant in a separate thread"""
+        if not self.webhook_url:
+            return
+            
+        def _send():
+            try:
+                payload = {}
+                if event_type == "state":
+                    payload = {"type": "state", "status": value}
+                elif event_type == "song":
+                    payload = {"type": "song", "name": value}
+                
+                # Send POST request
+                requests.post(self.webhook_url, json=payload, timeout=2)
+            except Exception as e:
+                # Fail silently to avoid cluttering logs or crashing
+                pass
+
+        # Run in thread to avoid blocking the main listener loop
+        threading.Thread(target=_send, daemon=True).start()
+    
     def stop(self):
         """Stop listening"""
         self.running = False
@@ -3027,6 +3066,39 @@ class RB3Dashboard:
         ttk.Label(database_frame, text="Improves video duration matching",
                  foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(5, 0))
 
+         # Discord Rich Presence
+        discord_frame = ttk.LabelFrame(left_col, text="Discord Rich Presence", padding=10)
+        discord_frame.pack(fill='x', pady=5)
+
+        self.discord_enabled_var = tk.BooleanVar(value=self.settings.get('discord_enabled', False))
+        ttk.Checkbutton(discord_frame, text="Enable Discord Rich Presence",
+                       variable=self.discord_enabled_var).pack(anchor='w')
+
+        ttk.Label(discord_frame, text="Uses RB3 Deluxe app by default",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
+
+        # Optional custom app ID (collapsed by default)
+        custom_app_frame = ttk.Frame(discord_frame)
+        custom_app_frame.pack(fill='x', pady=(5, 0))
+
+        ttk.Label(custom_app_frame, text="Custom App ID (optional):",
+                 font=('TkDefaultFont', 8)).pack(anchor='w')
+        # Only show non-default values in the entry
+        default_id = DiscordPresence.DEFAULT_CLIENT_ID
+        current_id = self.settings.get('discord_client_id', '')
+        display_id = '' if current_id == default_id else current_id
+        self.discord_client_id_var = tk.StringVar(value=display_id)
+        ttk.Entry(custom_app_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
+
+        self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
+        self.discord_status_label.pack(anchor='w', pady=(5, 0))
+
+        # Discord settings requirement note
+        ttk.Label(discord_frame, text="Requires Discord desktop app with Activity Status enabled",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(3, 0))
+        ttk.Label(discord_frame, text="(Settings → Activity Privacy → Display current activity)",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
+
         # --- RIGHT COLUMN ---
 
         # Video Settings
@@ -3118,39 +3190,16 @@ class RB3Dashboard:
         ttk.Button(export_frame, text="Export (JSON)",
                   command=lambda: self.export_history('json')).pack(side='left')
 
-        # Discord Rich Presence
-        discord_frame = ttk.LabelFrame(right_col, text="Discord Rich Presence", padding=10)
-        discord_frame.pack(fill='x', pady=5)
+        # Home Assistant Integration
+        ha_frame = ttk.LabelFrame(right_col, text="Home Assistant Integration", padding=10)
+        ha_frame.pack(fill='x', pady=5)
 
-        self.discord_enabled_var = tk.BooleanVar(value=self.settings.get('discord_enabled', False))
-        ttk.Checkbutton(discord_frame, text="Enable Discord Rich Presence",
-                       variable=self.discord_enabled_var).pack(anchor='w')
-
-        ttk.Label(discord_frame, text="Uses RB3 Deluxe app by default",
-                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
-
-        # Optional custom app ID (collapsed by default)
-        custom_app_frame = ttk.Frame(discord_frame)
-        custom_app_frame.pack(fill='x', pady=(5, 0))
-
-        ttk.Label(custom_app_frame, text="Custom App ID (optional):",
-                 font=('TkDefaultFont', 8)).pack(anchor='w')
-        # Only show non-default values in the entry
-        default_id = DiscordPresence.DEFAULT_CLIENT_ID
-        current_id = self.settings.get('discord_client_id', '')
-        display_id = '' if current_id == default_id else current_id
-        self.discord_client_id_var = tk.StringVar(value=display_id)
-        ttk.Entry(custom_app_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
-
-        self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
-        self.discord_status_label.pack(anchor='w', pady=(5, 0))
-
-        # Discord settings requirement note
-        ttk.Label(discord_frame, text="Requires Discord desktop app with Activity Status enabled",
-                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(3, 0))
-        ttk.Label(discord_frame, text="(Settings → Activity Privacy → Display current activity)",
-                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
-
+        ttk.Label(ha_frame, text="Webhook URL:").pack(anchor='w')
+        self.ha_webhook_url_var = tk.StringVar(value=self.settings.get('ha_webhook_url', ''))
+        ttk.Entry(ha_frame, textvariable=self.ha_webhook_url_var, width=40).pack(fill='x', pady=(2, 0))
+        ttk.Label(ha_frame, text="e.g. http://192.168.1.50:8123/api/webhook/rb3_event", 
+                  foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
+        
         # Save button at bottom of right column
         ttk.Button(right_col, text="Save Settings",
                   command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
@@ -3926,6 +3975,9 @@ class RB3Dashboard:
                 game_info_callback=self.on_game_info
             )
 
+            # Set the HA webhook URL
+            self.listener.set_webhook_url(self.settings.get('ha_webhook_url', ''))
+            
             # Set video components if all are available
             if video_enabled and api_key and self.vlc_player and self.vlc_player.vlc_path:
                 self.listener.set_video_components(
@@ -4064,7 +4116,8 @@ class RB3Dashboard:
             'video_start_delay': self.delay_var.get(),
             'video_monitor': self.get_selected_monitor_index(),
             'cookie_browser': self._get_cookie_browser_value(),
-            'database_path': self.settings.get('database_path', '')
+            'database_path': self.settings.get('database_path', ''),
+            'ha_webhook_url': self.ha_webhook_url_var.get().strip()
         }
 
     def save_settings(self):
@@ -4127,6 +4180,10 @@ class RB3Dashboard:
                 if new_cookie_browser:
                     self.log_message(f"Updated cookie browser: {new_cookie_browser}")
 
+            # Update listener HA webhook URL immediately
+            if self.listener:
+                self.listener.set_webhook_url(settings.get('ha_webhook_url', ''))
+
             # Update listener if running
             if self.listener:
                 video_settings = self.get_video_settings()
@@ -4161,7 +4218,8 @@ class RB3Dashboard:
             'video_start_delay': 0.0,
             'video_monitor': 0,
             'cookie_browser': '',
-            'database_path': ''
+            'database_path': '',
+            'ha_webhook_url': ''
         }
 
         try:
