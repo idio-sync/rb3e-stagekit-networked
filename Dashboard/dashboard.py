@@ -19,6 +19,7 @@ install_if_missing("yt-dlp", "yt_dlp")
 install_if_missing("Pillow", "PIL")
 install_if_missing("pypresence", "pypresence")
 install_if_missing("screeninfo", "screeninfo")
+install_if_missing("littlefs-python", "littlefs")
 
 import socket
 import struct
