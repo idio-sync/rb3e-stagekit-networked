@@ -1,20 +1,16 @@
-# Build Pico SDK firmware
+# Build Pico SDK firmware (standalone)
 #
-# This workflow builds the C firmware for Pico W and uploads the UF2 file.
-# It only runs when changes are merged to main (not on feature branches).
+# This workflow builds the C firmware for Pico W and uploads the UF2 artifact.
+# Use this for testing firmware changes on feature branches.
+# Note: Releases are handled by build.yml which includes both dashboard and firmware.
 
 name: Build Firmware
 
 on:
-  push:
-    branches:
-      - main
+  pull_request:
     paths:
       - 'firmware/**'
       - '.github/workflows/build-firmware.yml'
-  # Also build on release tags
-  release:
-    types: [created]
   # Allow manual trigger for testing
   workflow_dispatch:
 
@@ -64,11 +60,3 @@ jobs:
           name: rb3e_stagekit_firmware
           path: firmware/build/*.uf2
           if-no-files-found: error
-
-      - name: Upload to Release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
-        with:
-          files: firmware/build/*.uf2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
