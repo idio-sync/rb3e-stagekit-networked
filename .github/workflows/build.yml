@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-dashboard:
     strategy:
       fail-fast: false
       matrix:
@@ -77,8 +77,48 @@ jobs:
           path: Dashboard/dist/${{ matrix.asset_name }}
           retention-days: 30
 
+  build-firmware:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install ARM toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '13.2.Rel1'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake python3
+
+      - name: Configure CMake
+        working-directory: firmware
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_FETCH_FROM_GIT=on
+
+      - name: Build firmware
+        working-directory: firmware/build
+        run: |
+          make -j$(nproc)
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rb3e_stagekit_firmware
+          path: firmware/build/*.uf2
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build-dashboard, build-firmware]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -95,13 +135,14 @@ jobs:
             artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
             artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux
             artifacts/RB3E-Dashboard-macOS/RB3E-Dashboard-macOS
+            artifacts/rb3e_stagekit_firmware/*.uf2
           generate_release_notes: true
           draft: false
           prerelease: false
 
   # Auto-release on push to main (creates/updates a "latest" pre-release)
   latest-release:
-    needs: build
+    needs: [build-dashboard, build-firmware]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
@@ -125,12 +166,16 @@ jobs:
           tag_name: latest
           name: Latest Build
           body: |
-            This is an automated build of the dashboard from the latest commit on main. Concurrent version of the Pico firmware is located in the source zip.
+            This is an automated build from the latest commit on main.
 
             ## Downloads
+            ### Dashboard
             - **Windows:** RB3E-Dashboard-Windows.exe
             - **Linux:** RB3E-Dashboard-Linux
             - **macOS:** RB3E-Dashboard-macOS
+
+            ### Firmware
+            - **Pico W:** rb3e_stagekit.uf2
 
             ## Requirements
             - VLC Media Player must be installed for video playback
@@ -138,5 +183,6 @@ jobs:
             artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
             artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux
             artifacts/RB3E-Dashboard-macOS/RB3E-Dashboard-macOS
+            artifacts/rb3e_stagekit_firmware/*.uf2
           prerelease: false
           draft: false
