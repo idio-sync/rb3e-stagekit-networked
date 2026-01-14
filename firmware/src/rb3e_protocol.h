@@ -9,6 +9,7 @@
 #define _RB3E_PROTOCOL_H_
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {

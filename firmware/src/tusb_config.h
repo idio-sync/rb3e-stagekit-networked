@@ -35,6 +35,9 @@ extern "C" {
 // HOST CONFIGURATION
 //--------------------------------------------------------------------
 
+// RHPort0 is configured for Host mode
+#define CFG_TUSB_RHPORT0_MODE OPT_MODE_HOST
+
 // Enable USB Host mode
 #define CFG_TUH_ENABLED 1
 
