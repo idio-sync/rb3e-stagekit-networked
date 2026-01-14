@@ -1,10 +1,14 @@
 alias: "Rock Band 3 Lighting Control"
+description: "Dims lights when RB3Enhanced sends the in-game signal."
 trigger:
   - platform: webhook
     webhook_id: "rb3_event"
-    local_only: true
+    local_only: true # Set to false if script is not on local network
     allowed_methods:
       - POST
+    
+condition: []
+
 action:
   - choose:
       # Case 1: Game Started (Playing)
@@ -14,7 +18,7 @@ action:
         sequence:
           - service: light.turn_on
             target:
-              entity_id: light.your_lights_here
+              entity_id: light.living_room_zigbee_lights  # REPLACE THIS with your light entity
             data:
               brightness_pct: 30
               transition: 2
@@ -26,8 +30,20 @@ action:
         sequence:
           - service: light.turn_on
             target:
-              entity_id: light.your_lights_here
+              entity_id: light.living_room_zigbee_lights  # REPLACE THIS with your light entity
             data:
               brightness_pct: 100
               transition: 2
+
+      # Optional Case 3: Update a text helper with the Song Name
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.json.type == 'song' }}"
+        sequence:
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.current_rock_band_song
+            data:
+              value: "{{ trigger.json.name }}"
+    
 mode: queued
