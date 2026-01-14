@@ -35,6 +35,15 @@ typedef enum {
     NETWORK_STATE_ERROR
 } network_state_t;
 
+// WiFi failure reasons (for diagnostic LED patterns)
+typedef enum {
+    WIFI_FAIL_NONE = 0,
+    WIFI_FAIL_TIMEOUT,      // Connection timed out
+    WIFI_FAIL_NONET,        // SSID not found
+    WIFI_FAIL_BADAUTH,      // Wrong password
+    WIFI_FAIL_GENERAL       // Other failure
+} wifi_fail_reason_t;
+
 // Callback for StageKit packets
 typedef void (*stagekit_packet_cb)(uint8_t left_weight, uint8_t right_weight);
 
@@ -142,6 +151,13 @@ int32_t network_get_rssi(void);
  * @return Pointer to buffer
  */
 char* network_get_mac_string(char *buffer);
+
+/**
+ * Get WiFi failure reason
+ *
+ * @return Failure reason from last failed connection attempt
+ */
+wifi_fail_reason_t network_get_wifi_fail_reason(void);
 
 #ifdef __cplusplus
 }

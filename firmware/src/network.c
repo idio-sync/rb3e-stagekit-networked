@@ -22,6 +22,7 @@
 static network_state_t net_state = NETWORK_STATE_DISCONNECTED;
 static network_stats_t net_stats = {0};
 static wifi_config_t wifi_config;
+static wifi_fail_reason_t wifi_fail_reason = WIFI_FAIL_NONE;
 
 // UDP PCBs (Protocol Control Blocks)
 static struct udp_pcb *udp_listener = NULL;
@@ -142,6 +143,7 @@ bool network_connect_wifi(void)
         return true;
     }
 
+    wifi_fail_reason = WIFI_FAIL_NONE;
     printf("Network: Connecting to '%s'...\n", wifi_config.ssid);
     net_state = NETWORK_STATE_CONNECTING;
 
@@ -154,6 +156,7 @@ bool network_connect_wifi(void)
 
     if (result != 0) {
         printf("Network: WiFi connect start failed (err=%d)\n", result);
+        wifi_fail_reason = WIFI_FAIL_GENERAL;
         net_state = NETWORK_STATE_ERROR;
         return false;
     }
@@ -162,37 +165,68 @@ bool network_connect_wifi(void)
     // This prevents the watchdog from firing during long connects
     printf("Network: Waiting for connection...\n");
     absolute_time_t timeout = make_timeout_time_ms(WIFI_CONNECT_TIMEOUT_MS);
+    int last_status = -99;
+    int poll_count = 0;
+
+    // Status values:
+    // CYW43_LINK_DOWN (0), CYW43_LINK_JOIN (1), CYW43_LINK_NOIP (2), CYW43_LINK_UP (3)
+    // CYW43_LINK_FAIL (-1), CYW43_LINK_NONET (-2), CYW43_LINK_BADAUTH (-3)
 
     while (!time_reached(timeout)) {
         // Feed the watchdog to prevent reset
         watchdog_update();
 
+        // Poll CYW43 to process events
+        cyw43_arch_poll();
+
         // Check connection status
         int status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
 
+        // Print status changes
+        if (status != last_status) {
+            printf("Network: Status changed to %d\n", status);
+            last_status = status;
+        }
+
+        // Print periodic status every 5 seconds
+        if (++poll_count % 50 == 0) {
+            printf("Network: Still waiting... status=%d\n", status);
+        }
+
         if (status == CYW43_LINK_UP) {
-            // Connected successfully!
+            // Connected successfully with IP!
+            wifi_fail_reason = WIFI_FAIL_NONE;
             cyw43_wifi_get_rssi(&cyw43_state, &net_stats.wifi_rssi);
             printf("Network: Connected! IP=%s RSSI=%d dBm\n",
                    ip4addr_ntoa(netif_ip4_addr(netif_default)),
                    net_stats.wifi_rssi);
             net_state = NETWORK_STATE_CONNECTED;
             return true;
-        } else if (status == CYW43_LINK_FAIL || status == CYW43_LINK_BADAUTH ||
-                   status == CYW43_LINK_NONET) {
-            // Connection failed
-            printf("Network: WiFi connect failed (status=%d)\n", status);
+        } else if (status == CYW43_LINK_NONET) {
+            printf("Network: WiFi connect failed: SSID not found\n");
+            wifi_fail_reason = WIFI_FAIL_NONET;
+            net_state = NETWORK_STATE_ERROR;
+            return false;
+        } else if (status == CYW43_LINK_BADAUTH) {
+            printf("Network: WiFi connect failed: Wrong password\n");
+            wifi_fail_reason = WIFI_FAIL_BADAUTH;
+            net_state = NETWORK_STATE_ERROR;
+            return false;
+        } else if (status == CYW43_LINK_FAIL) {
+            printf("Network: WiFi connect failed: General failure\n");
+            wifi_fail_reason = WIFI_FAIL_GENERAL;
             net_state = NETWORK_STATE_ERROR;
             return false;
         }
 
-        // Still connecting - poll CYW43 and wait a bit
-        cyw43_arch_poll();
+        // Status 0-2 means still connecting, keep waiting
         sleep_ms(100);
     }
 
-    // Timeout
-    printf("Network: WiFi connect timeout\n");
+    // Timeout - print final status
+    int final_status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+    printf("Network: WiFi connect timeout (final status=%d)\n", final_status);
+    wifi_fail_reason = WIFI_FAIL_TIMEOUT;
     net_state = NETWORK_STATE_ERROR;
     return false;
 }
@@ -354,4 +388,9 @@ char* network_get_mac_string(char *buffer)
              mac_address[0], mac_address[1], mac_address[2],
              mac_address[3], mac_address[4], mac_address[5]);
     return buffer;
+}
+
+wifi_fail_reason_t network_get_wifi_fail_reason(void)
+{
+    return wifi_fail_reason;
 }

@@ -207,10 +207,37 @@ int main(void)
     printf("\nConnecting to WiFi: %s\n", wifi_cfg.ssid);
     if (!network_connect_wifi()) {
         printf("ERROR: WiFi connection failed\n");
+        wifi_fail_reason_t reason = network_get_wifi_fail_reason();
+
+        // Different blink patterns for different failures:
+        // 6 blinks, short pause = SSID not found (check network name)
+        // 6 blinks, medium pause = Wrong password
+        // 6 blinks, long pause = Timeout (check 2.4GHz, signal strength)
+        // 6 blinks, very long pause = General failure
+        int pause_ms;
+        switch (reason) {
+            case WIFI_FAIL_NONET:
+                printf("DIAGNOSTIC: SSID not found - check network name\n");
+                pause_ms = 500;   // Short pause
+                break;
+            case WIFI_FAIL_BADAUTH:
+                printf("DIAGNOSTIC: Wrong password\n");
+                pause_ms = 1500;  // Medium pause
+                break;
+            case WIFI_FAIL_TIMEOUT:
+                printf("DIAGNOSTIC: Connection timeout - check signal/2.4GHz\n");
+                pause_ms = 3000;  // Long pause
+                break;
+            default:
+                printf("DIAGNOSTIC: General WiFi failure\n");
+                pause_ms = 5000;  // Very long pause
+                break;
+        }
+
         while (1) {
             watchdog_update();
             blink_led(6, 300);
-            sleep_ms(2000);
+            sleep_ms(pause_ms);
         }
     }
 
