@@ -706,19 +706,8 @@ def main():
                     time.sleep(5.0)  # Wait before retry
                     continue
 
-            # REAL-TIME OPTIMIZATION: Drain UDP queue and only use newest packet
-            # This prevents old lighting commands from stacking up and causing lag
-            packet_data = None
-            try:
-                packet_data = network.drain_udp_queue()
-            except OSError as e:
-                # If the socket dies (e.g. erratic wifi), try to restart the listener
-                print(f"Socket error: {e}")
-                network.start()
-                continue
-
             # CYW43439 WiFi Workaround: Send periodic packet to "wake" the RX path
-            # This fixes recvfrom() blocking despite settimeout(0)
+            # MUST be called BEFORE recvfrom() to unblock any stuck datagrams
             # See: https://github.com/orgs/micropython/discussions/13214
             if current_time - last_wifi_wake_time > WIFI_WAKE_INTERVAL:
                 try:
@@ -729,6 +718,17 @@ def main():
                 except (OSError, RuntimeError):
                     pass  # Ignore send failures - this is just a wake signal
                 last_wifi_wake_time = current_time
+
+            # REAL-TIME OPTIMIZATION: Drain UDP queue and only use newest packet
+            # This prevents old lighting commands from stacking up and causing lag
+            packet_data = None
+            try:
+                packet_data = network.drain_udp_queue()
+            except OSError as e:
+                # If the socket dies (e.g. erratic wifi), try to restart the listener
+                print(f"Socket error: {e}")
+                network.start()
+                continue
 
             # Check for discovery packets from dashboard (non-blocking)
             if discovery_socket:
