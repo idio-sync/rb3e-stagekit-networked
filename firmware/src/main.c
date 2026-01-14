@@ -121,6 +121,17 @@ int main(void)
     printf("RB3E StageKit Bridge - Pico W Firmware\n");
     printf("==================================================\n");
 
+    // Initialize CYW43 early for LED support
+    // This must happen before any blink_led() calls
+    printf("Initializing CYW43 for LED support...\n");
+    if (cyw43_arch_init()) {
+        printf("ERROR: CYW43 init failed - LEDs will not work\n");
+        // Continue anyway, but LEDs won't function
+    } else {
+        // Quick blink to show we're alive
+        blink_led(1, 100);
+    }
+
     // Initialize watchdog
     printf("Initializing watchdog (%d ms timeout)...\n", WATCHDOG_TIMEOUT_MS);
     watchdog_enable(WATCHDOG_TIMEOUT_MS, true);
