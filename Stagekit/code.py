@@ -388,8 +388,8 @@ class NetworkHandler:
             # Bind to all interfaces
             self.socket.bind(('0.0.0.0', self.port))
 
-            # Set non-blocking
-            self.socket.setblocking(False)
+            # Use settimeout(0) for non-blocking - more reliable than setblocking(False)
+            self.socket.settimeout(0)
 
             print(f"✓ UDP listener ready")
             print(f"  Port: {self.port}")
