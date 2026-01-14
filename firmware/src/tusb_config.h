@@ -15,9 +15,13 @@ extern "C" {
 // COMMON CONFIGURATION
 //--------------------------------------------------------------------
 
-// Defined by board.h
+// Auto-detect MCU type based on Pico SDK board selection
 #ifndef CFG_TUSB_MCU
-#define CFG_TUSB_MCU OPT_MCU_RP2040
+  #if defined(PICO_RP2350)
+    #define CFG_TUSB_MCU OPT_MCU_RP2350
+  #else
+    #define CFG_TUSB_MCU OPT_MCU_RP2040
+  #endif
 #endif
 
 #define CFG_TUSB_OS OPT_OS_PICO

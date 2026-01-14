@@ -2,7 +2,13 @@ cmake_minimum_required(VERSION 3.13)
 
 # Initialize Pico SDK from GIT
 set(PICO_SDK_FETCH_FROM_GIT on)
-set(PICO_BOARD pico_w)
+
+# Allow board selection via cmake argument: -DPICO_BOARD=pico_w or -DPICO_BOARD=pico2_w
+if(NOT DEFINED PICO_BOARD)
+    set(PICO_BOARD pico_w)
+endif()
+
+message(STATUS "Building for board: ${PICO_BOARD}")
 
 include(pico_sdk_import.cmake)
 
@@ -68,6 +74,9 @@ target_link_libraries(rb3e_stagekit
 # Enable UART stdio for debugging, disable USB stdio
 pico_enable_stdio_usb(rb3e_stagekit 0)
 pico_enable_stdio_uart(rb3e_stagekit 1)
+
+# Set output name based on board type
+set_target_properties(rb3e_stagekit PROPERTIES OUTPUT_NAME "rb3e_stagekit_${PICO_BOARD}")
 
 # Create UF2 file and other outputs
 pico_add_extra_outputs(rb3e_stagekit)
