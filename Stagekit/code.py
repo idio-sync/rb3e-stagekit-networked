@@ -598,7 +598,8 @@ def main():
             network.pool.SOCK_DGRAM
         )
         discovery_socket.bind(('0.0.0.0', DASHBOARD_PORT))
-        discovery_socket.setblocking(False)
+        # Use settimeout(0) for non-blocking - more reliable than setblocking(False) in CircuitPython
+        discovery_socket.settimeout(0)
         print(f"✓ Discovery listener ready on port {DASHBOARD_PORT}")
     except Exception as e:
         print(f"⚠ Discovery socket setup failed: {e}")
@@ -677,7 +678,7 @@ def main():
                             network.pool.SOCK_DGRAM
                         )
                         discovery_socket.bind(('0.0.0.0', DASHBOARD_PORT))
-                        discovery_socket.setblocking(False)
+                        discovery_socket.settimeout(0)
                         print("✓ Discovery socket recreated")
                     except Exception as e:
                         print(f"⚠ Discovery socket recreation failed: {e}")
