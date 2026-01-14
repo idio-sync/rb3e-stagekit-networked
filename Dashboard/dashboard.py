@@ -3066,6 +3066,39 @@ class RB3Dashboard:
         ttk.Label(database_frame, text="Improves video duration matching",
                  foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(5, 0))
 
+         # Discord Rich Presence
+        discord_frame = ttk.LabelFrame(left_col, text="Discord Rich Presence", padding=10)
+        discord_frame.pack(fill='x', pady=5)
+
+        self.discord_enabled_var = tk.BooleanVar(value=self.settings.get('discord_enabled', False))
+        ttk.Checkbutton(discord_frame, text="Enable Discord Rich Presence",
+                       variable=self.discord_enabled_var).pack(anchor='w')
+
+        ttk.Label(discord_frame, text="Uses RB3 Deluxe app by default",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
+
+        # Optional custom app ID (collapsed by default)
+        custom_app_frame = ttk.Frame(discord_frame)
+        custom_app_frame.pack(fill='x', pady=(5, 0))
+
+        ttk.Label(custom_app_frame, text="Custom App ID (optional):",
+                 font=('TkDefaultFont', 8)).pack(anchor='w')
+        # Only show non-default values in the entry
+        default_id = DiscordPresence.DEFAULT_CLIENT_ID
+        current_id = self.settings.get('discord_client_id', '')
+        display_id = '' if current_id == default_id else current_id
+        self.discord_client_id_var = tk.StringVar(value=display_id)
+        ttk.Entry(custom_app_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
+
+        self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
+        self.discord_status_label.pack(anchor='w', pady=(5, 0))
+
+        # Discord settings requirement note
+        ttk.Label(discord_frame, text="Requires Discord desktop app with Activity Status enabled",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(3, 0))
+        ttk.Label(discord_frame, text="(Settings → Activity Privacy → Display current activity)",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
+
         # --- RIGHT COLUMN ---
 
         # Video Settings
@@ -3156,39 +3189,6 @@ class RB3Dashboard:
                   command=lambda: self.export_history('csv')).pack(side='left', padx=(0, 5))
         ttk.Button(export_frame, text="Export (JSON)",
                   command=lambda: self.export_history('json')).pack(side='left')
-
-        # Discord Rich Presence
-        discord_frame = ttk.LabelFrame(right_col, text="Discord Rich Presence", padding=10)
-        discord_frame.pack(fill='x', pady=5)
-
-        self.discord_enabled_var = tk.BooleanVar(value=self.settings.get('discord_enabled', False))
-        ttk.Checkbutton(discord_frame, text="Enable Discord Rich Presence",
-                       variable=self.discord_enabled_var).pack(anchor='w')
-
-        ttk.Label(discord_frame, text="Uses RB3 Deluxe app by default",
-                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
-
-        # Optional custom app ID (collapsed by default)
-        custom_app_frame = ttk.Frame(discord_frame)
-        custom_app_frame.pack(fill='x', pady=(5, 0))
-
-        ttk.Label(custom_app_frame, text="Custom App ID (optional):",
-                 font=('TkDefaultFont', 8)).pack(anchor='w')
-        # Only show non-default values in the entry
-        default_id = DiscordPresence.DEFAULT_CLIENT_ID
-        current_id = self.settings.get('discord_client_id', '')
-        display_id = '' if current_id == default_id else current_id
-        self.discord_client_id_var = tk.StringVar(value=display_id)
-        ttk.Entry(custom_app_frame, textvariable=self.discord_client_id_var, width=25).pack(fill='x', pady=(2, 0))
-
-        self.discord_status_label = ttk.Label(discord_frame, text="Not connected", foreground='gray')
-        self.discord_status_label.pack(anchor='w', pady=(5, 0))
-
-        # Discord settings requirement note
-        ttk.Label(discord_frame, text="Requires Discord desktop app with Activity Status enabled",
-                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(3, 0))
-        ttk.Label(discord_frame, text="(Settings → Activity Privacy → Display current activity)",
-                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
 
         # Home Assistant Integration
         ha_frame = ttk.LabelFrame(right_col, text="Home Assistant Integration", padding=10)
