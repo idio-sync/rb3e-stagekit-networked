@@ -120,6 +120,9 @@ bool network_init(const wifi_config_t *config)
     // Enable station mode
     cyw43_arch_enable_sta_mode();
 
+    // Disable power save and boost receive sensitivity:
+    cyw43_wifi_pm(&cyw43_state, cyw43_pm_value(CYW43_NO_POWERSAVE_MODE, 20, 1, 1, 1));
+
     // Get MAC address
     cyw43_wifi_get_mac(&cyw43_state, CYW43_ITF_STA, mac_address);
     printf("Network: MAC = %02x:%02x:%02x:%02x:%02x:%02x\n",
