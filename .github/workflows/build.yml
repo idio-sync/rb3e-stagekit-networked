@@ -49,41 +49,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-tk libmpv-dev
-
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install mpv
+          sudo apt-get install -y python3-tk
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Download MPV library (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Download libmpv for Windows
-          $mpvUrl = "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-20240121-git-a39f9b6.7z/download"
-          $outFile = "mpv-dev.7z"
-          Invoke-WebRequest -Uri $mpvUrl -OutFile $outFile -UserAgent "Mozilla/5.0"
-          7z x $outFile -ompv-dev
-          Copy-Item mpv-dev/*.dll . -ErrorAction SilentlyContinue
-          Get-ChildItem *.dll
-
-      - name: Copy MPV library (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cp /usr/lib/x86_64-linux-gnu/libmpv.so* . || cp /usr/lib/libmpv.so* . || echo "libmpv not found in expected locations"
-          ls -la *.so* 2>/dev/null || echo "No .so files found"
-
-      - name: Copy MPV library (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          cp /opt/homebrew/lib/libmpv*.dylib . 2>/dev/null || cp /usr/local/lib/libmpv*.dylib . 2>/dev/null || echo "libmpv not found"
-          ls -la *.dylib 2>/dev/null || echo "No .dylib files found"
 
       - name: Build executable with PyInstaller
         run: |
@@ -218,8 +189,8 @@ jobs:
             - **Pico W (RP2040):** rb3e_stagekit_pico_w.uf2
             - **Pico 2 W (RP2350):** rb3e_stagekit_pico2_w.uf2
 
-            ## Notes
-            - MPV is bundled for video playback support
+            ## Requirements
+            - VLC Media Player must be installed for video playback
           files: |
             artifacts/RB3E-Dashboard-Windows.exe/RB3E-Dashboard-Windows.exe
             artifacts/RB3E-Dashboard-Linux/RB3E-Dashboard-Linux

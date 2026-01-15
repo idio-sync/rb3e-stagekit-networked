@@ -721,42 +721,75 @@ class YouTubeSearcher:
 
 
 # =============================================================================
-# MPV PLAYER
+# VLC PLAYER
 # =============================================================================
 
-class MPVPlayer:
-    """MPV video player controller using python-mpv library"""
+class VLCPlayer:
+    """VLC video player controller"""
 
     def __init__(self, gui_callback=None, song_database=None):
+        self.vlc_path = self.find_vlc()
+        self.current_process = None
+        self.played_videos = deque(maxlen=10)  # FIFO cache of recent video IDs
         self.gui_callback = gui_callback
         self.song_database = song_database
-        self.player = None
-        self.mpv_available = False
-        self.played_videos = deque(maxlen=10)  # FIFO cache of recent video IDs
-        self.current_video_title = None
 
-        # Try to initialize MPV
+    def find_vlc(self) -> Optional[str]:
+        """Find VLC executable"""
+        possible_paths = [
+            r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+            r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+            os.path.expanduser(r"~\AppData\Local\Programs\VLC\vlc.exe"),
+            "/usr/bin/vlc",
+            "/usr/local/bin/vlc",
+            "/Applications/VLC.app/Contents/MacOS/VLC",
+        ]
+
         try:
-            import mpv
-            self.mpv_module = mpv
-            self.mpv_available = True
-        except (ImportError, OSError) as e:
+            subprocess.run(["vlc", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+            return "vlc"
+        except Exception:
+            pass
+
+        for path in possible_paths:
+            if os.path.isfile(path):
+                return path
+
+        return None
+
+    def stop_current_video(self):
+        """Stop any currently playing video"""
+        if self.current_process and self.current_process.poll() is None:
+            try:
+                self.current_process.terminate()
+                self.current_process.wait(timeout=3)
+                if self.gui_callback:
+                    self.gui_callback("VLC stopped")
+            except subprocess.TimeoutExpired:
+                self.current_process.kill()
+            except Exception:
+                pass
+            finally:
+                self.current_process = None
+
+    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None, video_title: str = None):
+        """Play video with VLC"""
+        if not self.vlc_path:
             if self.gui_callback:
-                self.gui_callback(f"MPV library not available: {e}")
-            self.mpv_module = None
+                self.gui_callback("VLC not available")
+            return
 
-    def _create_player(self, settings: dict):
-        """Create MPV player instance with settings"""
-        if not self.mpv_available:
-            return None
+        self.stop_current_video()
+        self.current_video_title = video_title  # Store for logging
 
         try:
-            # Build player options
-            player_opts = {
-                'input_default_bindings': True,
-                'input_vo_keyboard': True,
-                'osc': True,
-            }
+            vlc_cmd = [
+                self.vlc_path,
+                video_url,
+                "--intf", "dummy",
+                "--no-video-title-show",
+                f"--meta-title={artist} - {song}"
+            ]
 
             # Monitor selection
             monitor_index = settings.get('video_monitor', 0)
@@ -769,77 +802,42 @@ class MPVPlayer:
                 except Exception:
                     pass
 
-            # Fullscreen setting
             if settings.get('fullscreen', True):
-                player_opts['fullscreen'] = True
+                vlc_cmd.append("--fullscreen")
+                # Set fullscreen on specific monitor
                 if monitor_info:
-                    player_opts['fs-screen'] = monitor_index - 1
+                    vlc_cmd.append(f"--qt-fullscreen-screennumber={monitor_index - 1}")
 
-            # Mute setting
             if settings.get('muted', True):
-                player_opts['mute'] = True
+                vlc_cmd.append("--volume=0")
 
-            # Always on top
             if settings.get('always_on_top', True):
-                player_opts['ontop'] = True
+                vlc_cmd.append("--video-on-top")
 
-            # Position window on selected monitor (for non-fullscreen)
-            if monitor_info and not settings.get('fullscreen', True):
-                player_opts['geometry'] = f"+{monitor_info.x + 100}+{monitor_info.y + 100}"
+            # Position window on selected monitor (for non-fullscreen or as hint)
+            if monitor_info:
+                vlc_cmd.extend([
+                    f"--video-x={monitor_info.x + 100}",
+                    f"--video-y={monitor_info.y + 100}",
+                ])
 
-            # Hardware acceleration and caching
             if settings.get('force_best_quality', True):
-                player_opts['hwdec'] = 'auto'
-                player_opts['cache'] = 'yes'
-                player_opts['demuxer-max-bytes'] = '50MiB'
+                vlc_cmd.extend([
+                    "--avcodec-hw=any",
+                    "--network-caching=2000",
+                ])
 
-            player = self.mpv_module.MPV(**player_opts)
-            return player
+            self.current_process = subprocess.Popen(
+                vlc_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
 
-        except Exception as e:
-            if self.gui_callback:
-                self.gui_callback(f"Error creating MPV player: {e}")
-            return None
+            time.sleep(2)
 
-    def stop_current_video(self):
-        """Stop any currently playing video"""
-        if self.player:
-            try:
-                self.player.stop()
-                if self.gui_callback:
-                    self.gui_callback("MPV stopped")
-            except Exception:
-                pass
-
-    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None, video_title: str = None):
-        """Play video with MPV"""
-        if not self.mpv_available:
-            if self.gui_callback:
-                self.gui_callback("MPV not available")
-            return
-
-        self.stop_current_video()
-        self.current_video_title = video_title
-
-        try:
-            # Terminate existing player and create new one with current settings
-            if self.player:
-                try:
-                    self.player.terminate()
-                except Exception:
-                    pass
-
-            self.player = self._create_player(settings)
-            if not self.player:
-                if self.gui_callback:
-                    self.gui_callback("Failed to create MPV player")
-                return
-
-            # Set media title
-            self.player.force_media_title = f"{artist} - {song}"
-
-            # Play the video
-            self.player.play(video_url)
+            if self.current_process.poll() is not None:
+                vlc_cmd = [self.vlc_path, video_url]
+                self.current_process = subprocess.Popen(vlc_cmd)
 
             self.played_videos.append(video_id)  # deque auto-removes oldest when full
 
@@ -851,16 +849,6 @@ class MPVPlayer:
         except Exception as e:
             if self.gui_callback:
                 self.gui_callback(f"Error playing video: {e}")
-
-    def terminate(self):
-        """Clean up MPV player resources"""
-        if self.player:
-            try:
-                self.player.terminate()
-            except Exception:
-                pass
-            finally:
-                self.player = None
 
 
 # =============================================================================
@@ -3545,7 +3533,7 @@ class RB3Dashboard:
         # VLC status
         vlc_frame = ttk.Frame(status_row)
         vlc_frame.pack(side='left', padx=(0, 20))
-        ttk.Label(vlc_frame, text="MPV:", font=('TkDefaultFont', 9)).pack(side='left')
+        ttk.Label(vlc_frame, text="VLC:", font=('TkDefaultFont', 9)).pack(side='left')
         self.vlc_status_label = ttk.Label(vlc_frame, text="Checking...",
                                           font=('TkDefaultFont', 9))
         self.vlc_status_label.pack(side='left', padx=(5, 0))
@@ -4256,17 +4244,17 @@ class RB3Dashboard:
             video_enabled = self.video_enabled_var.get()
             api_key = self.api_key_var.get().strip()
 
-            # Always check MPV if video is enabled
+            # Always check VLC if video is enabled
             if video_enabled:
-                self.vlc_player = MPVPlayer(gui_callback=self.log_message,
+                self.vlc_player = VLCPlayer(gui_callback=self.log_message,
                                            song_database=self.song_database)
 
-                if self.vlc_player.mpv_available:
+                if self.vlc_player.vlc_path:
                     self.vlc_status_label.config(text="Ready", foreground='green')
-                    self.log_message("MPV initialized successfully")
+                    self.log_message(f"VLC found: {self.vlc_player.vlc_path}")
                 else:
                     self.vlc_status_label.config(text="Not found", foreground='red')
-                    self.log_message("MPV not available - video playback will not work")
+                    self.log_message("VLC not found - video playback will not work")
 
                 if api_key:
                     self.log_message("Initializing video components...")
@@ -4299,7 +4287,7 @@ class RB3Dashboard:
             self.listener.set_webhook_url(self.settings.get('ha_webhook_url', ''))
             
             # Set video components if all are available
-            if video_enabled and api_key and self.vlc_player and self.vlc_player.mpv_available:
+            if video_enabled and api_key and self.vlc_player and self.vlc_player.vlc_path:
                 self.listener.set_video_components(
                     self.youtube_searcher, self.vlc_player, self.stream_extractor)
 
@@ -4352,7 +4340,7 @@ class RB3Dashboard:
             self.listener.stop()
 
         if self.vlc_player:
-            self.vlc_player.terminate()
+            self.vlc_player.stop_current_video()
 
         # Wait for threads to finish before closing sockets
         if hasattr(self, 'listener_thread') and self.listener_thread and self.listener_thread.is_alive():
