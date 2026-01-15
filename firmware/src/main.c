@@ -29,7 +29,8 @@
 #define HEARTBEAT_INTERVAL_MS   2000    // LED blink interval
 #define TELEMETRY_INTERVAL_MS   5000    // Telemetry broadcast interval
 #define SAFETY_TIMEOUT_MS       5000    // Turn off lights if no packets
-#define RECONNECT_INTERVAL_MS   5000    // USB reconnection interval
+#define USB_RECONNECT_INTERVAL_MS 5000  // USB reconnection check interval
+#define WIFI_CHECK_INTERVAL_MS  10000   // WiFi connection check interval
 #define LOOP_DELAY_ACTIVE_US    100     // 0.1ms when active
 #define LOOP_DELAY_IDLE_US      1000    // 1ms when idle
 
@@ -51,8 +52,10 @@ static bool lights_active = false;
 static absolute_time_t last_packet_time;
 static absolute_time_t last_heartbeat_time;
 static absolute_time_t last_telemetry_time;
-static absolute_time_t last_reconnect_time;
+static absolute_time_t last_usb_reconnect_time;
+static absolute_time_t last_wifi_check_time;
 static bool led_state = false;
+static wifi_config_t stored_wifi_cfg;  // Stored for reconnection
 
 //--------------------------------------------------------------------
 // StageKit Packet Callback (called from Core 1)
@@ -187,8 +190,7 @@ int main(void)
 
     // Load WiFi configuration
     printf("\nLoading WiFi configuration...\n");
-    wifi_config_t wifi_cfg;
-    if (config_load_wifi(&wifi_cfg) != 0) {
+    if (config_load_wifi(&stored_wifi_cfg) != 0) {
         printf("ERROR: Failed to load WiFi config\n");
         while (1) {
             watchdog_update();
@@ -201,7 +203,7 @@ int main(void)
 
     // Initialize network
     printf("\nInitializing network...\n");
-    if (!network_init(&wifi_cfg)) {
+    if (!network_init(&stored_wifi_cfg)) {
         printf("ERROR: Network initialization failed\n");
         while (1) {
             watchdog_update();
@@ -210,49 +212,61 @@ int main(void)
         }
     }
 
-    // Connect to WiFi
-    printf("\nConnecting to WiFi: %s\n", wifi_cfg.ssid);
-    if (!network_connect_wifi()) {
-        printf("ERROR: WiFi connection failed\n");
-        wifi_fail_reason_t reason = network_get_wifi_fail_reason();
+    // Connect to WiFi with retries
+    printf("\nConnecting to WiFi: %s\n", stored_wifi_cfg.ssid);
+    bool wifi_connected = false;
+    for (int attempt = 1; attempt <= WIFI_MAX_RETRIES; attempt++) {
+        printf("WiFi connection attempt %d of %d...\n", attempt, WIFI_MAX_RETRIES);
+        watchdog_update();
 
-        // Different blink patterns for different failures:
-        // 6 blinks, short pause = SSID not found (check network name)
-        // 6 blinks, medium pause = Wrong password
-        // 6 blinks, long pause = Timeout (check 2.4GHz, signal strength)
-        // 6 blinks, very long pause = General failure
-        int pause_ms;
+        if (network_connect_wifi()) {
+            wifi_connected = true;
+            break;
+        }
+
+        wifi_fail_reason_t reason = network_get_wifi_fail_reason();
+        printf("Attempt %d failed: ", attempt);
         switch (reason) {
             case WIFI_FAIL_NONET:
-                printf("DIAGNOSTIC: SSID not found - check network name\n");
-                pause_ms = 500;   // Short pause
+                printf("SSID not found\n");
                 break;
             case WIFI_FAIL_BADAUTH:
-                printf("DIAGNOSTIC: Wrong password\n");
-                pause_ms = 1500;  // Medium pause
+                printf("Wrong password\n");
+                // Don't retry on bad password - it won't change
+                attempt = WIFI_MAX_RETRIES;
                 break;
             case WIFI_FAIL_TIMEOUT:
-                printf("DIAGNOSTIC: Connection timeout - check signal/2.4GHz\n");
-                pause_ms = 3000;  // Long pause
+                printf("Connection timeout\n");
                 break;
             default:
-                printf("DIAGNOSTIC: General WiFi failure\n");
-                pause_ms = 5000;  // Very long pause
+                printf("General failure\n");
                 break;
         }
 
-        while (1) {
-            watchdog_update();
-            blink_led(6, 300);
-            sleep_ms(pause_ms);
+        if (attempt < WIFI_MAX_RETRIES) {
+            printf("Retrying in %d seconds...\n", WIFI_RETRY_DELAY_MS / 1000);
+            // Blink while waiting for retry
+            for (int i = 0; i < WIFI_RETRY_DELAY_MS / 500; i++) {
+                watchdog_update();
+                blink_led(1, 200);
+                sleep_ms(300);
+            }
         }
     }
 
-    // Success - show IP address
-    char ip_str[16];
-    network_get_ip_string(ip_str, sizeof(ip_str));
-    printf("WiFi connected! IP: %s\n", ip_str);
-    blink_led(2, 100);  // Quick double blink = success
+    if (!wifi_connected) {
+        printf("WARNING: WiFi connection failed after %d attempts\n", WIFI_MAX_RETRIES);
+        printf("Continuing to main loop - will retry periodically\n");
+        blink_led(3, 500);  // Indicate boot without WiFi
+    }
+
+    // Show connection status
+    if (wifi_connected) {
+        char ip_str[16];
+        network_get_ip_string(ip_str, sizeof(ip_str));
+        printf("WiFi connected! IP: %s\n", ip_str);
+        blink_led(2, 100);  // Quick double blink = success
+    }
 
     watchdog_update();
 
@@ -260,18 +274,17 @@ int main(void)
     printf("\nInitializing USB host...\n");
     usb_host_init();
 
-    // Start UDP listener
-    printf("\nStarting UDP listener...\n");
-    if (!network_start_listener(on_stagekit_packet)) {
-        printf("ERROR: Failed to start listener\n");
-        while (1) {
-            watchdog_update();
-            blink_led(7, 200);
-            sleep_ms(2000);
+    // Start UDP listener if WiFi is connected
+    if (wifi_connected) {
+        printf("\nStarting UDP listener...\n");
+        if (!network_start_listener(on_stagekit_packet)) {
+            printf("ERROR: Failed to start listener\n");
+            // Don't die - continue and try to recover
+            wifi_connected = false;
         }
     }
 
-    // Mark network as ready for Core 1
+    // Mark network as ready for Core 1 (even if not connected, Core 1 handles polling)
     network_ready = true;
 
     // Launch Core 1 for network polling
@@ -282,13 +295,19 @@ int main(void)
     last_packet_time = get_absolute_time();
     last_heartbeat_time = get_absolute_time();
     last_telemetry_time = get_absolute_time();
-    last_reconnect_time = get_absolute_time();
+    last_usb_reconnect_time = get_absolute_time();
+    last_wifi_check_time = get_absolute_time();
 
     printf("\n");
     printf("==================================================\n");
-    printf("Ready! Listening for RB3E packets on port %d\n", RB3E_LISTEN_PORT);
-    printf("Telemetry broadcast on port %d every %d seconds\n",
-           RB3E_TELEMETRY_PORT, TELEMETRY_INTERVAL_MS / 1000);
+    if (wifi_connected) {
+        printf("Ready! Listening for RB3E packets on port %d\n", RB3E_LISTEN_PORT);
+        printf("Telemetry broadcast on port %d every %d seconds\n",
+               RB3E_TELEMETRY_PORT, TELEMETRY_INTERVAL_MS / 1000);
+    } else {
+        printf("Started in OFFLINE mode - waiting for WiFi\n");
+        printf("Will retry connection every %d seconds\n", WIFI_CHECK_INTERVAL_MS / 1000);
+    }
     printf("==================================================\n");
     printf("\n");
 
@@ -322,8 +341,9 @@ int main(void)
             last_heartbeat_time = now;
         }
 
-        // Send telemetry (every TELEMETRY_INTERVAL)
-        if (absolute_time_diff_us(last_telemetry_time, now) > (TELEMETRY_INTERVAL_MS * 1000)) {
+        // Send telemetry (every TELEMETRY_INTERVAL) - only if connected
+        if (network_wifi_connected() &&
+            absolute_time_diff_us(last_telemetry_time, now) > (TELEMETRY_INTERVAL_MS * 1000)) {
             network_send_telemetry(usb_stagekit_connected());
             last_telemetry_time = now;
         }
@@ -340,10 +360,56 @@ int main(void)
 
         // Try to reconnect USB if disconnected
         if (!usb_stagekit_connected() &&
-            absolute_time_diff_us(last_reconnect_time, now) > (RECONNECT_INTERVAL_MS * 1000)) {
+            absolute_time_diff_us(last_usb_reconnect_time, now) > (USB_RECONNECT_INTERVAL_MS * 1000)) {
             // USB host handles reconnection automatically via callbacks
             // Just log the status periodically
-            last_reconnect_time = now;
+            last_usb_reconnect_time = now;
+        }
+
+        // WiFi connection check and reconnection
+        if (absolute_time_diff_us(last_wifi_check_time, now) > (WIFI_CHECK_INTERVAL_MS * 1000)) {
+            last_wifi_check_time = now;
+
+            if (network_wifi_connected()) {
+                // Check if connection is still alive
+                if (!network_check_connection()) {
+                    printf("WiFi connection lost - attempting reconnect...\n");
+                    network_stop_listener();
+
+                    // Try to reconnect
+                    if (network_connect_wifi()) {
+                        char ip_str[16];
+                        network_get_ip_string(ip_str, sizeof(ip_str));
+                        printf("WiFi reconnected! IP: %s\n", ip_str);
+
+                        // Restart listener
+                        if (network_start_listener(on_stagekit_packet)) {
+                            printf("Listener restarted\n");
+                            blink_led(2, 100);  // Success indication
+                        }
+                    } else {
+                        printf("WiFi reconnect failed - will retry\n");
+                        blink_led(1, 500);  // Failure indication
+                    }
+                }
+            } else {
+                // Not connected - try to connect
+                printf("WiFi not connected - attempting connection...\n");
+                if (network_connect_wifi()) {
+                    char ip_str[16];
+                    network_get_ip_string(ip_str, sizeof(ip_str));
+                    printf("WiFi connected! IP: %s\n", ip_str);
+
+                    // Start listener
+                    if (network_start_listener(on_stagekit_packet)) {
+                        printf("Listener started\n");
+                        blink_led(2, 100);  // Success indication
+                    }
+                } else {
+                    printf("WiFi connection failed - will retry in %d seconds\n",
+                           WIFI_CHECK_INTERVAL_MS / 1000);
+                }
+            }
         }
 
         // Adaptive delay

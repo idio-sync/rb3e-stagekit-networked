@@ -399,3 +399,37 @@ wifi_fail_reason_t network_get_wifi_fail_reason(void)
 {
     return wifi_fail_reason;
 }
+
+bool network_check_connection(void)
+{
+    // Only check if we think we're connected
+    if (net_state != NETWORK_STATE_CONNECTED &&
+        net_state != NETWORK_STATE_LISTENING) {
+        return false;
+    }
+
+    // Check actual link status from CYW43 driver
+    int status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+
+    if (status != CYW43_LINK_UP) {
+        printf("Network: Connection lost (status=%d)\n", status);
+        net_state = NETWORK_STATE_DISCONNECTED;
+        return false;
+    }
+
+    return true;
+}
+
+void network_disconnect(void)
+{
+    printf("Network: Disconnecting...\n");
+
+    // Stop listener first
+    network_stop_listener();
+
+    // Leave the WiFi network
+    cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
+
+    net_state = NETWORK_STATE_DISCONNECTED;
+    printf("Network: Disconnected\n");
+}
