@@ -11,6 +11,7 @@
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/watchdog.h"
+#include "hardware/sync.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -302,12 +303,22 @@ int main(void)
         usb_host_task();
 
         // Process pending StageKit command
+        // Use critical section to atomically read both weight values
+        // This prevents "torn" reads if interrupt fires between reading left and right
         if (stagekit_command_pending) {
+            uint8_t left, right;
+
+            // Disable interrupts to atomically read both values
+            uint32_t save = save_and_disable_interrupts();
             stagekit_command_pending = false;
+            left = pending_left_weight;
+            right = pending_right_weight;
+            restore_interrupts(save);
+
             last_packet_time = now;
 
             if (usb_stagekit_connected()) {
-                if (usb_send_stagekit_command(pending_left_weight, pending_right_weight)) {
+                if (usb_send_stagekit_command(left, right)) {
                     lights_active = true;
                 } else {
                     printf("WARNING: Failed to send StageKit command\n");
