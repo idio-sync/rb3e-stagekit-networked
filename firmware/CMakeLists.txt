@@ -63,7 +63,6 @@ target_include_directories(rb3e_stagekit PRIVATE
 # Link libraries
 target_link_libraries(rb3e_stagekit
     pico_stdlib
-    pico_multicore
     pico_cyw43_arch_lwip_threadsafe_background
     tinyusb_host
     tinyusb_board
