@@ -54,13 +54,21 @@ datas = []
 datas += collect_data_files('googleapiclient')
 datas += collect_data_files('yt_dlp')
 
-# Conditionally include MPV DLLs if present
-# Download from: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+# Conditionally include MPV libraries if present
+# Windows: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+# Linux: apt install libmpv-dev
+# macOS: brew install mpv
 mpv_binaries = []
-for dll in ['mpv-1.dll', 'mpv-2.dll', 'libmpv-2.dll']:
-    if os.path.exists(dll):
-        mpv_binaries.append((dll, '.'))
-        print(f"Found MPV library: {dll}")
+import glob
+mpv_patterns = [
+    'mpv-1.dll', 'mpv-2.dll', 'libmpv-2.dll',  # Windows
+    'libmpv.so*',  # Linux
+    'libmpv*.dylib',  # macOS
+]
+for pattern in mpv_patterns:
+    for lib in glob.glob(pattern):
+        mpv_binaries.append((lib, '.'))
+        print(f"Found MPV library: {lib}")
 
 if not mpv_binaries:
     print("WARNING: No MPV DLLs found. Video playback will require MPV installed on target system.")
