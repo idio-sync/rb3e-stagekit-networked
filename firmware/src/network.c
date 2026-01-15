@@ -107,15 +107,10 @@ bool network_init(const wifi_config_t *config)
     // Copy config
     memcpy(&wifi_config, config, sizeof(wifi_config_t));
 
-    // CYW43 is already initialized in main() for LED support
-    // Just need to deinitialize and reinitialize with country code for WiFi
-    printf("Network: Reinitializing CYW43 with country code...\n");
-    cyw43_arch_deinit();
-    if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
-        printf("Network: CYW43 init failed\n");
-        net_state = NETWORK_STATE_ERROR;
-        return false;
-    }
+    // CYW43 is already initialized in main() with country code
+    // No deinit/reinit needed - that was causing a "zombie radio" state
+    // where the SPI bus worked but the RF circuitry wasn't properly configured
+    printf("Network: Configuring WiFi (CYW43 already initialized)...\n");
 
     // Enable station mode
     cyw43_arch_enable_sta_mode();
