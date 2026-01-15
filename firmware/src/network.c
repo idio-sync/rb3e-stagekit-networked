@@ -31,6 +31,9 @@ static struct udp_pcb *udp_telemetry = NULL;
 // Callback for StageKit packets
 static stagekit_packet_cb packet_callback = NULL;
 
+// Callback for servicing other tasks during blocking operations
+static void (*service_callback)(void) = NULL;
+
 // MAC address storage
 static uint8_t mac_address[6];
 
@@ -97,6 +100,11 @@ static void wifi_status_callback(struct netif *netif)
 // Public API Implementation
 //--------------------------------------------------------------------
 
+void network_set_service_callback(void (*callback)(void))
+{
+    service_callback = callback;
+}
+
 bool network_init(const wifi_config_t *config)
 {
     if (!config || !config->valid) {
@@ -112,8 +120,8 @@ bool network_init(const wifi_config_t *config)
     // where the SPI bus worked but the RF circuitry wasn't properly configured
     printf("Network: Configuring WiFi (CYW43 already initialized)...\n");
 
-    // Process any pending CYW43 events before configuring
-    cyw43_arch_poll();
+    // Note: Using pico_cyw43_arch_lwip_threadsafe_background - polling is
+    // handled automatically by background interrupts, no manual poll needed
 
     // Enable station mode
     cyw43_arch_enable_sta_mode();
@@ -148,9 +156,9 @@ bool network_connect_wifi(void)
     printf("Network: Connecting to '%s'...\n", wifi_config.ssid);
     net_state = NETWORK_STATE_CONNECTING;
 
-    // Ensure CYW43 driver is in a clean state before scanning
-    cyw43_arch_poll();
-    sleep_ms(50);  // Brief delay for radio readiness
+    // Brief delay for radio readiness before scan
+    // Note: Using threadsafe_background - polling handled automatically
+    sleep_ms(50);
 
     // Start async WiFi connection (non-blocking)
     int result = cyw43_arch_wifi_connect_async(
@@ -181,8 +189,10 @@ bool network_connect_wifi(void)
         // Feed the watchdog to prevent reset
         watchdog_update();
 
-        // Poll CYW43 to process events
-        cyw43_arch_poll();
+        // Service other tasks (e.g., USB) to prevent starvation
+        if (service_callback) {
+            service_callback();
+        }
 
         // Check connection status
         int status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
@@ -248,8 +258,12 @@ bool network_start_listener(stagekit_packet_cb callback)
     // Create UDP PCB for RB3E listener
     printf("Network: Starting UDP listener on port %d...\n", RB3E_LISTEN_PORT);
 
+    // Acquire LwIP lock for thread safety with background processing
+    cyw43_arch_lwip_begin();
+
     udp_listener = udp_new();
     if (udp_listener == NULL) {
+        cyw43_arch_lwip_end();
         printf("Network: Failed to create UDP PCB\n");
         return false;
     }
@@ -260,6 +274,7 @@ bool network_start_listener(stagekit_packet_cb callback)
         printf("Network: UDP bind failed (err=%d)\n", err);
         udp_remove(udp_listener);
         udp_listener = NULL;
+        cyw43_arch_lwip_end();
         return false;
     }
 
@@ -273,6 +288,8 @@ bool network_start_listener(stagekit_packet_cb callback)
         // Continue anyway - telemetry is optional
     }
 
+    cyw43_arch_lwip_end();
+
     net_state = NETWORK_STATE_LISTENING;
     printf("Network: Listening for RB3E packets on port %d\n", RB3E_LISTEN_PORT);
 
@@ -281,6 +298,9 @@ bool network_start_listener(stagekit_packet_cb callback)
 
 void network_stop_listener(void)
 {
+    // Acquire LwIP lock for thread safety
+    cyw43_arch_lwip_begin();
+
     if (udp_listener != NULL) {
         udp_remove(udp_listener);
         udp_listener = NULL;
@@ -291,6 +311,8 @@ void network_stop_listener(void)
         udp_telemetry = NULL;
     }
 
+    cyw43_arch_lwip_end();
+
     packet_callback = NULL;
 
     if (net_state == NETWORK_STATE_LISTENING) {
@@ -298,12 +320,6 @@ void network_stop_listener(void)
     }
 
     printf("Network: Listener stopped\n");
-}
-
-void network_poll(void)
-{
-    // CYW43 architecture handles polling internally in background mode
-    cyw43_arch_poll();
 }
 
 void network_send_telemetry(bool usb_connected)
@@ -315,7 +331,7 @@ void network_send_telemetry(bool usb_connected)
     // Update RSSI
     cyw43_wifi_get_rssi(&cyw43_state, &net_stats.wifi_rssi);
 
-    // Build JSON telemetry
+    // Build JSON telemetry (outside of lock - no LwIP calls here)
     char mac_str[18];
     network_get_mac_string(mac_str);
 
@@ -333,9 +349,13 @@ void network_send_telemetry(bool usb_connected)
         to_ms_since_boot(get_absolute_time()) / 1000
     );
 
+    // Acquire LwIP lock for pbuf and UDP operations
+    cyw43_arch_lwip_begin();
+
     // Allocate pbuf
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
     if (p == NULL) {
+        cyw43_arch_lwip_end();
         return;
     }
 
@@ -347,6 +367,8 @@ void network_send_telemetry(bool usb_connected)
 
     err_t err = udp_sendto(udp_telemetry, p, &broadcast_addr, RB3E_TELEMETRY_PORT);
     pbuf_free(p);
+
+    cyw43_arch_lwip_end();
 
     if (err == ERR_OK) {
         net_stats.telemetry_sent++;
