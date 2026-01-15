@@ -151,7 +151,7 @@ bool network_connect_wifi(void)
     int result = cyw43_arch_wifi_connect_async(
         wifi_config.ssid,
         wifi_config.password,
-        CYW43_AUTH_WPA2_AES_PSK
+        CYW43_AUTH_WPA2_MIXED_PSK
     );
 
     if (result != 0) {
