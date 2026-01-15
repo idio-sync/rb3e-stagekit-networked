@@ -125,7 +125,7 @@ int main(void)
         // The CYW43 RF subsystem needs time after init before reliable scanning
         printf("DEBUG: Waiting for radio stabilization...\n");
         sleep_ms(100);
-        cyw43_arch_poll();  // Process any pending driver events
+        // Note: Using threadsafe_background - polling handled automatically
     }
 
     // Initialize watchdog
@@ -253,6 +253,10 @@ int main(void)
     // Initialize USB Host
     printf("\nInitializing USB host...\n");
     usb_host_init();
+
+    // Register USB task as service callback for network operations
+    // This prevents USB starvation during WiFi reconnection
+    network_set_service_callback(usb_host_task);
 
     // Start UDP listener if WiFi is connected
     if (wifi_connected) {

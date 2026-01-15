@@ -66,6 +66,16 @@ typedef struct {
 //--------------------------------------------------------------------
 
 /**
+ * Set callback for servicing other tasks during blocking operations
+ *
+ * This callback is called periodically during WiFi connection to
+ * prevent starvation of other subsystems (e.g., USB host).
+ *
+ * @param callback Function to call, or NULL to disable
+ */
+void network_set_service_callback(void (*callback)(void));
+
+/**
  * Initialize network subsystem
  *
  * @param config WiFi configuration
@@ -94,13 +104,6 @@ bool network_start_listener(stagekit_packet_cb callback);
  * Stop UDP listener
  */
 void network_stop_listener(void);
-
-/**
- * Process network tasks
- *
- * Must be called regularly from network core
- */
-void network_poll(void);
 
 /**
  * Send telemetry broadcast
