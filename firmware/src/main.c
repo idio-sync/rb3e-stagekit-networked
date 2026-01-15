@@ -76,9 +76,18 @@ static void blink_led(int times, int delay_ms)
 {
     for (int i = 0; i < times; i++) {
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-        sleep_ms(delay_ms);
+        // Service USB and watchdog during LED delays to prevent starvation
+        for (int j = 0; j < delay_ms; j++) {
+            usb_host_task();
+            watchdog_update();
+            sleep_ms(1);
+        }
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-        sleep_ms(delay_ms);
+        for (int j = 0; j < delay_ms; j++) {
+            usb_host_task();
+            watchdog_update();
+            sleep_ms(1);
+        }
     }
 }
 
@@ -182,6 +191,15 @@ int main(void)
 
     watchdog_update();
 
+    // Initialize USB Host FIRST - before network, so USB can be serviced
+    // during WiFi connection which can take several seconds
+    printf("\nInitializing USB host...\n");
+    usb_host_init();
+
+    // Register USB task as service callback for network operations
+    // This prevents USB starvation during WiFi connection
+    network_set_service_callback(usb_host_task);
+
     // Initialize network
     printf("\nInitializing network...\n");
     if (!network_init(&stored_wifi_cfg)) {
@@ -250,14 +268,6 @@ int main(void)
     }
 
     watchdog_update();
-
-    // Initialize USB Host
-    printf("\nInitializing USB host...\n");
-    usb_host_init();
-
-    // Register USB task as service callback for network operations
-    // This prevents USB starvation during WiFi reconnection
-    network_set_service_callback(usb_host_task);
 
     // Start UDP listener if WiFi is connected
     if (wifi_connected) {

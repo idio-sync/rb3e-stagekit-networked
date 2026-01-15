@@ -203,8 +203,8 @@ bool network_connect_wifi(void)
             last_status = status;
         }
 
-        // Print periodic status every 5 seconds
-        if (++poll_count % 50 == 0) {
+        // Print periodic status every 5 seconds (500 iterations * 10ms = 5s)
+        if (++poll_count % 500 == 0) {
             printf("Network: Still waiting... status=%d\n", status);
         }
 
@@ -221,24 +221,29 @@ bool network_connect_wifi(void)
             printf("Network: WiFi connect failed: SSID not found\n");
             wifi_fail_reason = WIFI_FAIL_NONET;
             net_state = NETWORK_STATE_ERROR;
+            cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);  // Clean up driver state
             return false;
         } else if (status == CYW43_LINK_BADAUTH) {
             printf("Network: WiFi connect failed: Wrong password\n");
             wifi_fail_reason = WIFI_FAIL_BADAUTH;
             net_state = NETWORK_STATE_ERROR;
+            cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);  // Clean up driver state
             return false;
         } else if (status == CYW43_LINK_FAIL) {
             printf("Network: WiFi connect failed: General failure\n");
             wifi_fail_reason = WIFI_FAIL_GENERAL;
             net_state = NETWORK_STATE_ERROR;
+            cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);  // Clean up driver state
             return false;
         }
 
         // Status 0-2 means still connecting, keep waiting
-        sleep_ms(100);
+        // Use short sleep (10ms) for responsive USB enumeration during boot
+        sleep_ms(10);
     }
 
-    // Timeout - print final status
+    // Timeout - clean up driver state and report error
+    cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
     int final_status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
     printf("Network: WiFi connect timeout (final status=%d)\n", final_status);
     wifi_fail_reason = WIFI_FAIL_TIMEOUT;
