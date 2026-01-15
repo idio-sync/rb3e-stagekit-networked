@@ -4,12 +4,11 @@
  * Wireless bridge for RB3Enhanced Stage Kit integration.
  * Receives UDP packets and sends HID commands to Santroller Stage Kit.
  *
- * Core 0: USB Host and Main Loop
- * Core 1: Network Polling
+ * Uses pico_cyw43_arch_lwip_threadsafe_background for automatic
+ * WiFi/network polling via background interrupts.
  */
 
 #include "pico/stdlib.h"
-#include "pico/multicore.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/watchdog.h"
 #include <stdio.h>
@@ -35,11 +34,10 @@
 #define LOOP_DELAY_IDLE_US      1000    // 1ms when idle
 
 //--------------------------------------------------------------------
-// Shared State (between cores)
+// Shared State (for interrupt callbacks)
 //--------------------------------------------------------------------
 
-// Volatile for cross-core communication
-static volatile bool network_ready = false;
+// Volatile for interrupt safety (network callbacks run in background)
 static volatile bool stagekit_command_pending = false;
 static volatile uint8_t pending_left_weight = 0;
 static volatile uint8_t pending_right_weight = 0;
@@ -58,33 +56,15 @@ static bool led_state = false;
 static wifi_config_t stored_wifi_cfg;  // Stored for reconnection
 
 //--------------------------------------------------------------------
-// StageKit Packet Callback (called from Core 1)
+// StageKit Packet Callback (called from background interrupt)
 //--------------------------------------------------------------------
 
 static void on_stagekit_packet(uint8_t left, uint8_t right)
 {
-    // Queue command for Core 0 to process
+    // Queue command for main loop to process
     pending_left_weight = left;
     pending_right_weight = right;
     stagekit_command_pending = true;
-}
-
-//--------------------------------------------------------------------
-// Core 1: Network Task
-//--------------------------------------------------------------------
-
-static void core1_network_task(void)
-{
-    printf("Core 1: Network task starting\n");
-
-    // Main network loop
-    while (true) {
-        // Poll network
-        network_poll();
-
-        // Small delay to prevent CPU hogging
-        sleep_us(100);
-    }
 }
 
 //--------------------------------------------------------------------
@@ -284,12 +264,8 @@ int main(void)
         }
     }
 
-    // Mark network as ready for Core 1 (even if not connected, Core 1 handles polling)
-    network_ready = true;
-
-    // Launch Core 1 for network polling
-    printf("\nStarting Core 1 (Network)...\n");
-    multicore_launch_core1(core1_network_task);
+    // Network polling is handled automatically by pico_cyw43_arch_lwip_threadsafe_background
+    // via timer interrupts - no manual polling or Core 1 task needed
 
     // Initialize timing
     last_packet_time = get_absolute_time();
