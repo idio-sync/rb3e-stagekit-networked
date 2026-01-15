@@ -65,10 +65,31 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Download libmpv for Windows
-          $mpvUrl = "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-20240121-git-a39f9b6.7z/download"
+          # Download libmpv from GitHub (shinchiro builds - no Cloudflare blocking)
+          $mpvUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240121/mpv-dev-x86_64-20240121-git-a39f9b6.7z"
           $outFile = "mpv-dev.7z"
-          Invoke-WebRequest -Uri $mpvUrl -OutFile $outFile -UserAgent "Mozilla/5.0"
+
+          # Retry logic for network issues
+          $maxRetries = 4
+          $retryDelays = @(2, 4, 8, 16)
+
+          for ($i = 0; $i -lt $maxRetries; $i++) {
+            try {
+              Write-Host "Attempting download (attempt $($i + 1) of $maxRetries)..."
+              Invoke-WebRequest -Uri $mpvUrl -OutFile $outFile -UseBasicParsing
+              Write-Host "Download successful!"
+              break
+            } catch {
+              if ($i -lt $maxRetries - 1) {
+                Write-Host "Download failed, retrying in $($retryDelays[$i]) seconds..."
+                Start-Sleep -Seconds $retryDelays[$i]
+              } else {
+                Write-Host "All download attempts failed"
+                throw $_
+              }
+            }
+          }
+
           7z x $outFile -ompv-dev
           Copy-Item mpv-dev/*.dll . -ErrorAction SilentlyContinue
           Get-ChildItem *.dll
