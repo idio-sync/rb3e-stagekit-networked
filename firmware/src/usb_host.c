@@ -92,6 +92,11 @@ void tuh_umount_cb(uint8_t dev_addr)
         stagekit_dev_addr = 0;
         stagekit_is_santroller = false;
         usb_state = USB_STATE_DISCONNECTED;
+
+        // Clear transfer busy flag to ensure clean state on reconnection
+        // The completion callback may not fire if device was unplugged mid-transfer
+        transfer_busy = false;
+
         printf("USB: Stage Kit disconnected\n");
     }
 }
