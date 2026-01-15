@@ -2,6 +2,7 @@
 # PyInstaller spec file for RB3E Dashboard
 
 import sys
+import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
@@ -39,6 +40,7 @@ hiddenimports = [
     'datetime',
     're',
     'io',
+    'mpv',
 ]
 
 # Collect submodules for packages that need them
@@ -52,10 +54,32 @@ datas = []
 datas += collect_data_files('googleapiclient')
 datas += collect_data_files('yt_dlp')
 
+# Conditionally include MPV libraries if present
+# Windows: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+# Linux: apt install libmpv-dev
+# macOS: brew install mpv
+mpv_binaries = []
+import glob
+mpv_patterns = [
+    'mpv-1.dll', 'mpv-2.dll', 'libmpv-2.dll',  # Windows
+    'libmpv.so*',  # Linux
+    'libmpv*.dylib',  # macOS
+]
+for pattern in mpv_patterns:
+    for lib in glob.glob(pattern):
+        mpv_binaries.append((lib, '.'))
+        print(f"Found MPV library: {lib}")
+
+if not mpv_binaries:
+    print("WARNING: No MPV DLLs found. Video playback will require MPV installed on target system.")
+    print("To bundle MPV, download libmpv from:")
+    print("  https://sourceforge.net/projects/mpv-player-windows/files/libmpv/")
+    print("and place the DLL(s) in the Dashboard directory.")
+
 a = Analysis(
     ['dashboard.py'],
     pathex=[],
-    binaries=[],
+    binaries=mpv_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

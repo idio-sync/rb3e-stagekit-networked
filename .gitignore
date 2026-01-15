@@ -34,3 +34,8 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# MPV libraries (too large for git, download separately)
+Dashboard/*.dll
+Dashboard/*.so
+Dashboard/*.dylib
