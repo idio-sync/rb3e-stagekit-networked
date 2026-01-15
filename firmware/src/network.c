@@ -112,6 +112,9 @@ bool network_init(const wifi_config_t *config)
     // where the SPI bus worked but the RF circuitry wasn't properly configured
     printf("Network: Configuring WiFi (CYW43 already initialized)...\n");
 
+    // Process any pending CYW43 events before configuring
+    cyw43_arch_poll();
+
     // Enable station mode
     cyw43_arch_enable_sta_mode();
 
@@ -144,6 +147,10 @@ bool network_connect_wifi(void)
     wifi_fail_reason = WIFI_FAIL_NONE;
     printf("Network: Connecting to '%s'...\n", wifi_config.ssid);
     net_state = NETWORK_STATE_CONNECTING;
+
+    // Ensure CYW43 driver is in a clean state before scanning
+    cyw43_arch_poll();
+    sleep_ms(50);  // Brief delay for radio readiness
 
     // Start async WiFi connection (non-blocking)
     int result = cyw43_arch_wifi_connect_async(

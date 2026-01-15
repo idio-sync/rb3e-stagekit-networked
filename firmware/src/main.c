@@ -137,6 +137,12 @@ int main(void)
         // Quick blink to show we're alive
         blink_led(1, 100);
         printf("DEBUG: LED blink done\n");
+
+        // Allow radio to stabilize after power-up
+        // The CYW43 RF subsystem needs time after init before reliable scanning
+        printf("DEBUG: Waiting for radio stabilization...\n");
+        sleep_ms(100);
+        cyw43_arch_poll();  // Process any pending driver events
     }
 
     // Initialize watchdog
