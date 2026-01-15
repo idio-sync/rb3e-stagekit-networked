@@ -39,6 +39,7 @@ hiddenimports = [
     'datetime',
     're',
     'io',
+    'mpv',
 ]
 
 # Collect submodules for packages that need them
@@ -55,7 +56,7 @@ datas += collect_data_files('yt_dlp')
 a = Analysis(
     ['dashboard.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('mpv-1.dll', '.'), ('mpv-2.dll', '.')],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
