@@ -124,9 +124,10 @@ int main(void)
     printf("DEBUG: stdio initialized\n");
 
     // Initialize CYW43 early for LED support
-    // This must happen before any blink_led() calls
-    printf("DEBUG: About to init CYW43...\n");
-    int cyw43_result = cyw43_arch_init();
+    // Use init_with_country to set region code upfront - this avoids the need
+    // for a destructive deinit/reinit cycle later in network_init()
+    printf("DEBUG: About to init CYW43 with country code...\n");
+    int cyw43_result = cyw43_arch_init_with_country(CYW43_COUNTRY_USA);
     printf("DEBUG: CYW43 init returned %d\n", cyw43_result);
     if (cyw43_result) {
         printf("ERROR: CYW43 init failed - LEDs will not work\n");
