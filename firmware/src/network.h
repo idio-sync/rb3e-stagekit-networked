@@ -21,7 +21,9 @@ extern "C" {
 //--------------------------------------------------------------------
 
 #define TELEMETRY_INTERVAL_MS   5000    // Send telemetry every 5 seconds
-#define WIFI_CONNECT_TIMEOUT_MS 30000   // WiFi connection timeout
+#define WIFI_CONNECT_TIMEOUT_MS 15000   // WiFi connection timeout (must be < watchdog * 2)
+#define WIFI_RETRY_DELAY_MS     3000    // Delay between connection retries
+#define WIFI_MAX_RETRIES        3       // Max retries before giving up on boot
 
 //--------------------------------------------------------------------
 // Network State
@@ -158,6 +160,24 @@ char* network_get_mac_string(char *buffer);
  * @return Failure reason from last failed connection attempt
  */
 wifi_fail_reason_t network_get_wifi_fail_reason(void);
+
+/**
+ * Check WiFi connection status and update state
+ *
+ * Checks if WiFi is still connected. If disconnected, updates
+ * internal state to DISCONNECTED so reconnection can occur.
+ *
+ * @return true if still connected, false if disconnected
+ */
+bool network_check_connection(void);
+
+/**
+ * Disconnect from WiFi network
+ *
+ * Cleanly disconnects from the current network and stops the listener.
+ * Call network_connect_wifi() to reconnect.
+ */
+void network_disconnect(void);
 
 #ifdef __cplusplus
 }
