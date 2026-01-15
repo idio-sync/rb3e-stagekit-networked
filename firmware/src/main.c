@@ -295,6 +295,7 @@ int main(void)
     // Main loop (Core 0)
     while (true) {
         absolute_time_t now = get_absolute_time();
+        bool was_active = false;  // Track if we processed a packet this iteration
 
         // Feed watchdog
         watchdog_update();
@@ -315,6 +316,7 @@ int main(void)
             right = pending_right_weight;
             restore_interrupts(save);
 
+            was_active = true;  // We processed a packet
             last_packet_time = now;
 
             if (usb_stagekit_connected()) {
@@ -403,8 +405,9 @@ int main(void)
             }
         }
 
-        // Adaptive delay
-        if (stagekit_command_pending) {
+        // Adaptive delay based on activity this iteration
+        // Use fast delay if we just processed a packet for higher throughput
+        if (was_active || stagekit_command_pending) {
             sleep_us(LOOP_DELAY_ACTIVE_US);
         } else {
             sleep_us(LOOP_DELAY_IDLE_US);
