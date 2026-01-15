@@ -20,12 +20,21 @@ static uint8_t stagekit_dev_addr = 0;
 static bool stagekit_is_santroller = false;
 static const char *usb_error = NULL;
 
-// Control transfer buffer
+// Control transfer state - must be static/persistent for async transfers
 static uint8_t ctrl_buffer[8] __attribute__((aligned(4)));
+static volatile bool transfer_busy = false;
+static tusb_control_request_t ctrl_request;  // Must persist during async transfer
 
 //--------------------------------------------------------------------
 // Internal Functions
 //--------------------------------------------------------------------
+
+// Callback when control transfer completes
+static void ctrl_xfer_complete_cb(tuh_xfer_t *xfer)
+{
+    (void)xfer;
+    transfer_busy = false;
+}
 
 static bool is_santroller_stagekit(uint16_t vid, uint16_t pid, uint16_t bcd_device)
 {
@@ -139,6 +148,15 @@ bool usb_send_stagekit_command(uint8_t left_weight, uint8_t right_weight)
         return false;
     }
 
+    // Check if a transfer is already in progress - drop packet if busy
+    // This prevents buffer corruption from concurrent transfers
+    if (transfer_busy) {
+        return false;  // Silently drop - this is normal during rapid updates
+    }
+
+    // Mark as busy before modifying buffers
+    transfer_busy = true;
+
     // Santroller Stage Kit HID report format:
     // [0] = 0x01 (Report ID)
     // [1] = 0x5A (Command marker)
@@ -149,37 +167,35 @@ bool usb_send_stagekit_command(uint8_t left_weight, uint8_t right_weight)
     ctrl_buffer[2] = left_weight;
     ctrl_buffer[3] = right_weight;
 
-    // USB Control Transfer setup:
+    // USB Control Transfer setup (static struct for async safety):
     // bmRequestType: 0x21 = Host to Device, Class, Interface
     // bRequest: 0x09 = SET_REPORT
     // wValue: (HID_REPORT_TYPE_OUTPUT << 8) | Report ID = 0x0200
     // wIndex: Interface 0
-    tusb_control_request_t const request = {
-        .bmRequestType_bit = {
-            .recipient = TUSB_REQ_RCPT_INTERFACE,
-            .type = TUSB_REQ_TYPE_CLASS,
-            .direction = TUSB_DIR_OUT
-        },
-        .bRequest = SK_HID_SET_REPORT,
-        .wValue = (SK_HID_REPORT_TYPE_OUTPUT << 8) | 0x00,
-        .wIndex = 0,
-        .wLength = 4
-    };
+    ctrl_request.bmRequestType_bit.recipient = TUSB_REQ_RCPT_INTERFACE;
+    ctrl_request.bmRequestType_bit.type = TUSB_REQ_TYPE_CLASS;
+    ctrl_request.bmRequestType_bit.direction = TUSB_DIR_OUT;
+    ctrl_request.bRequest = SK_HID_SET_REPORT;
+    ctrl_request.wValue = (SK_HID_REPORT_TYPE_OUTPUT << 8) | 0x00;
+    ctrl_request.wIndex = 0;
+    ctrl_request.wLength = 4;
 
-    // Send synchronous control transfer
+    // Send async control transfer with completion callback
     tuh_xfer_t xfer = {
         .daddr = stagekit_dev_addr,
         .ep_addr = 0,
-        .setup = &request,
+        .setup = &ctrl_request,
         .buffer = ctrl_buffer,
-        .complete_cb = NULL,
+        .complete_cb = ctrl_xfer_complete_cb,
         .user_data = 0
     };
 
     bool result = tuh_control_xfer(&xfer);
 
     if (!result) {
-        printf("USB: Control transfer failed\n");
+        // Transfer failed to queue - clear busy flag
+        transfer_busy = false;
+        printf("USB: Control transfer failed to queue\n");
     }
 
     return result;
