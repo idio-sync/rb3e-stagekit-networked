@@ -58,6 +58,7 @@ typedef struct {
     uint32_t packets_processed;
     uint32_t packets_invalid;
     uint32_t telemetry_sent;
+    uint32_t discovery_received;    // Count of discovery packets received
     int32_t wifi_rssi;
 } network_stats_t;
 
@@ -95,6 +96,9 @@ bool network_connect_wifi(void);
 /**
  * Start UDP listener for RB3E packets
  *
+ * Also starts discovery listener on telemetry port to receive
+ * dashboard discovery packets.
+ *
  * @param callback Function to call when StageKit packet is received
  * @return true if listener started successfully
  */
@@ -106,7 +110,11 @@ bool network_start_listener(stagekit_packet_cb callback);
 void network_stop_listener(void);
 
 /**
- * Send telemetry broadcast
+ * Send telemetry to dashboard
+ *
+ * If a dashboard has been discovered via discovery packet, sends
+ * telemetry directly to that IP (unicast). Otherwise falls back
+ * to broadcast.
  *
  * @param usb_connected Whether Stage Kit is connected
  */
@@ -181,6 +189,21 @@ bool network_check_connection(void);
  * Call network_connect_wifi() to reconnect.
  */
 void network_disconnect(void);
+
+/**
+ * Check if a dashboard has been discovered
+ *
+ * @return true if dashboard discovery packet has been received recently
+ */
+bool network_dashboard_discovered(void);
+
+/**
+ * Get the discovered dashboard's IP address
+ *
+ * @param buffer Buffer to write IP string
+ * @param len Buffer length
+ */
+void network_get_dashboard_ip(char *buffer, size_t len);
 
 #ifdef __cplusplus
 }
