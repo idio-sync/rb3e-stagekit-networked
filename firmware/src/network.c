@@ -25,8 +25,8 @@ static wifi_config_t wifi_config;
 static wifi_fail_reason_t wifi_fail_reason = WIFI_FAIL_NONE;
 
 // UDP PCBs (Protocol Control Blocks)
-static struct udp_pcb *udp_listener = NULL;
-static struct udp_pcb *udp_telemetry = NULL;
+static struct udp_pcb *udp_listener = NULL;      // Port 21070 - RB3E StageKit commands
+static struct udp_pcb *udp_telemetry = NULL;     // Port 21071 - Discovery & Telemetry (single socket like RB3E)
 
 // Callback for StageKit packets
 static stagekit_packet_cb packet_callback = NULL;
@@ -37,12 +37,60 @@ static void (*service_callback)(void) = NULL;
 // MAC address storage
 static uint8_t mac_address[6];
 
+// Dashboard discovery state
+static bool dashboard_discovered = false;
+static ip_addr_t dashboard_addr;
+static absolute_time_t last_discovery_time;
+#define DISCOVERY_TIMEOUT_MS 30000  // Consider dashboard lost after 30 seconds
+
 //--------------------------------------------------------------------
-// UDP Receive Callback
+// Simple JSON Parser Helper
 //--------------------------------------------------------------------
 
-static void udp_recv_callback(void *arg, struct udp_pcb *pcb,
-                               struct pbuf *p, const ip_addr_t *addr, u16_t port)
+/**
+ * Check if a JSON string contains a specific key-value pair
+ * Very simple parser - looks for "key":"value" pattern
+ */
+static bool json_contains(const char *json, size_t len, const char *key, const char *value)
+{
+    // Build search pattern: "key":"value" or "key": "value"
+    char pattern[64];
+    int pattern_len = snprintf(pattern, sizeof(pattern), "\"%s\":\"%s\"", key, value);
+    if (pattern_len >= (int)sizeof(pattern)) {
+        return false;
+    }
+    
+    // Search for pattern
+    if (len >= (size_t)pattern_len) {
+        for (size_t i = 0; i <= len - pattern_len; i++) {
+            if (memcmp(json + i, pattern, pattern_len) == 0) {
+                return true;
+            }
+        }
+    }
+    
+    // Also try with space after colon: "key": "value"
+    pattern_len = snprintf(pattern, sizeof(pattern), "\"%s\": \"%s\"", key, value);
+    if (pattern_len < (int)sizeof(pattern) && len >= (size_t)pattern_len) {
+        for (size_t i = 0; i <= len - pattern_len; i++) {
+            if (memcmp(json + i, pattern, pattern_len) == 0) {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+//--------------------------------------------------------------------
+// UDP Receive Callbacks
+//--------------------------------------------------------------------
+
+/**
+ * Callback for RB3E StageKit packets on port 21070
+ */
+static void udp_stagekit_callback(void *arg, struct udp_pcb *pcb,
+                                   struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
     (void)arg;
     (void)pcb;
@@ -65,6 +113,49 @@ static void udp_recv_callback(void *arg, struct udp_pcb *pcb,
             packet_callback(left, right);
         } else {
             net_stats.packets_invalid++;
+        }
+    }
+
+    // Free the pbuf
+    pbuf_free(p);
+}
+
+/**
+ * Callback for telemetry port (21071) - handles discovery packets
+ * 
+ * Dashboard sends: {"type": "discovery"}
+ * We extract the sender's IP and send telemetry directly to them
+ * 
+ * This uses the same PCB that we send telemetry from, matching RB3E's pattern
+ * where one socket is used for both send and receive.
+ */
+static void udp_telemetry_callback(void *arg, struct udp_pcb *pcb,
+                                    struct pbuf *p, const ip_addr_t *addr, u16_t port)
+{
+    (void)arg;
+    (void)pcb;
+    (void)port;
+
+    if (p == NULL || addr == NULL) {
+        return;
+    }
+
+    // Check if this looks like a discovery packet
+    // Dashboard sends: {"type":"discovery"} or {"type": "discovery"}
+    if (p->len > 0 && p->len < 256) {
+        char *payload = (char*)p->payload;
+        
+        // Check for discovery packet
+        if (json_contains(payload, p->len, "type", "discovery")) {
+            // Store the dashboard's IP address
+            ip_addr_copy(dashboard_addr, *addr);
+            dashboard_discovered = true;
+            last_discovery_time = get_absolute_time();
+            
+            printf("Network: Dashboard discovered at %s\n", ip4addr_ntoa(addr));
+            
+            // Increment discovery count in stats
+            net_stats.discovery_received++;
         }
     }
 
@@ -138,6 +229,10 @@ bool network_init(const wifi_config_t *config)
     // Set callbacks
     netif_set_link_callback(netif_default, wifi_link_callback);
     netif_set_status_callback(netif_default, wifi_status_callback);
+
+    // Initialize discovery state
+    dashboard_discovered = false;
+    IP_ADDR4(&dashboard_addr, 0, 0, 0, 0);
 
     net_state = NETWORK_STATE_DISCONNECTED;
     printf("Network: Initialized\n");
@@ -260,23 +355,25 @@ bool network_start_listener(stagekit_packet_cb callback)
 
     packet_callback = callback;
 
-    // Create UDP PCB for RB3E listener
-    printf("Network: Starting UDP listener on port %d...\n", RB3E_LISTEN_PORT);
-
     // Acquire LwIP lock for thread safety with background processing
     cyw43_arch_lwip_begin();
+
+    //----------------------------------------------------------------
+    // Create UDP PCB for RB3E StageKit commands (port 21070)
+    //----------------------------------------------------------------
+    printf("Network: Starting StageKit listener on port %d...\n", RB3E_LISTEN_PORT);
 
     udp_listener = udp_new();
     if (udp_listener == NULL) {
         cyw43_arch_lwip_end();
-        printf("Network: Failed to create UDP PCB\n");
+        printf("Network: Failed to create StageKit UDP PCB\n");
         return false;
     }
 
     // Bind to listen port
     err_t err = udp_bind(udp_listener, IP_ADDR_ANY, RB3E_LISTEN_PORT);
     if (err != ERR_OK) {
-        printf("Network: UDP bind failed (err=%d)\n", err);
+        printf("Network: StageKit UDP bind failed (err=%d)\n", err);
         udp_remove(udp_listener);
         udp_listener = NULL;
         cyw43_arch_lwip_end();
@@ -284,19 +381,40 @@ bool network_start_listener(stagekit_packet_cb callback)
     }
 
     // Set receive callback
-    udp_recv(udp_listener, udp_recv_callback, NULL);
+    udp_recv(udp_listener, udp_stagekit_callback, NULL);
+    printf("Network: StageKit listener active on port %d\n", RB3E_LISTEN_PORT);
 
-    // Create UDP PCB for telemetry
+    //----------------------------------------------------------------
+    // Create UDP PCB for telemetry & discovery (port 21071)
+    // Single socket for both send and receive, like RB3E does
+    // This is important - some routers handle unbound sockets differently
+    //----------------------------------------------------------------
+    printf("Network: Starting telemetry/discovery on port %d...\n", RB3E_TELEMETRY_PORT);
+
     udp_telemetry = udp_new();
     if (udp_telemetry == NULL) {
-        printf("Network: Failed to create telemetry PCB\n");
-        // Continue anyway - telemetry is optional
+        printf("Network: Failed to create telemetry UDP PCB\n");
+        // Continue anyway - StageKit will work, just no telemetry
+    } else {
+        // Bind to telemetry port - this allows both sending AND receiving on this port
+        // Matching RB3E's pattern: RB3E_BindPort(RB3E_EventsSocket, BROADCAST_PORT);
+        err = udp_bind(udp_telemetry, IP_ADDR_ANY, RB3E_TELEMETRY_PORT);
+        if (err != ERR_OK) {
+            printf("Network: Telemetry bind failed (err=%d)\n", err);
+            udp_remove(udp_telemetry);
+            udp_telemetry = NULL;
+        } else {
+            // Set receive callback for discovery packets
+            udp_recv(udp_telemetry, udp_telemetry_callback, NULL);
+            printf("Network: Telemetry socket bound to port %d (send + receive)\n", RB3E_TELEMETRY_PORT);
+        }
     }
 
     cyw43_arch_lwip_end();
 
     net_state = NETWORK_STATE_LISTENING;
-    printf("Network: Listening for RB3E packets on port %d\n", RB3E_LISTEN_PORT);
+    printf("Network: Ready! Listening for StageKit on %d, telemetry on %d\n", 
+           RB3E_LISTEN_PORT, RB3E_TELEMETRY_PORT);
 
     return true;
 }
@@ -319,6 +437,7 @@ void network_stop_listener(void)
     cyw43_arch_lwip_end();
 
     packet_callback = NULL;
+    dashboard_discovered = false;
 
     if (net_state == NETWORK_STATE_LISTENING) {
         net_state = NETWORK_STATE_CONNECTED;
@@ -331,6 +450,15 @@ void network_send_telemetry(bool usb_connected)
 {
     if (udp_telemetry == NULL || net_state != NETWORK_STATE_LISTENING) {
         return;
+    }
+
+    // Check if dashboard discovery has timed out
+    if (dashboard_discovered) {
+        if (absolute_time_diff_us(last_discovery_time, get_absolute_time()) > 
+            (DISCOVERY_TIMEOUT_MS * 1000)) {
+            printf("Network: Dashboard discovery timeout - reverting to broadcast\n");
+            dashboard_discovered = false;
+        }
     }
 
     // Update RSSI
@@ -366,17 +494,32 @@ void network_send_telemetry(bool usb_connected)
 
     memcpy(p->payload, json, len);
 
-    // Send to broadcast address
-    ip_addr_t broadcast_addr;
-    IP_ADDR4(&broadcast_addr, 255, 255, 255, 255);
+    // Send to dashboard (unicast) if discovered, otherwise broadcast
+    ip_addr_t dest_addr;
+    if (dashboard_discovered) {
+        ip_addr_copy(dest_addr, dashboard_addr);
+    } else {
+        // Fall back to broadcast
+        IP_ADDR4(&dest_addr, 255, 255, 255, 255);
+    }
 
-    err_t err = udp_sendto(udp_telemetry, p, &broadcast_addr, RB3E_TELEMETRY_PORT);
+    err_t err = udp_sendto(udp_telemetry, p, &dest_addr, RB3E_TELEMETRY_PORT);
     pbuf_free(p);
 
     cyw43_arch_lwip_end();
 
     if (err == ERR_OK) {
         net_stats.telemetry_sent++;
+        // Debug output (can be removed later)
+        if (dashboard_discovered) {
+            printf("Network: Telemetry #%lu sent to %s:%d\n", 
+                   net_stats.telemetry_sent, ip4addr_ntoa(&dest_addr), RB3E_TELEMETRY_PORT);
+        } else {
+            printf("Network: Telemetry #%lu broadcast to %s:%d\n", 
+                   net_stats.telemetry_sent, ip4addr_ntoa(&dest_addr), RB3E_TELEMETRY_PORT);
+        }
+    } else {
+        printf("Network: Telemetry send failed (err=%d)\n", err);
     }
 }
 
@@ -458,5 +601,20 @@ void network_disconnect(void)
     cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
 
     net_state = NETWORK_STATE_DISCONNECTED;
+    dashboard_discovered = false;
     printf("Network: Disconnected\n");
+}
+
+bool network_dashboard_discovered(void)
+{
+    return dashboard_discovered;
+}
+
+void network_get_dashboard_ip(char *buffer, size_t len)
+{
+    if (dashboard_discovered) {
+        snprintf(buffer, len, "%s", ip4addr_ntoa(&dashboard_addr));
+    } else {
+        snprintf(buffer, len, "none");
+    }
 }
