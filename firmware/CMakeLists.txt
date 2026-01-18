@@ -53,6 +53,8 @@ add_executable(rb3e_stagekit
     src/config_parser.c
     src/usb_host.c
     src/network.c
+    src/ap_server.c
+    src/dhcpserver.c
 )
 
 # Include directories (src contains tusb_config.h and lwipopts.h)
