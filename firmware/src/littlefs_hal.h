@@ -1,5 +1,5 @@
 /*
- * LittleFS Hardware Abstraction Layer for RP2040
+ * LittleFS Hardware Abstraction Layer for RP2040/RP2350
  *
  * Provides flash read/write/erase operations for LittleFS
  */
@@ -8,6 +8,7 @@
 #define _LITTLEFS_HAL_H_
 
 #include "lfs.h"
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +64,20 @@ lfs_t* littlefs_get(void);
  * @return 1 if mounted, 0 otherwise
  */
 int littlefs_is_mounted(void);
+
+/**
+ * Get the detected flash size
+ *
+ * @return Flash size in bytes (2MB for Pico W, 4MB for Pico 2 W)
+ */
+uint32_t littlefs_get_flash_size(void);
+
+/**
+ * Get the filesystem offset from flash base
+ *
+ * @return Offset in bytes where LittleFS partition starts
+ */
+uint32_t littlefs_get_fs_offset(void);
 
 #ifdef __cplusplus
 }

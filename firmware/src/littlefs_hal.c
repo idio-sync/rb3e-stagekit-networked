@@ -1,5 +1,5 @@
 /*
- * LittleFS Hardware Abstraction Layer for RP2040
+ * LittleFS Hardware Abstraction Layer for RP2040/RP2350
  *
  * Implements flash read/write/erase operations for LittleFS
  */
@@ -11,19 +11,26 @@
 #include <stdio.h>
 #include <string.h>
 
-// Verify flash size is defined
+/*
+ * Flash size detection - use SDK-provided PICO_FLASH_SIZE_BYTES
+ * 
+ * The Pico SDK automatically defines PICO_FLASH_SIZE_BYTES based on the
+ * board configuration (set via PICO_BOARD in CMake). This is the correct
+ * and portable way to detect flash size:
+ *   - pico_w:   2MB (0x200000)
+ *   - pico2_w:  4MB (0x400000)
+ */
 #ifndef PICO_FLASH_SIZE_BYTES
-#error "PICO_FLASH_SIZE_BYTES not defined - check board configuration"
+    #error "PICO_FLASH_SIZE_BYTES not defined - check your board configuration"
 #endif
 
-// Flash offset where filesystem starts (end of flash - LFS_FLASH_SIZE)
-// Pico W has 2MB flash, so offset is 2MB - 256KB = 0x1C0000
-#define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - LFS_FLASH_SIZE)
+#define FLASH_TOTAL_SIZE PICO_FLASH_SIZE_BYTES
 
-// Sanity check - ensure we have at least 256KB for filesystem
-#if PICO_FLASH_SIZE_BYTES < LFS_FLASH_SIZE
-#error "Flash size too small for LittleFS"
+#if FLASH_TOTAL_SIZE < LFS_FLASH_SIZE
+    #error "LittleFS size exceeds total flash size"
 #endif
+
+#define FLASH_TARGET_OFFSET (FLASH_TOTAL_SIZE - LFS_FLASH_SIZE)
 
 // Read buffer for flash operations - use smaller cache to save RAM
 static uint8_t lfs_read_buffer[256];
@@ -105,6 +112,16 @@ lfs_t* littlefs_init(void)
     return &lfs;
 }
 
+uint32_t littlefs_get_flash_size(void)
+{
+    return FLASH_TOTAL_SIZE;
+}
+
+uint32_t littlefs_get_fs_offset(void)
+{
+    return FLASH_TARGET_OFFSET;
+}
+
 int littlefs_mount(void)
 {
     // Try to mount existing filesystem
@@ -112,6 +129,8 @@ int littlefs_mount(void)
 
     if (err < 0) {
         printf("LittleFS: Mount failed (error %d)\n", err);
+        printf("LittleFS: Flash size = %u bytes (0x%X)\n", FLASH_TOTAL_SIZE, FLASH_TOTAL_SIZE);
+        printf("LittleFS: LFS offset = 0x%X\n", FLASH_TARGET_OFFSET);
         printf("LittleFS: This usually means no filesystem exists yet.\n");
         printf("LittleFS: Flash a wifi_config.uf2 file to create the filesystem.\n");
         return err;
@@ -119,6 +138,8 @@ int littlefs_mount(void)
 
     lfs_mounted = 1;
     printf("LittleFS: Mounted successfully\n");
+    printf("LittleFS: Flash size = %u bytes, offset = 0x%X\n", 
+           FLASH_TOTAL_SIZE, FLASH_TARGET_OFFSET);
     return 0;
 }
 

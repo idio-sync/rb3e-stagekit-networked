@@ -1,11 +1,25 @@
 /*
- * RB3E StageKit Bridge - Main Application
+ * RB3E StageKit Bridge - Main Application (DEBUG VERSION)
  *
  * Wireless bridge for RB3Enhanced Stage Kit integration.
  * Receives UDP packets and sends HID commands to Santroller Stage Kit.
  *
- * Uses pico_cyw43_arch_lwip_threadsafe_background for automatic
- * WiFi/network polling via background interrupts.
+ * DEBUG LED PATTERNS:
+ * - 1 blink  = CYW43 init failed
+ * - 2 blinks = WiFi CONNECTED (success!)
+ * - 3 blinks = No settings file
+ * - 4 blinks = Failed to load WiFi config
+ * - 5 blinks = No filesystem
+ * - 6 blinks = Network init failed
+ * - 7 blinks = WiFi failed: SSID not found
+ * - 8 blinks = WiFi failed: Wrong password
+ * - 9 blinks = WiFi failed: Timeout
+ * - 10 blinks = WiFi failed: General error
+ * 
+ * HEARTBEAT (in main loop):
+ * - Slow (2s) toggle = Running, WiFi connected
+ * - Fast (500ms) toggle = Running, WiFi NOT connected
+ * - Rapid burst every 5s = Discovery packet received from dashboard
  */
 
 #include "pico/stdlib.h"
@@ -20,19 +34,22 @@
 #include "usb_host.h"
 #include "network.h"
 #include "rb3e_protocol.h"
+#include "ap_server.h"
 
 //--------------------------------------------------------------------
 // Timing Constants (in milliseconds)
 //--------------------------------------------------------------------
 
 #define WATCHDOG_TIMEOUT_MS     8000    // Reset if frozen for 8 seconds
-#define HEARTBEAT_INTERVAL_MS   2000    // LED blink interval
+#define HEARTBEAT_CONNECTED_MS  2000    // LED blink interval when WiFi connected
+#define HEARTBEAT_DISCONNECTED_MS 500   // LED blink interval when WiFi disconnected
 #define TELEMETRY_INTERVAL_MS   5000    // Telemetry broadcast interval
 #define SAFETY_TIMEOUT_MS       5000    // Turn off lights if no packets
 #define USB_RECONNECT_INTERVAL_MS 5000  // USB reconnection check interval
 #define WIFI_CHECK_INTERVAL_MS  10000   // WiFi connection check interval
 #define LOOP_DELAY_ACTIVE_US    100     // 0.1ms when active
 #define LOOP_DELAY_IDLE_US      1000    // 1ms when idle
+#define WIFI_MAX_RETRIES        3
 
 //--------------------------------------------------------------------
 // Shared State (for interrupt callbacks)
@@ -42,6 +59,7 @@
 static volatile bool stagekit_command_pending = false;
 static volatile uint8_t pending_left_weight = 0;
 static volatile uint8_t pending_right_weight = 0;
+static wifi_config_t stored_wifi_cfg;
 
 //--------------------------------------------------------------------
 // Core 0 State
@@ -55,6 +73,7 @@ static absolute_time_t last_usb_reconnect_time;
 static absolute_time_t last_wifi_check_time;
 static bool led_state = false;
 static wifi_config_t stored_wifi_cfg;  // Stored for reconnection
+static bool wifi_is_connected = false; // Track WiFi state for heartbeat speed
 
 //--------------------------------------------------------------------
 // StageKit Packet Callback (called from background interrupt)
@@ -71,6 +90,17 @@ static void on_stagekit_packet(uint8_t left, uint8_t right)
 //--------------------------------------------------------------------
 // LED Blink Functions
 //--------------------------------------------------------------------
+
+static void blink_led_simple(int times, int delay_ms)
+{
+    // Simple blink without USB servicing (for early boot)
+    for (int i = 0; i < times; i++) {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+        sleep_ms(delay_ms);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+        sleep_ms(delay_ms);
+    }
+}
 
 static void blink_led(int times, int delay_ms)
 {
@@ -97,6 +127,17 @@ static void heartbeat_led_toggle(void)
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_state);
 }
 
+// Error loop - blinks pattern forever
+static void error_loop(int blinks)
+{
+    printf("ERROR: Entering error loop with %d blinks\n", blinks);
+    while (1) {
+        watchdog_update();
+        blink_led(blinks, 200);
+        sleep_ms(1500);  // Pause between patterns
+    }
+}
+
 //--------------------------------------------------------------------
 // Main Application (Core 0)
 //--------------------------------------------------------------------
@@ -111,176 +152,181 @@ int main(void)
 
     printf("\n\n");
     printf("==================================================\n");
-    printf("RB3E StageKit Bridge - Pico W Firmware\n");
+    printf("RB3E StageKit Bridge - Pico W Firmware (DEBUG)\n");
     printf("Build: " __DATE__ " " __TIME__ "\n");
     printf("==================================================\n");
-    printf("DEBUG: stdio initialized\n");
-
-    // Initialize CYW43 early for LED support
-    // Use init_with_country to set region code upfront - this avoids the need
-    // for a destructive deinit/reinit cycle later in network_init()
-    printf("DEBUG: About to init CYW43 with country code...\n");
+	
+	// Initialize CYW43 early for LED support
+    printf("Initializing CYW43...\n");
     int cyw43_result = cyw43_arch_init_with_country(CYW43_COUNTRY_USA);
-    printf("DEBUG: CYW43 init returned %d\n", cyw43_result);
     if (cyw43_result) {
-        printf("ERROR: CYW43 init failed - LEDs will not work\n");
-        // Continue anyway, but LEDs won't function
-    } else {
-        printf("DEBUG: CYW43 OK, blinking LED...\n");
-        // Quick blink to show we're alive
-        blink_led(1, 100);
-        printf("DEBUG: LED blink done\n");
+        printf("ERROR: CYW43 init failed with code %d\n", cyw43_result);
+        // Can't even blink LED if CYW43 failed, but try anyway
+        while(1) {
+            sleep_ms(100);
+        }
+    }
+    
+    printf("CYW43 initialized OK\n");
+    
+    // Signal: CYW43 OK - single blink
+    blink_led_simple(1, 100);
+    sleep_ms(500);
 
-        // Allow radio to stabilize after power-up
-        // The CYW43 RF subsystem needs time after init before reliable scanning
-        printf("DEBUG: Waiting for radio stabilization...\n");
-        sleep_ms(100);
-        // Note: Using threadsafe_background - polling handled automatically
+    // DIAGNOSTIC: Blink LED to show detected flash size
+    // 2 blinks = 2MB (Pico W), 4 blinks = 4MB (Pico 2 W)
+    {
+        uint32_t flash_mb = littlefs_get_flash_size() / (1024 * 1024);
+        printf("DIAGNOSTIC: Flash size = %lu MB\n", flash_mb);
+        printf("DIAGNOSTIC: FS offset = 0x%lX\n", littlefs_get_fs_offset());
+        
+        sleep_ms(300);  // Pause before diagnostic
+        
+        for (uint32_t i = 0; i < flash_mb; i++) {
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+            sleep_ms(150);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+            sleep_ms(150);
+        }
+        
+        sleep_ms(500);  // Pause after diagnostic before continuing
     }
 
     // Initialize watchdog
     printf("Initializing watchdog (%d ms timeout)...\n", WATCHDOG_TIMEOUT_MS);
     watchdog_enable(WATCHDOG_TIMEOUT_MS, true);
     watchdog_update();
-
-    // Initialize LittleFS
-    printf("\nInitializing filesystem...\n");
+	
+	// 2. Initialize LittleFS
+    printf("Initializing filesystem...\n");
     littlefs_init();
-    if (littlefs_mount() != 0) {
-        printf("\n");
-        printf("!!! NO FILESYSTEM FOUND !!!\n");
-        printf("You need to flash the WiFi credentials UF2 file.\n");
-        printf("Use the Dashboard or generate_config_uf2.py tool.\n");
-        printf("\n");
-        // Blink pattern: 5 fast blinks = no filesystem
-        while (1) {
-            watchdog_update();
-            blink_led(5, 200);
-            sleep_ms(1000);
+    
+	if (littlefs_mount() != 0) {
+		printf("Filesystem mount failed. Formatting...\n");
+		littlefs_format_and_mount();
+	}
+	
+	// 3. Attempt to Load Config
+	bool config_loaded = false;
+    
+    if (config_file_exists()) {
+        if (config_load_wifi(&stored_wifi_cfg) == 0) {
+            config_loaded = true;
+            printf("Config loaded: %s\n", stored_wifi_cfg.ssid);
+        } else {
+            printf("Config file invalid.\n");
         }
+    } else {
+        printf("No config file found.\n");
     }
 
-    // Check for settings file
-    if (!config_file_exists()) {
-        printf("Settings file not found, creating default...\n");
-        config_create_default();
-        printf("\n");
-        printf("!!! IMPORTANT !!!\n");
-        printf("Please edit /settings.toml with your WiFi credentials\n");
-        printf("then reset the device.\n");
-        printf("\n");
-
-        // Blink error pattern and wait
-        while (1) {
-            watchdog_update();
-            blink_led(3, 300);
-            sleep_ms(1000);
-        }
+    // 4. DECISION POINT: If no config, enter AP Setup Mode
+    if (!config_loaded) {
+        // This function NEVER returns. It saves and reboots.
+        run_ap_setup_mode(); 
     }
-
-    // Load WiFi configuration
-    printf("\nLoading WiFi configuration...\n");
-    if (config_load_wifi(&stored_wifi_cfg) != 0) {
-        printf("ERROR: Failed to load WiFi config\n");
-        while (1) {
-            watchdog_update();
-            blink_led(4, 400);
-            sleep_ms(1000);
-        }
-    }
-
+	
     watchdog_update();
-
-    // Initialize USB Host FIRST - before network, so USB can be serviced
-    // during WiFi connection which can take several seconds
-    printf("\nInitializing USB host...\n");
+	
+    // Initialize USB Host
+    printf("Initializing USB host...\n");
     usb_host_init();
 
-    // Register USB task as service callback for network operations
-    // This prevents USB starvation during WiFi connection
+    // Register USB task as service callback
     network_set_service_callback(usb_host_task);
 
     // Initialize network
-    printf("\nInitializing network...\n");
+    printf("Initializing network...\n");
     if (!network_init(&stored_wifi_cfg)) {
-        printf("ERROR: Network initialization failed\n");
-        while (1) {
-            watchdog_update();
-            blink_led(5, 500);
-            sleep_ms(1000);
-        }
+        printf("ERROR: Network initialization failed!\n");
+        error_loop(6);  // 6 blinks = network init failed
     }
+    printf("Network initialized\n");
 
     // Connect to WiFi with retries
-    printf("\nConnecting to WiFi: %s\n", stored_wifi_cfg.ssid);
-    bool wifi_connected = false;
+    printf("\n");
+    printf("Connecting to WiFi: '%s'\n", stored_wifi_cfg.ssid);
+    printf("Password length: %d chars\n", (int)strlen(stored_wifi_cfg.password));
+    
+    wifi_is_connected = false;
     for (int attempt = 1; attempt <= WIFI_MAX_RETRIES; attempt++) {
-        printf("WiFi connection attempt %d of %d...\n", attempt, WIFI_MAX_RETRIES);
+        printf("WiFi attempt %d of %d...\n", attempt, WIFI_MAX_RETRIES);
+        
+        // Blink to show we're trying
+        blink_led(attempt, 100);
+        
         watchdog_update();
 
         if (network_connect_wifi()) {
-            wifi_connected = true;
+            wifi_is_connected = true;
+            printf("WiFi CONNECTED!\n");
             break;
         }
 
         wifi_fail_reason_t reason = network_get_wifi_fail_reason();
         printf("Attempt %d failed: ", attempt);
+        
         switch (reason) {
             case WIFI_FAIL_NONET:
-                printf("SSID not found\n");
+                printf("SSID '%s' not found!\n", stored_wifi_cfg.ssid);
+                // Show error but keep trying
+                blink_led(7, 150);
                 break;
             case WIFI_FAIL_BADAUTH:
-                printf("Wrong password\n");
-                // Don't retry on bad password - it won't change
-                attempt = WIFI_MAX_RETRIES;
+                printf("Wrong password!\n");
+                // Don't retry on bad password
+                error_loop(8);  // 8 blinks = bad password
                 break;
             case WIFI_FAIL_TIMEOUT:
                 printf("Connection timeout\n");
+                blink_led(9, 150);
                 break;
             default:
-                printf("General failure\n");
+                printf("General failure (reason=%d)\n", reason);
+                blink_led(10, 150);
                 break;
         }
 
         if (attempt < WIFI_MAX_RETRIES) {
             printf("Retrying in %d seconds...\n", WIFI_RETRY_DELAY_MS / 1000);
-            // Blink while waiting for retry
-            for (int i = 0; i < WIFI_RETRY_DELAY_MS / 500; i++) {
+            for (int i = 0; i < WIFI_RETRY_DELAY_MS / 100; i++) {
                 watchdog_update();
-                blink_led(1, 200);
-                sleep_ms(300);
+                sleep_ms(100);
             }
         }
     }
 
-    if (!wifi_connected) {
-        printf("WARNING: WiFi connection failed after %d attempts\n", WIFI_MAX_RETRIES);
-        printf("Continuing to main loop - will retry periodically\n");
-        blink_led(3, 500);  // Indicate boot without WiFi
-    }
-
-    // Show connection status
-    if (wifi_connected) {
+    // Show final WiFi status
+    if (wifi_is_connected) {
         char ip_str[16];
         network_get_ip_string(ip_str, sizeof(ip_str));
-        printf("WiFi connected! IP: %s\n", ip_str);
-        blink_led(2, 100);  // Quick double blink = success
+        printf("SUCCESS! IP address: %s\n", ip_str);
+        printf("RSSI: %d dBm\n", network_get_rssi());
+        
+        // Victory blink: 2 quick blinks
+        blink_led(2, 100);
+        sleep_ms(300);
+        blink_led(2, 100);
+    } else {
+        printf("WARNING: WiFi connection failed!\n");
+        printf("Will keep retrying in background...\n");
+        // 3 slow blinks to indicate failure but continuing
+        blink_led(3, 500);
     }
 
     watchdog_update();
 
-    // Start UDP listener if WiFi is connected
-    if (wifi_connected) {
-        printf("\nStarting UDP listener...\n");
+    // Start UDP listener if WiFi connected
+    if (wifi_is_connected) {
+        printf("Starting UDP listener...\n");
         if (!network_start_listener(on_stagekit_packet)) {
             printf("ERROR: Failed to start listener\n");
-            // Don't die - continue and try to recover
-            wifi_connected = false;
+            wifi_is_connected = false;
+        } else {
+            printf("UDP listener started on port %d\n", RB3E_LISTEN_PORT);
+            printf("Telemetry/discovery on port %d\n", RB3E_TELEMETRY_PORT);
         }
     }
-
-    // Network polling is handled automatically by pico_cyw43_arch_lwip_threadsafe_background
-    // via timer interrupts - no manual polling or Core 1 task needed
 
     // Initialize timing
     last_packet_time = get_absolute_time();
@@ -291,21 +337,17 @@ int main(void)
 
     printf("\n");
     printf("==================================================\n");
-    if (wifi_connected) {
-        printf("Ready! Listening for RB3E packets on port %d\n", RB3E_LISTEN_PORT);
-        printf("Telemetry broadcast on port %d every %d seconds\n",
-               RB3E_TELEMETRY_PORT, TELEMETRY_INTERVAL_MS / 1000);
-    } else {
-        printf("Started in OFFLINE mode - waiting for WiFi\n");
-        printf("Will retry connection every %d seconds\n", WIFI_CHECK_INTERVAL_MS / 1000);
-    }
+    printf("MAIN LOOP STARTING\n");
+    printf("Heartbeat: %s\n", wifi_is_connected ? "SLOW (2s) = connected" : "FAST (500ms) = disconnected");
     printf("==================================================\n");
-    printf("\n");
 
-    // Main loop (Core 0)
+    // Track last discovery count to detect new discoveries
+    uint32_t last_discovery_count = 0;
+
+    // Main loop
     while (true) {
         absolute_time_t now = get_absolute_time();
-        bool was_active = false;  // Track if we processed a packet this iteration
+        bool was_active = false;
 
         // Feed watchdog
         watchdog_update();
@@ -314,109 +356,97 @@ int main(void)
         usb_host_task();
 
         // Process pending StageKit command
-        // Use critical section to atomically read both weight values
-        // This prevents "torn" reads if interrupt fires between reading left and right
         if (stagekit_command_pending) {
             uint8_t left, right;
 
-            // Disable interrupts to atomically read both values
             uint32_t save = save_and_disable_interrupts();
             stagekit_command_pending = false;
             left = pending_left_weight;
             right = pending_right_weight;
             restore_interrupts(save);
 
-            was_active = true;  // We processed a packet
+            was_active = true;
             last_packet_time = now;
 
             if (usb_stagekit_connected()) {
-                if (usb_send_stagekit_command(left, right)) {
-                    lights_active = true;
-                } else {
-                    printf("WARNING: Failed to send StageKit command\n");
-                }
+                usb_send_stagekit_command(left, right);
+                lights_active = true;
             }
         }
 
-        // Heartbeat LED (blink every HEARTBEAT_INTERVAL)
-        if (absolute_time_diff_us(last_heartbeat_time, now) > (HEARTBEAT_INTERVAL_MS * 1000)) {
+        // Heartbeat LED - speed indicates WiFi status
+        uint32_t heartbeat_interval = wifi_is_connected ? HEARTBEAT_CONNECTED_MS : HEARTBEAT_DISCONNECTED_MS;
+        if (absolute_time_diff_us(last_heartbeat_time, now) > (heartbeat_interval * 1000)) {
             heartbeat_led_toggle();
             last_heartbeat_time = now;
         }
 
-        // Send telemetry (every TELEMETRY_INTERVAL) - only if connected
+        // Check for new dashboard discovery (blink rapidly to indicate)
+        const network_stats_t *stats = network_get_stats();
+        if (stats->discovery_received > last_discovery_count) {
+            last_discovery_count = stats->discovery_received;
+            // Rapid blink to show discovery received!
+            printf("Dashboard discovered! Count: %lu\n", stats->discovery_received);
+            for (int i = 0; i < 5; i++) {
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+                sleep_ms(50);
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+                sleep_ms(50);
+            }
+        }
+
+        // Send telemetry
         if (network_wifi_connected() &&
             absolute_time_diff_us(last_telemetry_time, now) > (TELEMETRY_INTERVAL_MS * 1000)) {
             network_send_telemetry(usb_stagekit_connected());
             last_telemetry_time = now;
         }
 
-        // Safety timeout - turn off lights if no packets received
+        // Safety timeout
         if (lights_active &&
             absolute_time_diff_us(last_packet_time, now) > (SAFETY_TIMEOUT_MS * 1000)) {
-            printf("Safety timeout - clearing lights\n");
             if (usb_stagekit_connected()) {
                 usb_stagekit_all_off();
             }
             lights_active = false;
         }
 
-        // Try to reconnect USB if disconnected
-        if (!usb_stagekit_connected() &&
-            absolute_time_diff_us(last_usb_reconnect_time, now) > (USB_RECONNECT_INTERVAL_MS * 1000)) {
-            // USB host handles reconnection automatically via callbacks
-            // Just log the status periodically
-            last_usb_reconnect_time = now;
-        }
-
-        // WiFi connection check and reconnection
+        // WiFi connection check
         if (absolute_time_diff_us(last_wifi_check_time, now) > (WIFI_CHECK_INTERVAL_MS * 1000)) {
             last_wifi_check_time = now;
 
             if (network_wifi_connected()) {
-                // Check if connection is still alive
                 if (!network_check_connection()) {
-                    printf("WiFi connection lost - attempting reconnect...\n");
+                    printf("WiFi lost! Reconnecting...\n");
+                    wifi_is_connected = false;
                     network_stop_listener();
 
-                    // Try to reconnect
                     if (network_connect_wifi()) {
+                        wifi_is_connected = true;
                         char ip_str[16];
                         network_get_ip_string(ip_str, sizeof(ip_str));
-                        printf("WiFi reconnected! IP: %s\n", ip_str);
-
-                        // Restart listener
-                        if (network_start_listener(on_stagekit_packet)) {
-                            printf("Listener restarted\n");
-                            blink_led(2, 100);  // Success indication
-                        }
-                    } else {
-                        printf("WiFi reconnect failed - will retry\n");
-                        blink_led(1, 500);  // Failure indication
+                        printf("Reconnected! IP: %s\n", ip_str);
+                        network_start_listener(on_stagekit_packet);
+                        blink_led(2, 100);
                     }
                 }
             } else {
-                // Not connected - try to connect
-                printf("WiFi not connected - attempting connection...\n");
+                printf("Trying to connect WiFi...\n");
                 if (network_connect_wifi()) {
+                    wifi_is_connected = true;
                     char ip_str[16];
                     network_get_ip_string(ip_str, sizeof(ip_str));
-                    printf("WiFi connected! IP: %s\n", ip_str);
-
-                    // Start listener
-                    if (network_start_listener(on_stagekit_packet)) {
-                        printf("Listener started\n");
-                        blink_led(2, 100);  // Success indication
-                    }
+                    printf("Connected! IP: %s\n", ip_str);
+                    network_start_listener(on_stagekit_packet);
+                    blink_led(2, 100);
                 } else {
-                    printf("WiFi connection failed - will retry in %d seconds\n",
-                           WIFI_CHECK_INTERVAL_MS / 1000);
+                    wifi_fail_reason_t reason = network_get_wifi_fail_reason();
+                    printf("WiFi failed (reason=%d)\n", reason);
                 }
             }
         }
 
-        // Adaptive delay based on activity this iteration
-        // Use fast delay if we just processed a packet for higher throughput
+        // Adaptive delay
         if (was_active || stagekit_command_pending) {
             sleep_us(LOOP_DELAY_ACTIVE_US);
         } else {

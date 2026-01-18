@@ -160,8 +160,8 @@ int config_create_default(void)
         "# RB3E StageKit Bridge Configuration\n"
         "# Edit these values with your WiFi credentials\n"
         "\n"
-        "CIRCUITPY_WIFI_SSID = \"YOUR_NETWORK_NAME\"\n"
-        "CIRCUITPY_WIFI_PASSWORD = \"YOUR_NETWORK_PASSWORD\"\n";
+        "CIRCUITPY_WIFI_SSID = \"placeholder_wifi\"\n"
+        "CIRCUITPY_WIFI_PASSWORD = \"placeholder_pass\"\n";
 
     lfs_file_write(lfs, &file, default_content, strlen(default_content));
     lfs_file_close(lfs, &file);
