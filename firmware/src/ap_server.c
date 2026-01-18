@@ -96,9 +96,13 @@ err_t http_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) 
         tcp_close(tpcb); 
         return ERR_OK; 
     }
-    
+
+    // 1. Acknowledge that we have received the data
+    // If you don't do this, the connection window will eventually fill up and stall.
+    tcp_recved(tpcb, p->tot_len);
+
     char *req = (char *)p->payload;
-    
+
     // Check if this is the Save request: GET /save?s=SSID&p=PASS
     if (strncmp(req, "GET /save", 9) == 0) {
         char ssid[64] = {0}; 
@@ -125,7 +129,9 @@ err_t http_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) 
             
             // Send success page
             tcp_write(tpcb, html_success, strlen(html_success), TCP_WRITE_FLAG_COPY);
-            tcp_output(tpcb);
+            
+            // 2. IMPORTANT: Close connection so browser knows we are done
+            tcp_close(tpcb);
             
             printf("AP: Rebooting...\n");
             watchdog_enable(2000, 1);
@@ -133,6 +139,9 @@ err_t http_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) 
     } else {
         // Send the Form
         tcp_write(tpcb, html_form, strlen(html_form), TCP_WRITE_FLAG_COPY);
+        
+        // 3. IMPORTANT: Close connection here too!
+        tcp_close(tpcb);
     }
     
     pbuf_free(p);
@@ -198,4 +207,5 @@ void run_ap_setup_mode(void) {
         sleep_ms(500);
         watchdog_update();
     }
+
 }
