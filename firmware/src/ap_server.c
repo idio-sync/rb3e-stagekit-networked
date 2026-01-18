@@ -156,6 +156,9 @@ void run_ap_setup_mode(void) {
     cyw43_arch_enable_ap_mode(ssid, AP_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
     printf("AP Started: '%s' (Pass: %s)\n", ssid, AP_PASSWORD);
 
+    // Allow time for AP interface to initialize
+    sleep_ms(100);
+
     // ============================================
     // CONFIGURE AP NETWORK INTERFACE WITH STATIC IP
     // ============================================
@@ -164,13 +167,30 @@ void run_ap_setup_mode(void) {
     IP4_ADDR(&mask, 255, 255, 255, 0);  // Subnet mask
 
     cyw43_arch_lwip_begin();
-    // Get the AP network interface (not netif_default which is for STA mode)
-    struct netif *ap_netif = &cyw43_state.netif[CYW43_ITF_AP];
-    netif_set_addr(ap_netif, &gw, &mask, &gw);
-    netif_set_up(ap_netif);
-    cyw43_arch_lwip_end();
 
-    printf("AP IP configured: %s\n", ip4addr_ntoa(&gw));
+    // Get the AP network interface (CYW43_ITF_AP = 1)
+    struct netif *ap_netif = &cyw43_state.netif[CYW43_ITF_AP];
+
+    // Debug: Check netif state before configuration
+    printf("AP netif before config - up:%d link_up:%d\n",
+           netif_is_up(ap_netif), netif_is_link_up(ap_netif));
+
+    // Set the IP address, netmask, and gateway
+    netif_set_addr(ap_netif, &gw, &mask, &gw);
+
+    // Ensure interface is up
+    netif_set_up(ap_netif);
+    netif_set_link_up(ap_netif);
+
+    // Set as default netif for AP operations
+    netif_set_default(ap_netif);
+
+    // Debug: Verify configuration
+    printf("AP netif after config - up:%d link_up:%d IP:%s\n",
+           netif_is_up(ap_netif), netif_is_link_up(ap_netif),
+           ip4addr_ntoa(netif_ip4_addr(ap_netif)));
+
+    cyw43_arch_lwip_end();
 
     // ============================================
     // START DHCP SERVER
