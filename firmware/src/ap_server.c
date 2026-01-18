@@ -1,12 +1,9 @@
 #include "ap_server.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
-
-// --- THESE MUST BE IN THIS ORDER ---
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
 #include "lwip/err.h"
-// -----------------------------------
 
 // Manual definition to prevent "undefined identifier" errors
 #ifndef TCP_WRITE_FLAG_COPY
@@ -21,10 +18,16 @@
 #include <stdio.h>
 #include <string.h>
 
-#define AP_PASSWORD "12345678" // Password to join the Setup WiFi
+#define AP_PASSWORD "rockband" // Password to join the Setup WiFi
 
 // Static DHCP server instance
-static dhcp_server_t dhcp_server;  // <-- ADD THIS
+static dhcp_server_t dhcp_server;
+
+// Global flags and buffers for main loop handling
+static volatile bool reboot_required = false;
+static volatile bool save_pending = false;
+static char pending_ssid[64];
+static char pending_pass[64];
 
 // HTML Content
 const char *html_form = 
@@ -62,11 +65,12 @@ void url_decode(char *dst, const char *src) {
 }
 
 // Save credentials to LittleFS
+// NOTE: This must only be called from the main thread, not an interrupt!
 void save_wifi_config(const char *ssid, const char *password) {
     lfs_t *lfs = littlefs_get();
     lfs_file_t file;
 
-    // Open/create settings file (use CONFIG_FILE_PATH for consistency)
+    // Open/create settings file
     int err = lfs_file_open(lfs, &file, CONFIG_FILE_PATH, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
     if (err < 0) {
         printf("AP: Failed to open %s for writing (err=%d)\n", CONFIG_FILE_PATH, err);
@@ -98,18 +102,27 @@ err_t http_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) 
     }
 
     // 1. Acknowledge that we have received the data
-    // If you don't do this, the connection window will eventually fill up and stall.
     tcp_recved(tpcb, p->tot_len);
 
     char *req = (char *)p->payload;
 
+    // FIX: Ensure safety constraints
+    if (p->tot_len >= 512) { // Sanity check size
+        pbuf_free(p);
+        return ERR_VAL;
+    }
+    
+    // FIX: Create a local safe buffer with null termination
+    char buf[512];
+    u16_t len = (p->tot_len < sizeof(buf) - 1) ? p->tot_len : (sizeof(buf) - 1);
+    memcpy(buf, req, len);
+    buf[len] = '\0'; // Manually enforce null termination
+    
     // Check if this is the Save request: GET /save?s=SSID&p=PASS
-    if (strncmp(req, "GET /save", 9) == 0) {
-        char ssid[64] = {0}; 
-        char pass[64] = {0};
+    if (strncmp(buf, "GET /save", 9) == 0) {
         
-        char *s_ptr = strstr(req, "s=");
-        char *p_ptr = strstr(req, "p=");
+        char *s_ptr = strstr(buf, "s=");
+        char *p_ptr = strstr(buf, "p=");
         
         if (s_ptr && p_ptr) {
             char *end;
@@ -117,24 +130,23 @@ err_t http_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) 
             s_ptr += 2; // Skip "s="
             end = strchr(s_ptr, '&');
             if (end) *end = 0; 
-            url_decode(ssid, s_ptr);
+            url_decode(pending_ssid, s_ptr); // Decode to GLOBAL var
             
             p_ptr += 2; // Skip "p="
             end = strchr(p_ptr, ' '); // End of HTTP line
             if (end) *end = 0;
-            url_decode(pass, p_ptr);
+            url_decode(pending_pass, p_ptr); // Decode to GLOBAL var
             
-            printf("AP: Received credentials for '%s'\n", ssid);
-            save_wifi_config(ssid, pass);
+            printf("AP: Credentials received for '%s'\n", pending_ssid);
+            
+            // CRITICAL: Do NOT write to flash here. Signal main loop.
+            save_pending = true; 
             
             // Send success page
             tcp_write(tpcb, html_success, strlen(html_success), TCP_WRITE_FLAG_COPY);
             
             // 2. IMPORTANT: Close connection so browser knows we are done
             tcp_close(tpcb);
-            
-            printf("AP: Rebooting...\n");
-            watchdog_enable(2000, 1);
         }
     } else {
         // Send the Form
@@ -170,16 +182,14 @@ void run_ap_setup_mode(void) {
     cyw43_arch_enable_ap_mode(ssid, AP_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
     printf("AP Started: '%s' (Pass: %s)\n", ssid, AP_PASSWORD);
 
-    // Small delay to let AP mode initialize
     sleep_ms(500);
 
-    // Configure gateway and netmask for DHCP server
-    // The SDK automatically assigns 192.168.4.1 to the AP interface
+    // Configure gateway and netmask
     ip4_addr_t gw, mask;
     IP4_ADDR(&gw, 192, 168, 4, 1);
     IP4_ADDR(&mask, 255, 255, 255, 0);
 
-    // Start DHCP server (wrapped in lwIP lock for thread safety)
+    // Start DHCP server
     cyw43_arch_lwip_begin();
     dhcp_server_init(&dhcp_server, &gw, &mask);
     cyw43_arch_lwip_end();
@@ -197,7 +207,22 @@ void run_ap_setup_mode(void) {
     printf("Connect to WiFi '%s' and open http://192.168.4.1\n", ssid);
     
     while(true) {
-        // Blink fast (triple blink) to indicate AP Mode
+        // 1. Handle Flash Save (Safe context)
+        if (save_pending) {
+            printf("AP: Main loop saving config...\n");
+            save_wifi_config(pending_ssid, pending_pass);
+            save_pending = false;
+            reboot_required = true;
+        }
+
+        // 2. Handle Reboot (Safe context)
+        if (reboot_required) {
+            printf("Rebooting in 2 seconds...\n");
+            watchdog_enable(2000, 1); 
+            while(1); // Infinite loop to force watchdog reset
+        }
+        
+        // 3. UI Blinking
         for(int i=0; i<3; i++) {
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
             sleep_ms(100);
@@ -207,5 +232,4 @@ void run_ap_setup_mode(void) {
         sleep_ms(500);
         watchdog_update();
     }
-
 }
