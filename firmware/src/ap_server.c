@@ -6,7 +6,6 @@
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
 #include "lwip/err.h"
-#include "lwip/netif.h"
 // -----------------------------------
 
 // Manual definition to prevent "undefined identifier" errors
@@ -162,50 +161,20 @@ void run_ap_setup_mode(void) {
     cyw43_arch_enable_ap_mode(ssid, AP_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
     printf("AP Started: '%s' (Pass: %s)\n", ssid, AP_PASSWORD);
 
-    // Allow time for AP interface to initialize
-    sleep_ms(100);
+    // Small delay to let AP mode initialize
+    sleep_ms(500);
 
-    // ============================================
-    // CONFIGURE AP NETWORK INTERFACE WITH STATIC IP
-    // ============================================
+    // Configure gateway and netmask for DHCP server
+    // The SDK automatically assigns 192.168.4.1 to the AP interface
     ip4_addr_t gw, mask;
-    IP4_ADDR(&gw, 192, 168, 4, 1);      // AP's IP address
-    IP4_ADDR(&mask, 255, 255, 255, 0);  // Subnet mask
+    IP4_ADDR(&gw, 192, 168, 4, 1);
+    IP4_ADDR(&mask, 255, 255, 255, 0);
 
-    cyw43_arch_lwip_begin();
-
-    // Get the AP network interface (CYW43_ITF_AP = 1)
-    struct netif *ap_netif = &cyw43_state.netif[CYW43_ITF_AP];
-
-    // Debug: Check netif state before configuration
-    printf("AP netif before config - up:%d link_up:%d\n",
-           netif_is_up(ap_netif), netif_is_link_up(ap_netif));
-
-    // Set the IP address, netmask, and gateway
-    netif_set_addr(ap_netif, &gw, &mask, &gw);
-
-    // Ensure interface is up
-    netif_set_up(ap_netif);
-    netif_set_link_up(ap_netif);
-
-    // Set as default netif for AP operations
-    netif_set_default(ap_netif);
-
-    // Debug: Verify configuration
-    printf("AP netif after config - up:%d link_up:%d IP:%s\n",
-           netif_is_up(ap_netif), netif_is_link_up(ap_netif),
-           ip4addr_ntoa(netif_ip4_addr(ap_netif)));
-
-    cyw43_arch_lwip_end();
-
-    // ============================================
-    // START DHCP SERVER
-    // ============================================
+    // Start DHCP server (wrapped in lwIP lock for thread safety)
     cyw43_arch_lwip_begin();
     dhcp_server_init(&dhcp_server, &gw, &mask);
     cyw43_arch_lwip_end();
-    printf("DHCP server started\n");
-    // ============================================
+    printf("DHCP server started on 192.168.4.1\n");
     
     // Start Web Server
     cyw43_arch_lwip_begin();
