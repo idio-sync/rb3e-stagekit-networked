@@ -6,6 +6,7 @@
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
 #include "lwip/err.h"
+#include "lwip/netif.h"
 // -----------------------------------
 
 // Manual definition to prevent "undefined identifier" errors
@@ -154,24 +155,40 @@ void run_ap_setup_mode(void) {
     // Start AP
     cyw43_arch_enable_ap_mode(ssid, AP_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
     printf("AP Started: '%s' (Pass: %s)\n", ssid, AP_PASSWORD);
-    
+
     // ============================================
-    // START DHCP SERVER - THIS IS THE KEY ADDITION
+    // CONFIGURE AP NETWORK INTERFACE WITH STATIC IP
     // ============================================
     ip4_addr_t gw, mask;
     IP4_ADDR(&gw, 192, 168, 4, 1);      // AP's IP address
     IP4_ADDR(&mask, 255, 255, 255, 0);  // Subnet mask
-    
+
+    cyw43_arch_lwip_begin();
+    // Get the AP network interface (not netif_default which is for STA mode)
+    struct netif *ap_netif = &cyw43_state.netif[CYW43_ITF_AP];
+    netif_set_addr(ap_netif, &gw, &mask, &gw);
+    netif_set_up(ap_netif);
+    cyw43_arch_lwip_end();
+
+    printf("AP IP configured: %s\n", ip4addr_ntoa(&gw));
+
+    // ============================================
+    // START DHCP SERVER
+    // ============================================
+    cyw43_arch_lwip_begin();
     dhcp_server_init(&dhcp_server, &gw, &mask);
+    cyw43_arch_lwip_end();
     printf("DHCP server started\n");
     // ============================================
     
     // Start Web Server
+    cyw43_arch_lwip_begin();
     struct tcp_pcb *pcb = tcp_new();
     tcp_bind(pcb, IP_ADDR_ANY, 80);
     pcb = tcp_listen(pcb);
     tcp_accept(pcb, connection_callback);
-    
+    cyw43_arch_lwip_end();
+
     printf("Web server listening on port 80. Waiting for user...\n");
     printf("Connect to WiFi '%s' and open http://192.168.4.1\n", ssid);
     
