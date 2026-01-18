@@ -243,6 +243,8 @@ void dhcp_server_init(dhcp_server_t *d, ip_addr_t *ip, ip_addr_t *nm) {
         printf("DHCP: Failed to create UDP PCB\n");
         return;
     }
+
+    ip_set_option(d->udp, SOF_BROADCAST);
     
     // Bind to DHCP server port
     err_t err = udp_bind(d->udp, IP_ADDR_ANY, PORT_DHCP_SERVER);
@@ -266,4 +268,5 @@ void dhcp_server_deinit(dhcp_server_t *d) {
         udp_remove(d->udp);
         d->udp = NULL;
     }
+
 }
