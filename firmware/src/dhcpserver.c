@@ -204,7 +204,6 @@ static void dhcp_recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
     if (reply_type == DHCP_ACK) {
         memcpy(leases[lease_idx].mac, msg->chaddr, 6);
         leases[lease_idx].expiry = 1;  // Mark as used (simplified)
-        printf("DHCP: Assigned %d.%d.%d.%d to %02X:%02X:%02X:%02X:%02X:%02X\n",
                ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
                msg->chaddr[0], msg->chaddr[1], msg->chaddr[2],
                msg->chaddr[3], msg->chaddr[4], msg->chaddr[5]);
@@ -270,3 +269,4 @@ void dhcp_server_deinit(dhcp_server_t *d) {
     }
 
 }
+
