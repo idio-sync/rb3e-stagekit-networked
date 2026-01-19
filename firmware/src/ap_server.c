@@ -281,7 +281,7 @@ void run_ap_setup_mode(void) {
 
     struct netif *n = &cyw43_state.netif[CYW43_ITF_AP];
 
-    cyw43_arch_lwip_begin()
+    cyw43_arch_lwip_begin();
     
     netif_set_addr(n, &ip, &mask, &gw);
     netif_set_up(n);
@@ -323,5 +323,6 @@ void run_ap_setup_mode(void) {
         sleep_ms(200);
     }
 }
+
 
 
