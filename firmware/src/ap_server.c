@@ -172,9 +172,7 @@ static void parse_query(const char *q) {
     tmp[pl] = 0;
     url_decode_n(pending_pass, sizeof(pending_pass), tmp);
 
-    cyw43_arch_lwip_begin();
     save_pending = true;
-    cyw43_arch_lwip_end();
 }
 
 /* ---------------- HTTP / TCP ---------------- */
@@ -228,9 +226,6 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
     u16_t len = p->tot_len > sizeof(buf) - 1 ? sizeof(buf) - 1 : p->tot_len;
     pbuf_copy_partial(p, buf, len, 0);
     buf[len] = 0;
-
-    // DEBUG: Print first line of request to verify connection
-    printf("AP: Request: %.30s...\n", buf);
 
     char *line = strstr(buf, "\r\n");
     if (line) *line = 0;
@@ -321,3 +316,4 @@ void run_ap_setup_mode(void) {
         sleep_ms(200);
     }
 }
+
