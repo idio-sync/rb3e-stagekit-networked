@@ -189,25 +189,29 @@ static err_t http_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len) {
 }
 
 static void send_http_response(struct tcp_pcb *pcb, const char *body, const char *status, const char *location) {
-    char hdr[256];
+    char buf[1024]; // Combine everything here
     size_t len = body ? strlen(body) : 0;
+    int written = 0;
 
     if (location) {
-        snprintf(hdr, sizeof(hdr),
+        written = snprintf(buf, sizeof(buf),
             "HTTP/1.0 %s\r\n"
             "Location: %s\r\n"
             "Connection: close\r\n\r\n",
             status, location);
-        tcp_write(pcb, hdr, strlen(hdr), TCP_WRITE_FLAG_COPY);
     } else {
-        snprintf(hdr, sizeof(hdr),
+        written = snprintf(buf, sizeof(buf),
             "HTTP/1.0 %s\r\n"
             "Content-Type: text/html\r\n"
             "Content-Length: %u\r\n"
-            "Connection: close\r\n\r\n",
-            status, (unsigned)len);
-        tcp_write(pcb, hdr, strlen(hdr), TCP_WRITE_FLAG_COPY);
-        tcp_write(pcb, body, len, TCP_WRITE_FLAG_COPY);
+            "Connection: close\r\n\r\n"
+            "%s", // Append body directly
+            status, (unsigned)len, body ? body : "");
+    }
+
+    // Single atomic write call
+    if (written > 0 && written < (int)sizeof(buf)) {
+        tcp_write(pcb, buf, written, TCP_WRITE_FLAG_COPY);
     }
 
     tcp_output(pcb);
@@ -267,19 +271,22 @@ void run_ap_setup_mode(void) {
 
     cyw43_arch_enable_ap_mode(ssid, AP_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
 
+    // Disable power save mode to ensure web server responsiveness
+    cyw43_wifi_pm(&cyw43_state, cyw43_pm_value(CYW43_NO_POWERSAVE_MODE, 20, 1, 1, 1));
+
     ip4_addr_t ip, mask, gw;
     IP4_ADDR(&ip, 192, 168, AP_IP_OCTET, 1);
     IP4_ADDR(&mask, 255, 255, 255, 0);
     IP4_ADDR(&gw, 192, 168, AP_IP_OCTET, 1); // AP is its own gateway
 
     struct netif *n = &cyw43_state.netif[CYW43_ITF_AP];
+
+    cyw43_arch_lwip_begin()
+    
     netif_set_addr(n, &ip, &mask, &gw);
     netif_set_up(n);
-    
-    // FIX 1: Set default interface for routing
-    netif_set_default(n); 
-
-    cyw43_arch_lwip_begin();
+    netif_set_default(n);
+        
     dhcp_server_init(&dhcp_server, &ip, &mask);
     dns_start();
 
@@ -316,4 +323,5 @@ void run_ap_setup_mode(void) {
         sleep_ms(200);
     }
 }
+
 
