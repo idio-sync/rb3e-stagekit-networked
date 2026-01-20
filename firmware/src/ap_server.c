@@ -37,19 +37,24 @@ static char pending_pass[64];
 
 static const char *html_form =
     "<!DOCTYPE html><html><head>"
+    "<meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>Setup</title></head>"
+    "<title>StageKit Setup</title></head>"
     "<body style='font-family:sans-serif;text-align:center;padding:20px;'>"
     "<h1>StageKit Setup</h1>"
     "<form action='/save' method='get'>"
-    "SSID:<br><input name='s'><br><br>"
-    "Password:<br><input name='p' type='password'><br><br>"
-    "<input type='submit' value='Save & Connect'>"
+    "SSID:<br><input name='s' maxlength='32'><br><br>"
+    "Password:<br><input name='p' type='password' maxlength='63'><br><br>"
+    "<input type='submit' value='Save &amp; Connect'>"
     "</form></body></html>";
 
 static const char *html_done =
-    "<html><body style='font-family:sans-serif;text-align:center;padding:40px;'>"
-    "<h1>Saved</h1><p>Rebooting...</p></body></html>";
+    "<!DOCTYPE html><html><head>"
+    "<meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<title>Saved</title></head>"
+    "<body style='font-family:sans-serif;text-align:center;padding:40px;'>"
+    "<h1>Saved!</h1><p>Rebooting to connect...</p></body></html>";
 
 /* ---------------- LittleFS SAVE ---------------- */
 
@@ -191,10 +196,52 @@ static void parse_query(const char *q) {
 
 /* ---------------- HTTP / TCP ---------------- */
 
+// Detect captive portal probe requests from various OS/browsers
 static bool is_captive_probe(const char *req) {
-    return strstr(req, "generate_204") ||
-           strstr(req, "connectivitycheck") ||
-           strstr(req, "hotspot-detect.html");
+    // Android/Chrome
+    if (strstr(req, "generate_204")) return true;
+    if (strstr(req, "connectivitycheck")) return true;
+
+    // iOS/macOS
+    if (strstr(req, "hotspot-detect")) return true;
+    if (strstr(req, "captive.apple.com")) return true;
+
+    // Windows
+    if (strstr(req, "msftconnecttest")) return true;
+    if (strstr(req, "msftncsi")) return true;
+    if (strstr(req, "connecttest.txt")) return true;
+    if (strstr(req, "ncsi.txt")) return true;
+
+    // Firefox
+    if (strstr(req, "detectportal")) return true;
+    if (strstr(req, "success.txt")) return true;
+
+    // Samsung
+    if (strstr(req, "samsung")) return true;
+
+    return false;
+}
+
+// Check if this is a favicon request (avoid wasting bandwidth)
+static bool is_favicon_request(const char *req) {
+    return strstr(req, "favicon.ico") != NULL;
+}
+
+// Send a minimal 204 No Content response (for favicon, etc.)
+static bool send_http_204(struct tcp_pcb *pcb) {
+    const char *response =
+        "HTTP/1.1 204 No Content\r\n"
+        "Connection: close\r\n\r\n";
+    size_t len = strlen(response);
+
+    err_t err = tcp_write(pcb, response, len, TCP_WRITE_FLAG_COPY);
+    if (err != ERR_OK) {
+        tcp_abort(pcb);
+        return false;
+    }
+    tcp_output(pcb);
+    tcp_sent(pcb, http_sent_cb);
+    return true;
 }
 
 static err_t http_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len) {
@@ -215,16 +262,21 @@ static bool send_http_response(struct tcp_pcb *pcb, const char *body, const char
     int written = 0;
 
     if (location) {
+        // Redirect response
         written = snprintf(buf, sizeof(buf),
-            "HTTP/1.0 %s\r\n"
+            "HTTP/1.1 %s\r\n"
             "Location: %s\r\n"
-            "Connection: close\r\n\r\n",
+            "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+            "Connection: close\r\n"
+            "Content-Length: 0\r\n\r\n",
             status, location);
     } else {
+        // Content response with proper headers for modern browsers
         written = snprintf(buf, sizeof(buf),
-            "HTTP/1.0 %s\r\n"
-            "Content-Type: text/html\r\n"
+            "HTTP/1.1 %s\r\n"
+            "Content-Type: text/html; charset=utf-8\r\n"
             "Content-Length: %u\r\n"
+            "Cache-Control: no-cache, no-store, must-revalidate\r\n"
             "Connection: close\r\n\r\n"
             "%s",
             status, (unsigned)len, body ? body : "");
@@ -280,13 +332,24 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
 
     bool success;
     if (strncmp(buf, "GET /save?", 10) == 0) {
+        // Form submission - save and redirect to done page
         parse_query(buf + 10);
         success = send_http_response(pcb, NULL, "302 Found", "/done");
     } else if (strncmp(buf, "GET /done", 9) == 0) {
+        // Confirmation page after save
         success = send_http_response(pcb, html_done, "200 OK", NULL);
+    } else if (is_favicon_request(buf)) {
+        // Favicon - return 204 No Content to save bandwidth
+        success = send_http_204(pcb);
     } else if (is_captive_probe(buf)) {
+        // Captive portal probe - redirect to trigger portal popup
+        // Using 302 redirect is more reliable than serving content directly
+        success = send_http_response(pcb, NULL, "302 Found", "http://192.168.4.1/");
+    } else if (strncmp(buf, "GET / ", 6) == 0 || strncmp(buf, "GET /index", 10) == 0) {
+        // Main page request
         success = send_http_response(pcb, html_form, "200 OK", NULL);
     } else {
+        // Any other request - serve the form (catch-all for captive portal)
         success = send_http_response(pcb, html_form, "200 OK", NULL);
     }
 
