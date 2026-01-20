@@ -154,6 +154,39 @@ bool save_wifi_config(const char *ssid, const char *password) {
 
 /* ---------------- DNS WILDCARD ---------------- */
 
+// DNS query types
+#define DNS_TYPE_A     1   // IPv4 address
+#define DNS_TYPE_AAAA  28  // IPv6 address
+
+// Extract the query type from a DNS request
+// Returns the QTYPE, or 0 if parsing fails
+static uint16_t dns_get_query_type(const uint8_t *data, uint16_t len) {
+    if (len < 12) return 0;
+
+    // Skip 12-byte header, parse through the question name
+    uint16_t pos = 12;
+
+    // Name is a sequence of length-prefixed labels, ending with 0
+    while (pos < len) {
+        uint8_t label_len = data[pos];
+        if (label_len == 0) {
+            pos++;  // Skip the null terminator
+            break;
+        }
+        if (label_len > 63) {
+            // Compression pointer or invalid - shouldn't happen in query
+            return 0;
+        }
+        pos += label_len + 1;
+    }
+
+    // Now pos should point to QTYPE (2 bytes) followed by QCLASS (2 bytes)
+    if (pos + 4 > len) return 0;
+
+    uint16_t qtype = (data[pos] << 8) | data[pos + 1];
+    return qtype;
+}
+
 static void dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                      const ip_addr_t *addr, u16_t port) {
     if (!p || p->len < 12) {
@@ -161,7 +194,15 @@ static void dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;
     }
 
-    struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, p->len + 16, PBUF_RAM);
+    const uint8_t *query = (const uint8_t *)p->payload;
+    uint16_t qtype = dns_get_query_type(query, p->len);
+
+    // Only respond to A (IPv4) queries with an A record
+    // For AAAA (IPv6) and other types, return empty answer
+    bool has_answer = (qtype == DNS_TYPE_A);
+
+    uint16_t resp_len = p->len + (has_answer ? 16 : 0);
+    struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, resp_len, PBUF_RAM);
     if (!resp) {
         pbuf_free(p);
         return;
@@ -170,20 +211,30 @@ static void dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     memcpy(resp->payload, p->payload, p->len);
     uint8_t *r = (uint8_t *)resp->payload;
 
-    r[2] |= 0x80;  // response
-    r[3] |= 0x80;
-    r[7] = 1;      // one answer
+    // Set response flags
+    r[2] |= 0x80;  // QR = 1 (response)
+    r[3] |= 0x80;  // RA = 1 (recursion available, for compatibility)
 
-    uint16_t idx = p->len;
-    // DNS Resource Record
-    r[idx++] = 0xC0; r[idx++] = 0x0C; // Pointer to name
-    r[idx++] = 0x00; r[idx++] = 0x01; // Type A
-    r[idx++] = 0x00; r[idx++] = 0x01; // Class IN
-    r[idx++] = 0x00; r[idx++] = 0x00; r[idx++] = 0x00; r[idx++] = 0x3C; // TTL
-    r[idx++] = 0x00; r[idx++] = 0x04; // Data length
-    r[idx++] = 192; r[idx++] = 168; r[idx++] = AP_IP_OCTET; r[idx++] = 1; // IP
+    if (has_answer) {
+        // A query: respond with our IP address
+        r[7] = 1;  // ANCOUNT = 1
 
-    resp->len = resp->tot_len = idx;
+        uint16_t idx = p->len;
+        // DNS Resource Record for A query
+        r[idx++] = 0xC0; r[idx++] = 0x0C; // Pointer to name in query
+        r[idx++] = 0x00; r[idx++] = 0x01; // Type A
+        r[idx++] = 0x00; r[idx++] = 0x01; // Class IN
+        r[idx++] = 0x00; r[idx++] = 0x00; r[idx++] = 0x00; r[idx++] = 0x3C; // TTL = 60s
+        r[idx++] = 0x00; r[idx++] = 0x04; // RDLENGTH = 4
+        r[idx++] = 192; r[idx++] = 168; r[idx++] = AP_IP_OCTET; r[idx++] = 1; // IP
+
+        resp->len = resp->tot_len = idx;
+    } else {
+        // AAAA or other query: respond with empty answer (no error, just no records)
+        r[7] = 0;  // ANCOUNT = 0
+        resp->len = resp->tot_len = p->len;
+    }
+
     udp_sendto(pcb, resp, addr, port);
 
     pbuf_free(resp);
@@ -448,7 +499,9 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
     } else if (is_captive_probe(buf)) {
         // Captive portal probe - redirect to trigger portal popup
         // Using 302 redirect is more reliable than serving content directly
-        success = send_http_response(pcb, NULL, "302 Found", "http://192.168.4.1/");
+        char redirect_url[32];
+        snprintf(redirect_url, sizeof(redirect_url), "http://192.168.%d.1/", AP_IP_OCTET);
+        success = send_http_response(pcb, NULL, "302 Found", redirect_url);
     } else if (strncmp(buf, "GET / ", 6) == 0 || strncmp(buf, "GET /index", 10) == 0) {
         // Main page request
         success = send_http_response(pcb, html_form, "200 OK", NULL);
