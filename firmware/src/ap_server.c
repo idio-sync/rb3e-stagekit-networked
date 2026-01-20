@@ -189,7 +189,7 @@ static err_t http_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len) {
 }
 
 static void send_http_response(struct tcp_pcb *pcb, const char *body, const char *status, const char *location) {
-    char buf[1024]; // Combine everything here
+    char buf[1024];
     size_t len = body ? strlen(body) : 0;
     int written = 0;
 
@@ -205,17 +205,29 @@ static void send_http_response(struct tcp_pcb *pcb, const char *body, const char
             "Content-Type: text/html\r\n"
             "Content-Length: %u\r\n"
             "Connection: close\r\n\r\n"
-            "%s", // Append body directly
+            "%s",
             status, (unsigned)len, body ? body : "");
     }
 
-    // Single atomic write call
     if (written > 0 && written < (int)sizeof(buf)) {
-        tcp_write(pcb, buf, written, TCP_WRITE_FLAG_COPY);
+        err_t err = tcp_write(pcb, buf, written, TCP_WRITE_FLAG_COPY);
+        if (err != ERR_OK) {
+            printf("AP: tcp_write failed (err=%d)\n", err);
+            tcp_abort(pcb);
+            return;
+        }
+
+        err = tcp_output(pcb);
+        if (err != ERR_OK) {
+            printf("AP: tcp_output failed (err=%d)\n", err);
+        }
+    } else {
+        printf("AP: Response too large or snprintf failed (written=%d)\n", written);
+        tcp_abort(pcb);
+        return;
     }
 
-    tcp_output(pcb);
-    tcp_sent(pcb, http_sent_cb); // Close after ack
+    tcp_sent(pcb, http_sent_cb);
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
@@ -291,20 +303,35 @@ void run_ap_setup_mode(void) {
     dns_start();
 
     struct tcp_pcb *pcb = tcp_new();
-    
-    // FIX 2: Bind to IP_ADDR_ANY instead of specific IP
-    err_t err = tcp_bind(pcb, IP_ADDR_ANY, 80); 
-    
+    if (!pcb) {
+        printf("AP: Failed to create TCP PCB\n");
+        cyw43_arch_lwip_end();
+        return;
+    }
+
+    err_t err = tcp_bind(pcb, IP_ADDR_ANY, 80);
+
     if (err != ERR_OK) {
-        printf("AP: Failed to bind TCP (err=%d)\n", err);
+        printf("AP: Failed to bind TCP port 80 (err=%d)\n", err);
+        tcp_close(pcb);
     } else {
-        pcb = tcp_listen(pcb);
-        tcp_accept(pcb, http_accept);
+        struct tcp_pcb *listen_pcb = tcp_listen(pcb);
+        if (!listen_pcb) {
+            printf("AP: tcp_listen failed\n");
+            tcp_close(pcb);
+        } else {
+            tcp_accept(listen_pcb, http_accept);
+            printf("AP: HTTP server listening on port 80\n");
+        }
     }
     
     cyw43_arch_lwip_end();
 
     while (true) {
+        // CRITICAL: Poll the network stack to process TCP callbacks
+        // Without this, TCP connections may not be handled reliably
+        cyw43_arch_poll();
+
         if (save_pending) {
             save_pending = false;
             save_wifi_config(pending_ssid, pending_pass);
@@ -312,15 +339,18 @@ void run_ap_setup_mode(void) {
         }
 
         if (reboot_required) {
-            // FIX 3: Wait for HTTP response to flush before rebooting
+            // Allow time for HTTP response to be sent before rebooting
             printf("AP: Rebooting in 1s...\n");
-            sleep_ms(1000); 
+            for (int i = 0; i < 50; i++) {
+                cyw43_arch_poll();  // Keep polling during reboot delay
+                sleep_ms(20);
+            }
             watchdog_enable(100, 1);
             while (1);
         }
 
         watchdog_update();
-        sleep_ms(200);
+        sleep_ms(10);  // Reduced from 200ms for more responsive TCP handling
     }
 }
 

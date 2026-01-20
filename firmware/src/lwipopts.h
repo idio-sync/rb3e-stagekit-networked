@@ -74,15 +74,15 @@
 #define LWIP_AUTOIP 0
 
 //--------------------------------------------------------------------
-// Checksums (Hardware Accelerated)
+// Checksums (Software - more reliable than hardware offload on CYW43)
 //--------------------------------------------------------------------
 #define CHECKSUM_GEN_IP 1
 #define CHECKSUM_GEN_UDP 1
-#define CHECKSUM_GEN_TCP 0
+#define CHECKSUM_GEN_TCP 1
 #define CHECKSUM_GEN_ICMP 1
 #define CHECKSUM_CHECK_IP 1
 #define CHECKSUM_CHECK_UDP 1
-#define CHECKSUM_CHECK_TCP 0
+#define CHECKSUM_CHECK_TCP 1
 #define CHECKSUM_CHECK_ICMP 1
 
 //--------------------------------------------------------------------
