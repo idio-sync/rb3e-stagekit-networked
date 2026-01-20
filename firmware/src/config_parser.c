@@ -18,9 +18,27 @@
 static char file_buffer[MAX_FILE_SIZE];
 
 /**
+ * Unescape a TOML string (handle \" and \\)
+ */
+static void unescape_toml_string(char *str) {
+    char *src = str;
+    char *dst = str;
+
+    while (*src) {
+        if (*src == '\\' && (src[1] == '"' || src[1] == '\\')) {
+            // Skip the backslash, copy the next character
+            src++;
+        }
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+}
+
+/**
  * Extract a quoted string value from a TOML line
  *
  * Searches for pattern like: KEY = "value" or KEY = 'value'
+ * Handles escaped quotes (\" and \\)
  *
  * @param content File content to search
  * @param key Key to find (e.g., "CIRCUITPY_WIFI_SSID")
@@ -55,10 +73,20 @@ static int extract_toml_string(const char *content, const char *key,
     }
     start++;  // Skip opening quote
 
-    // Find closing quote
-    const char *end = strchr(start, quote_char);
-    if (!end) {
-        return 0;
+    // Find closing quote (handle escaped quotes)
+    const char *end = start;
+    while (*end) {
+        if (*end == '\\' && end[1]) {
+            end += 2;  // Skip escaped character
+        } else if (*end == quote_char) {
+            break;  // Found unescaped closing quote
+        } else {
+            end++;
+        }
+    }
+
+    if (*end != quote_char) {
+        return 0;  // No closing quote found
     }
 
     // Copy value
@@ -68,6 +96,9 @@ static int extract_toml_string(const char *content, const char *key,
     }
     memcpy(value, start, len);
     value[len] = '\0';
+
+    // Unescape the string
+    unescape_toml_string(value);
 
     return 1;
 }
