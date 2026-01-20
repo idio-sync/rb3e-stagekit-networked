@@ -188,7 +188,14 @@ static err_t http_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len) {
     return ERR_OK;
 }
 
-static void send_http_response(struct tcp_pcb *pcb, const char *body, const char *status, const char *location) {
+static void http_err_cb(void *arg, err_t err) {
+    // Connection error occurred (timeout, reset, etc.)
+    // The PCB is already freed by lwIP when this is called
+    printf("AP: TCP connection error (err=%d)\n", err);
+}
+
+// Returns true if response was sent successfully, false if connection was aborted
+static bool send_http_response(struct tcp_pcb *pcb, const char *body, const char *status, const char *location) {
     char buf[1024];
     size_t len = body ? strlen(body) : 0;
     int written = 0;
@@ -214,7 +221,7 @@ static void send_http_response(struct tcp_pcb *pcb, const char *body, const char
         if (err != ERR_OK) {
             printf("AP: tcp_write failed (err=%d)\n", err);
             tcp_abort(pcb);
-            return;
+            return false;
         }
 
         err = tcp_output(pcb);
@@ -224,10 +231,11 @@ static void send_http_response(struct tcp_pcb *pcb, const char *body, const char
     } else {
         printf("AP: Response too large or snprintf failed (written=%d)\n", written);
         tcp_abort(pcb);
-        return;
+        return false;
     }
 
     tcp_sent(pcb, http_sent_cb);
+    return true;
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
@@ -238,7 +246,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
 
     tcp_recved(pcb, p->tot_len);
 
-    char buf[1024]; // Larger buffer
+    char buf[1024];
     u16_t len = p->tot_len > sizeof(buf) - 1 ? sizeof(buf) - 1 : p->tot_len;
     pbuf_copy_partial(p, buf, len, 0);
     buf[len] = 0;
@@ -246,23 +254,35 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
     char *line = strstr(buf, "\r\n");
     if (line) *line = 0;
 
+    bool success;
     if (strncmp(buf, "GET /save?", 10) == 0) {
         parse_query(buf + 10);
-        send_http_response(pcb, NULL, "302 Found", "/done");
+        success = send_http_response(pcb, NULL, "302 Found", "/done");
     } else if (strncmp(buf, "GET /done", 9) == 0) {
-        send_http_response(pcb, html_done, "200 OK", NULL);
+        success = send_http_response(pcb, html_done, "200 OK", NULL);
     } else if (is_captive_probe(buf)) {
-        send_http_response(pcb, html_form, "200 OK", NULL);
+        success = send_http_response(pcb, html_form, "200 OK", NULL);
     } else {
-        send_http_response(pcb, html_form, "200 OK", NULL);
+        success = send_http_response(pcb, html_form, "200 OK", NULL);
     }
 
     pbuf_free(p);
-    return ERR_OK;
+
+    // If send_http_response aborted the connection, we must return ERR_ABRT
+    // to tell lwIP the PCB is no longer valid
+    return success ? ERR_OK : ERR_ABRT;
 }
 
 static err_t http_accept(void *arg, struct tcp_pcb *pcb, err_t err) {
+    if (err != ERR_OK || pcb == NULL) {
+        printf("AP: http_accept called with error (err=%d)\n", err);
+        return ERR_VAL;
+    }
+
+    // Set up callbacks for this connection
     tcp_recv(pcb, http_recv);
+    tcp_err(pcb, http_err_cb);
+
     return ERR_OK;
 }
 
