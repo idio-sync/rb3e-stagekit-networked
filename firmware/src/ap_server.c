@@ -27,9 +27,7 @@
 static dhcp_server_t dhcp_server;
 static struct udp_pcb *dns_pcb;
 
-static volatile bool save_pending = false;
 static volatile bool reboot_required = false;
-static volatile bool save_failed = false;
 
 static char pending_ssid[64];
 static char pending_pass[64];
@@ -263,18 +261,28 @@ static bool dns_start(void) {
 
 /* ---------------- URL / Query ---------------- */
 
+// Convert hex character to value, returns -1 if invalid
+static int hex_digit_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
 static void url_decode_n(char *dst, size_t dst_len, const char *src) {
     size_t i = 0;
     while (*src && i + 1 < dst_len) {
         if (*src == '%' && src[1] && src[2]) {
-            char a = src[1];
-            char b = src[2];
-            a = (a >= 'a') ? a - 'a' + 'A' : a;
-            b = (b >= 'a') ? b - 'a' + 'A' : b;
-            a = (a >= 'A') ? a - 'A' + 10 : a - '0';
-            b = (b >= 'A') ? b - 'A' + 10 : b - '0';
-            dst[i++] = (a << 4) | b;
-            src += 3;
+            int hi = hex_digit_value(src[1]);
+            int lo = hex_digit_value(src[2]);
+            if (hi >= 0 && lo >= 0) {
+                // Valid hex escape
+                dst[i++] = (hi << 4) | lo;
+                src += 3;
+            } else {
+                // Invalid hex, copy '%' literally
+                dst[i++] = *src++;
+            }
         } else if (*src == '+') {
             dst[i++] = ' ';
             src++;
@@ -336,7 +344,6 @@ static bool parse_query(const char *q) {
     printf("AP: Parsed credentials - SSID: '%s' (%zu chars), Pass: %zu chars\n",
            pending_ssid, ssid_len, pass_len);
 
-    save_pending = true;
     return true;
 }
 
@@ -372,6 +379,9 @@ static bool is_captive_probe(const char *req) {
 static bool is_favicon_request(const char *req) {
     return strstr(req, "favicon.ico") != NULL;
 }
+
+// Forward declarations for HTTP callbacks
+static err_t http_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len);
 
 // Send a minimal 204 No Content response (for favicon, etc.)
 static bool send_http_204(struct tcp_pcb *pcb) {
@@ -478,21 +488,24 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
 
     bool success;
     if (strncmp(buf, "GET /save?", 10) == 0) {
-        // Form submission - validate and redirect
+        // Form submission - validate and save synchronously to avoid race condition
         if (parse_query(buf + 10)) {
-            success = send_http_response(pcb, NULL, "302 Found", "/done");
+            // Save immediately so we know the result before responding
+            if (save_wifi_config(pending_ssid, pending_pass)) {
+                // Save succeeded - redirect to done page
+                reboot_required = true;
+                success = send_http_response(pcb, NULL, "302 Found", "/done");
+            } else {
+                // Save failed - show error immediately
+                success = send_http_response(pcb, html_error_save, "500 Internal Server Error", NULL);
+            }
         } else {
             // Validation failed - show error page
             success = send_http_response(pcb, html_error_validation, "400 Bad Request", NULL);
         }
     } else if (strncmp(buf, "GET /done", 9) == 0) {
-        // Confirmation page - show error if save failed
-        if (save_failed) {
-            save_failed = false;  // Reset flag
-            success = send_http_response(pcb, html_error_save, "500 Internal Server Error", NULL);
-        } else {
-            success = send_http_response(pcb, html_done, "200 OK", NULL);
-        }
+        // Confirmation page - only reached after successful save
+        success = send_http_response(pcb, html_done, "200 OK", NULL);
     } else if (is_favicon_request(buf)) {
         // Favicon - return 204 No Content to save bandwidth
         success = send_http_204(pcb);
@@ -609,16 +622,6 @@ void run_ap_setup_mode(void) {
         // CRITICAL: Poll the network stack to process TCP callbacks
         // Without this, TCP connections may not be handled reliably
         cyw43_arch_poll();
-
-        if (save_pending) {
-            save_pending = false;
-            if (save_wifi_config(pending_ssid, pending_pass)) {
-                reboot_required = true;
-            } else {
-                save_failed = true;
-                printf("AP: Save failed, not rebooting\n");
-            }
-        }
 
         if (reboot_required) {
             // Allow time for HTTP response to be sent before rebooting

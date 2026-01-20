@@ -104,8 +104,8 @@ static void dhcp_recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
     dhcp_server_t *d = (dhcp_server_t *)arg;
     dhcp_msg_t *msg = (dhcp_msg_t *)p->payload;
     
-    // Validate packet
-    if (p->len < sizeof(dhcp_msg_t) - sizeof(msg->options)) {
+    // Validate packet - must be contiguous (single pbuf) and minimum size
+    if (p->len != p->tot_len || p->len < sizeof(dhcp_msg_t) - sizeof(msg->options)) {
         goto done;
     }
     if (msg->op != 1 || msg->htype != 1 || msg->hlen != 6) {
