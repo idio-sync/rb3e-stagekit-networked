@@ -52,7 +52,7 @@
 // TCP Configuration (Web Server)
 //--------------------------------------------------------------------
 #define LWIP_TCP 1
-#define LWIP_HTTPD 1
+#define LWIP_HTTPD 0  // Disabled - using custom HTTP implementation
 #define TCP_MSS 1460
 #define TCP_WND (8 * TCP_MSS)      // Larger window for faster page loads
 #define TCP_SND_BUF (8 * TCP_MSS)

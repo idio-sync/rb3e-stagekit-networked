@@ -123,10 +123,24 @@ static void dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     pbuf_free(p);
 }
 
-static void dns_start(void) {
+static bool dns_start(void) {
     dns_pcb = udp_new();
-    udp_bind(dns_pcb, IP_ADDR_ANY, 53);
+    if (!dns_pcb) {
+        printf("AP: Failed to create DNS UDP PCB\n");
+        return false;
+    }
+
+    err_t err = udp_bind(dns_pcb, IP_ADDR_ANY, 53);
+    if (err != ERR_OK) {
+        printf("AP: Failed to bind DNS port 53 (err=%d)\n", err);
+        udp_remove(dns_pcb);
+        dns_pcb = NULL;
+        return false;
+    }
+
     udp_recv(dns_pcb, dns_recv, NULL);
+    printf("AP: DNS server started on port 53\n");
+    return true;
 }
 
 /* ---------------- URL / Query ---------------- */
@@ -239,7 +253,15 @@ static bool send_http_response(struct tcp_pcb *pcb, const char *body, const char
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
+    // Check for errors or connection close
+    if (err != ERR_OK) {
+        printf("AP: http_recv called with error (err=%d)\n", err);
+        if (p) pbuf_free(p);
+        return err;
+    }
+
     if (!p) {
+        // Client closed connection
         tcp_close(pcb);
         return ERR_OK;
     }
@@ -253,6 +275,8 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
 
     char *line = strstr(buf, "\r\n");
     if (line) *line = 0;
+
+    printf("AP: HTTP request: %.60s%s\n", buf, strlen(buf) > 60 ? "..." : "");
 
     bool success;
     if (strncmp(buf, "GET /save?", 10) == 0) {
@@ -275,9 +299,11 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
 
 static err_t http_accept(void *arg, struct tcp_pcb *pcb, err_t err) {
     if (err != ERR_OK || pcb == NULL) {
-        printf("AP: http_accept called with error (err=%d)\n", err);
+        printf("AP: http_accept error (err=%d, pcb=%p)\n", err, pcb);
         return ERR_VAL;
     }
+
+    printf("AP: New HTTP connection from %s\n", ip4addr_ntoa(&pcb->remote_ip));
 
     // Set up callbacks for this connection
     tcp_recv(pcb, http_recv);
@@ -303,6 +329,15 @@ void run_ap_setup_mode(void) {
 
     cyw43_arch_enable_ap_mode(ssid, AP_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
 
+    // CRITICAL: Give the CYW43 time to fully initialize the AP
+    // Without this delay, TCP connections may fail even though WiFi associates
+    printf("AP: Waiting for AP to initialize...\n");
+    for (int i = 0; i < 20; i++) {
+        watchdog_update();
+        sleep_ms(100);
+    }
+    printf("AP: AP ready\n");
+
     // Disable power save mode to ensure web server responsiveness
     cyw43_wifi_pm(&cyw43_state, cyw43_pm_value(CYW43_NO_POWERSAVE_MODE, 20, 1, 1, 1));
 
@@ -320,7 +355,10 @@ void run_ap_setup_mode(void) {
     netif_set_default(n);
         
     dhcp_server_init(&dhcp_server, &ip, &mask);
-    dns_start();
+
+    if (!dns_start()) {
+        printf("AP: WARNING - DNS server failed to start, captive portal may not work\n");
+    }
 
     struct tcp_pcb *pcb = tcp_new();
     if (!pcb) {
