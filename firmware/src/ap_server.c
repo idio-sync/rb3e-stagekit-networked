@@ -6,6 +6,7 @@
 #include "lwip/udp.h"
 #include "lwip/err.h"
 #include "lwip/ip4_addr.h"
+#include "lwip/netif.h"
 #include "dhcpserver.h"
 #include "config_parser.h"
 #include "littlefs_hal.h"
@@ -569,7 +570,29 @@ void run_ap_setup_mode(void) {
         watchdog_update();
         sleep_ms(100);
     }
-    printf("AP: AP ready\n");
+
+    // Verify AP interface is up
+    struct netif *n = &cyw43_state.netif[CYW43_ITF_AP];
+    if (!netif_is_link_up(n)) {
+        printf("AP: WARNING - AP interface link is DOWN!\n");
+        printf("AP: WiFi network may not be visible to clients\n");
+        // Try waiting a bit longer
+        for (int i = 0; i < 30; i++) {
+            watchdog_update();
+            sleep_ms(100);
+            if (netif_is_link_up(n)) {
+                printf("AP: Link came up after additional delay\n");
+                break;
+            }
+        }
+    }
+
+    if (netif_is_link_up(n)) {
+        printf("AP: AP interface is UP and ready\n");
+    } else {
+        printf("AP: ERROR - AP interface still DOWN after 5 seconds!\n");
+        printf("AP: Check CYW43 firmware and hardware\n");
+    }
 
     // Disable power save mode to ensure web server responsiveness
     cyw43_wifi_pm(&cyw43_state, cyw43_pm_value(CYW43_NO_POWERSAVE_MODE, 20, 1, 1, 1));
@@ -578,8 +601,6 @@ void run_ap_setup_mode(void) {
     IP4_ADDR(&ip, 192, 168, AP_IP_OCTET, 1);
     IP4_ADDR(&mask, 255, 255, 255, 0);
     IP4_ADDR(&gw, 192, 168, AP_IP_OCTET, 1); // AP is its own gateway
-
-    struct netif *n = &cyw43_state.netif[CYW43_ITF_AP];
 
     cyw43_arch_lwip_begin();
     
