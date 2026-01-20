@@ -373,6 +373,9 @@ static bool is_favicon_request(const char *req) {
     return strstr(req, "favicon.ico") != NULL;
 }
 
+// Forward declaration
+static err_t http_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len);
+
 // Send a minimal 204 No Content response (for favicon, etc.)
 static bool send_http_204(struct tcp_pcb *pcb) {
     const char *response =
@@ -635,6 +638,7 @@ void run_ap_setup_mode(void) {
         sleep_ms(10);  // Reduced from 200ms for more responsive TCP handling
     }
 }
+
 
 
 
