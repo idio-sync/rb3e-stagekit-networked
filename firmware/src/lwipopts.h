@@ -52,7 +52,7 @@
 // TCP Configuration (Web Server)
 //--------------------------------------------------------------------
 #define LWIP_TCP 1
-#define LWIP_HTTPD 1
+#define LWIP_HTTPD 0  // Disabled - using custom HTTP implementation
 #define TCP_MSS 1460
 #define TCP_WND (8 * TCP_MSS)      // Larger window for faster page loads
 #define TCP_SND_BUF (8 * TCP_MSS)
@@ -74,15 +74,15 @@
 #define LWIP_AUTOIP 0
 
 //--------------------------------------------------------------------
-// Checksums (Hardware Accelerated)
+// Checksums (Software - more reliable than hardware offload on CYW43)
 //--------------------------------------------------------------------
 #define CHECKSUM_GEN_IP 1
 #define CHECKSUM_GEN_UDP 1
-#define CHECKSUM_GEN_TCP 0
+#define CHECKSUM_GEN_TCP 1
 #define CHECKSUM_GEN_ICMP 1
 #define CHECKSUM_CHECK_IP 1
 #define CHECKSUM_CHECK_UDP 1
-#define CHECKSUM_CHECK_TCP 0
+#define CHECKSUM_CHECK_TCP 1
 #define CHECKSUM_CHECK_ICMP 1
 
 //--------------------------------------------------------------------
