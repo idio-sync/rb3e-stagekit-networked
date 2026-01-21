@@ -2862,9 +2862,9 @@ class RB3Dashboard:
         self.song_tree.tag_configure('oddrow', background=self.alternate_bg_color)
         self.song_tree.tag_configure('evenrow', background=self.even_bg_color)
 
-        # Album art column - tight fit for 60px image
+        # Album art column - wide enough for 60px image with padding
         self.song_tree.heading('#0', text='', anchor='w')
-        self.song_tree.column('#0', width=70, minwidth=70, stretch=False)
+        self.song_tree.column('#0', width=80, minwidth=80, stretch=False)
 
         # Song title
         self.song_tree.heading('song', text='Song', anchor='w')
@@ -3258,6 +3258,16 @@ class RB3Dashboard:
             self.cookie_combo.set('None (may fail age-restricted)')
 
         ttk.Label(video_frame, text="For age-restricted videos, select a browser where you're logged into YouTube",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
+
+        # Song Browser
+        browser_frame = ttk.LabelFrame(right_col, text="Song Browser", padding=10)
+        browser_frame.pack(fill='x', pady=5)
+
+        self.song_browser_expanded_var = tk.BooleanVar(value=self.settings.get('song_browser_expanded', False))
+        ttk.Checkbutton(browser_frame, text="Show flat list (no artist grouping)",
+                       variable=self.song_browser_expanded_var).pack(anchor='w')
+        ttk.Label(browser_frame, text="When enabled, songs are listed without collapsible artist sections",
                  foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
 
         # History & Statistics
@@ -3887,6 +3897,9 @@ class RB3Dashboard:
         filter_lower = filter_text.lower()
         row_index = 0
 
+        # Check if we should show flat list (no artist grouping)
+        flat_list = self.settings.get('song_browser_expanded', False)
+
         sorted_artists = sorted(self.song_browser.artists_index.keys())
 
         for artist in sorted_artists:
@@ -3901,11 +3914,15 @@ class RB3Dashboard:
             if not songs:
                 continue
 
-            artist_tag = 'evenrow' if row_index % 2 == 0 else 'oddrow'
-            artist_item = self.song_tree.insert('', 'end', text='',
-                                               values=(f"{artist} ({len(songs)} songs)", "", ""),
-                                               tags=(artist_tag,))
-            row_index += 1
+            # In flat list mode, don't create artist parent items
+            if flat_list:
+                parent_item = ''  # Add directly to root
+            else:
+                artist_tag = 'evenrow' if row_index % 2 == 0 else 'oddrow'
+                parent_item = self.song_tree.insert('', 'end', text='',
+                                                   values=(f"{artist} ({len(songs)} songs)", "", ""),
+                                                   tags=(artist_tag,))
+                row_index += 1
 
             for song in songs:
                 song_title = song.get('title', 'Unknown')
@@ -3918,7 +3935,7 @@ class RB3Dashboard:
                 if self.album_art_manager.api_key:
                     album_art = self.album_art_manager.get_album_art(artist, song_album)
 
-                song_item = self.song_tree.insert(artist_item, 'end', text='',
+                song_item = self.song_tree.insert(parent_item, 'end', text='',
                                                  values=(song_title, artist, song_album),
                                                  tags=(shortname, song_tag))
 
@@ -3944,14 +3961,20 @@ class RB3Dashboard:
             return
 
         item = selection[0]
-        if not self.song_tree.parent(item):
+        tags = self.song_tree.item(item, 'tags')
+
+        # In grouped mode, items without parent are artist headers (skip them)
+        # In flat mode, all items are songs (no parent check needed)
+        # We can tell the difference by checking if the first tag looks like a shortname
+        # Artist headers have tags like ('evenrow',) or ('oddrow',)
+        # Songs have tags like ('shortname', 'evenrow') or ('shortname', 'oddrow')
+        if not tags or len(tags) < 2:
+            # This is likely an artist header (only has row style tag)
             return
 
-        tags = self.song_tree.item(item, 'tags')
-        if tags:
-            shortname = tags[0]
-            if shortname:
-                self.song_browser.play_song(shortname)
+        shortname = tags[0]
+        if shortname and shortname not in ('evenrow', 'oddrow'):
+            self.song_browser.play_song(shortname)
 
     # =========================================================================
     # DATABASE
@@ -4197,6 +4220,7 @@ class RB3Dashboard:
             'discord_client_id': self.discord_client_id_var.get().strip() or DiscordPresence.DEFAULT_CLIENT_ID,
             'history_enabled': self.history_enabled_var.get(),
             'stats_enabled': self.stats_enabled_var.get(),
+            'song_browser_expanded': self.song_browser_expanded_var.get(),
             'video_enabled': self.video_enabled_var.get(),
             'fullscreen': self.fullscreen_var.get(),
             'muted': self.muted_var.get(),
@@ -4279,6 +4303,10 @@ class RB3Dashboard:
                 video_settings = self.get_video_settings()
                 self.listener.update_video_settings(video_settings, settings.get('video_enabled', False))
 
+            # Refresh song browser if list mode changed
+            if self.song_browser and self.song_browser.artists_index:
+                self.populate_song_tree(self.search_var.get().strip() if hasattr(self, 'search_var') else "")
+
             messagebox.showinfo("Success", f"Settings saved to:\n{settings_path}")
             self.log_message(f"Settings saved")
 
@@ -4299,6 +4327,7 @@ class RB3Dashboard:
             'discord_client_id': '',  # Empty = use RB3 Deluxe app by default
             'history_enabled': True,
             'stats_enabled': True,
+            'song_browser_expanded': False,
             'video_enabled': False,
             'fullscreen': True,
             'muted': True,
