@@ -396,6 +396,9 @@ bool network_start_listener(stagekit_packet_cb callback)
         printf("Network: Failed to create telemetry UDP PCB\n");
         // Continue anyway - StageKit will work, just no telemetry
     } else {
+        // Enable broadcast for this socket - required for UDP broadcast to work
+        ip_set_option(udp_telemetry, SOF_BROADCAST);
+
         // Bind to telemetry port - this allows both sending AND receiving on this port
         // Matching RB3E's pattern: RB3E_BindPort(RB3E_EventsSocket, BROADCAST_PORT);
         err = udp_bind(udp_telemetry, IP_ADDR_ANY, RB3E_TELEMETRY_PORT);
@@ -496,14 +499,28 @@ void network_send_telemetry(bool usb_connected)
 
     // Send to dashboard (unicast) if discovered, otherwise broadcast
     ip_addr_t dest_addr;
+    err_t err;
+
     if (dashboard_discovered) {
         ip_addr_copy(dest_addr, dashboard_addr);
+        err = udp_sendto(udp_telemetry, p, &dest_addr, RB3E_TELEMETRY_PORT);
     } else {
-        // Fall back to broadcast
+        // Send to both global broadcast and subnet broadcast for better compatibility
+        // Some routers block 255.255.255.255 but allow subnet broadcasts
+
+        // First, send to subnet broadcast (e.g., 192.168.1.255)
+        if (netif_default != NULL) {
+            ip4_addr_t subnet_bcast;
+            subnet_bcast.addr = (netif_ip4_addr(netif_default)->addr | ~netif_ip4_netmask(netif_default)->addr);
+            ip_addr_copy(dest_addr, subnet_bcast);
+            err = udp_sendto(udp_telemetry, p, &dest_addr, RB3E_TELEMETRY_PORT);
+        }
+
+        // Also send to global broadcast (255.255.255.255)
         IP_ADDR4(&dest_addr, 255, 255, 255, 255);
+        err = udp_sendto(udp_telemetry, p, &dest_addr, RB3E_TELEMETRY_PORT);
     }
 
-    err_t err = udp_sendto(udp_telemetry, p, &dest_addr, RB3E_TELEMETRY_PORT);
     pbuf_free(p);
 
     cyw43_arch_lwip_end();
