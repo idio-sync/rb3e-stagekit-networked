@@ -2490,6 +2490,17 @@ class RB3Dashboard:
                     ctypes.byref(ctypes.c_int(1)),
                     ctypes.sizeof(ctypes.c_int)
                 )
+
+            # Force window frame redraw to apply dark title bar immediately
+            # SWP_FRAMECHANGED = 0x0020, SWP_NOMOVE = 0x0002, SWP_NOSIZE = 0x0001
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, None, 0, 0, 0, 0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+            )
         except Exception:
             pass
 
@@ -3079,7 +3090,13 @@ class RB3Dashboard:
 
     def create_settings_tab(self, parent):
         """Create settings tab with two-column layout"""
-        # Main container with two columns
+        # Save button at bottom - always visible
+        button_frame = ttk.Frame(parent)
+        button_frame.pack(side='bottom', fill='x', padx=10, pady=10)
+        ttk.Button(button_frame, text="Save Settings",
+                  command=self.save_settings, style='Accent.TButton').pack()
+
+        # Main container with two columns (scrollable area above button)
         main_frame = ttk.Frame(parent)
         main_frame.pack(fill='both', expand=True, padx=10, pady=5)
 
@@ -3297,12 +3314,8 @@ class RB3Dashboard:
         ttk.Label(ha_frame, text="Webhook URL:").pack(anchor='w')
         self.ha_webhook_url_var = tk.StringVar(value=self.settings.get('ha_webhook_url', ''))
         ttk.Entry(ha_frame, textvariable=self.ha_webhook_url_var, width=40).pack(fill='x', pady=(2, 0))
-        ttk.Label(ha_frame, text="e.g. http://192.168.1.50:8123/api/webhook/rb3_event", 
+        ttk.Label(ha_frame, text="e.g. http://192.168.1.50:8123/api/webhook/rb3_event",
                   foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
-        
-        # Save button at bottom of right column
-        ttk.Button(right_col, text="Save Settings",
-                  command=self.save_settings, style='Accent.TButton').pack(pady=(15, 0))
 
     def create_log_tab(self, parent):
         """Create log display tab with status indicators"""
