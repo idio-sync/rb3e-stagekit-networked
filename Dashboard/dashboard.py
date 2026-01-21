@@ -3704,11 +3704,7 @@ class RB3Dashboard:
         return name.replace('_', ' ').title()
 
     def on_stagekit_event(self, left_weight, right_weight):
-        """Called when stage kit/lighting event is received - forwards to Picos"""
-        # Always forward to Pico devices
-        self.send_stagekit_cmd(left_weight, right_weight)
-
-        # Only log if logging is enabled
+        """Called when stage kit/lighting event is received"""
         if not self.log_stagekit_var.get():
             return
 
