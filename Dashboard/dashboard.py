@@ -2617,69 +2617,134 @@ class RB3Dashboard:
         self.screen_label.pack(side='left', padx=(3, 0))
 
     def create_stagekit_tab(self, parent):
-        """Create Stage Kit tab with Status and Test sub-tabs"""
-        # Create sub-notebook for Status and Test tabs
-        stagekit_notebook = ttk.Notebook(parent)
-        stagekit_notebook.pack(fill='both', expand=True, padx=5, pady=5)
+        """Create Stage Kit tab with Pico list on left and test controls on right"""
+        # Main horizontal paned window for resizable split
+        paned = ttk.PanedWindow(parent, orient='horizontal')
+        paned.pack(fill='both', expand=True, padx=5, pady=5)
 
-        # Status tab (default)
-        status_frame = ttk.Frame(stagekit_notebook)
-        stagekit_notebook.add(status_frame, text="Status")
-        self.create_stagekit_status_tab(status_frame)
+        # Left side: Pico device list
+        left_frame = ttk.Frame(paned)
+        paned.add(left_frame, weight=1)
+        self.create_stagekit_pico_list(left_frame)
 
-        # Test tab
-        test_frame = ttk.Frame(stagekit_notebook)
-        stagekit_notebook.add(test_frame, text="Test")
-        self.create_stagekit_test_tab(test_frame)
+        # Right side: Test controls
+        right_frame = ttk.Frame(paned)
+        paned.add(right_frame, weight=1)
+        self.create_stagekit_test_controls(right_frame)
 
-    def create_stagekit_status_tab(self, parent):
-        """Create Stage Kit status sub-tab with detected Picos"""
+    def create_stagekit_pico_list(self, parent):
+        """Create Stage Kit Pico device list panel"""
         # Detected Picos section
         pico_frame = ttk.LabelFrame(parent, text="Detected Stage Kit Picos", padding=10)
-        pico_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        pico_frame.pack(fill='both', expand=True, padx=5, pady=5)
+
+        # Treeview with scrollbar
+        tree_container = ttk.Frame(pico_frame)
+        tree_container.pack(fill='both', expand=True)
 
         columns = ("ip", "name", "usb", "signal", "status")
-        self.pico_tree = ttk.Treeview(pico_frame, columns=columns, show="headings", height=8)
+        self.pico_tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=10)
         self.pico_tree.heading("ip", text="IP Address")
         self.pico_tree.heading("name", text="Name")
         self.pico_tree.heading("usb", text="USB Status")
         self.pico_tree.heading("signal", text="Signal")
         self.pico_tree.heading("status", text="Link")
 
-        self.pico_tree.column("ip", width=120)
-        self.pico_tree.column("name", width=100)
-        self.pico_tree.column("usb", width=100)
-        self.pico_tree.column("signal", width=80)
-        self.pico_tree.column("status", width=80)
+        self.pico_tree.column("ip", width=110, minwidth=80)
+        self.pico_tree.column("name", width=90, minwidth=60)
+        self.pico_tree.column("usb", width=90, minwidth=70)
+        self.pico_tree.column("signal", width=70, minwidth=50)
+        self.pico_tree.column("status", width=60, minwidth=50)
 
-        self.pico_tree.pack(fill="both", expand=True)
+        # Scrollbar - auto-hide when not needed
+        pico_scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.pico_tree.yview)
+
+        def on_pico_tree_scroll(*args):
+            pico_scrollbar.set(*args)
+            # Show scrollbar only if needed
+            if float(args[0]) <= 0 and float(args[1]) >= 1:
+                pico_scrollbar.pack_forget()
+            else:
+                pico_scrollbar.pack(side="right", fill="y")
+
+        self.pico_tree.configure(yscrollcommand=on_pico_tree_scroll)
+
+        self.pico_tree.pack(side="left", fill="both", expand=True)
+        # Don't pack scrollbar initially - it will appear when needed
+
         self.pico_tree.bind("<<TreeviewSelect>>", self.on_pico_select)
 
         # Target label
-        self.pico_target_label = ttk.Label(parent, text="Stage Kit Target: ALL DEVICES (Broadcast)",
+        self.pico_target_label = ttk.Label(pico_frame, text="Target: ALL (Broadcast)",
                                            font=("Arial", 9))
-        self.pico_target_label.pack(pady=(5, 10))
+        self.pico_target_label.pack(pady=(5, 0))
 
         # Info text
-        ttk.Label(parent, text="Select a Pico to target it specifically, or leave unselected to broadcast to all",
-                 foreground='gray', font=('TkDefaultFont', 9)).pack()
+        ttk.Label(pico_frame, text="Select a Pico to target it, or none for broadcast",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack()
 
+    def create_stagekit_test_controls(self, parent):
+        """Create Stage Kit test controls panel with centered content"""
+        # Canvas for scrollable, centered content
+        canvas = tk.Canvas(parent, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
 
-    def create_stagekit_test_tab(self, parent):
-        """Create Stage Kit test controls sub-tab"""
-        # Main Controls
-        main_frame = ttk.LabelFrame(parent, text="Global Effects", padding=10)
-        main_frame.pack(fill="x", padx=10, pady=5)
+        # Store canvas window id for repositioning
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="n")
 
-        btn_opts = {'padx': 5, 'pady': 5, 'sticky': 'ew'}
+        def update_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Check if scrollbar is needed
+            bbox = canvas.bbox("all")
+            if bbox:
+                content_height = bbox[3] - bbox[1]
+                canvas_height = canvas.winfo_height()
+                if content_height <= canvas_height:
+                    scrollbar.pack_forget()
+                else:
+                    scrollbar.pack(side="right", fill="y")
 
-        ttk.Label(main_frame, text="Fog Machine:").grid(row=0, column=0, sticky="e")
+        def center_content(event=None):
+            # Center horizontally
+            canvas_width = event.width if event else canvas.winfo_width()
+            canvas.itemconfig(canvas_window, width=canvas_width)
+            # Update scroll region and scrollbar visibility
+            canvas.after_idle(update_scroll_region)
+
+        scrollable_frame.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", center_content)
+
+        def on_canvas_scroll(*args):
+            scrollbar.set(*args)
+            # Show scrollbar only if needed
+            if float(args[0]) <= 0 and float(args[1]) >= 1:
+                scrollbar.pack_forget()
+            else:
+                scrollbar.pack(side="right", fill="y")
+
+        canvas.configure(yscrollcommand=on_canvas_scroll)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        # Don't pack scrollbar initially - it will appear when needed
+
+        # Container to center content vertically within scrollable_frame
+        content_container = ttk.Frame(scrollable_frame)
+        content_container.pack(expand=True, pady=10)
+
+        # Global Effects
+        main_frame = ttk.LabelFrame(content_container, text="Global Effects", padding=10)
+        main_frame.pack(fill="x", padx=5, pady=5)
+
+        btn_opts = {'padx': 3, 'pady': 3, 'sticky': 'ew'}
+
+        ttk.Label(main_frame, text="Fog:").grid(row=0, column=0, sticky="e")
         ttk.Button(main_frame, text="ON",
                    command=lambda: self.send_stagekit_cmd(0x00, 0x01)).grid(row=0, column=1, **btn_opts)
         ttk.Button(main_frame, text="OFF",
                    command=lambda: self.send_stagekit_cmd(0x00, 0x02)).grid(row=0, column=2, **btn_opts)
 
-        ttk.Label(main_frame, text="Strobe Light:").grid(row=1, column=0, sticky="e")
+        ttk.Label(main_frame, text="Strobe:").grid(row=1, column=0, sticky="e")
         ttk.Button(main_frame, text="Slow",
                    command=lambda: self.send_stagekit_cmd(0x00, 0x03)).grid(row=1, column=1, **btn_opts)
         ttk.Button(main_frame, text="Fast",
@@ -2687,7 +2752,7 @@ class RB3Dashboard:
         ttk.Button(main_frame, text="OFF",
                    command=lambda: self.send_stagekit_cmd(0x00, 0x07)).grid(row=1, column=3, **btn_opts)
 
-        ttk.Label(main_frame, text="Full Color:").grid(row=2, column=0, sticky="e")
+        ttk.Label(main_frame, text="Colors:").grid(row=2, column=0, sticky="e")
         ttk.Button(main_frame, text="Green",
                    command=lambda: self.send_stagekit_cmd(0xFF, 0x40)).grid(row=2, column=1, **btn_opts)
         ttk.Button(main_frame, text="Red",
@@ -2696,33 +2761,55 @@ class RB3Dashboard:
                    command=lambda: self.send_stagekit_cmd(0xFF, 0x20)).grid(row=2, column=3, **btn_opts)
         ttk.Button(main_frame, text="Yellow",
                    command=lambda: self.send_stagekit_cmd(0xFF, 0x60)).grid(row=2, column=4, **btn_opts)
-        ttk.Button(main_frame, text="ALL OFF",
-                   command=lambda: self.send_stagekit_cmd(0x00, 0xFF)).grid(row=2, column=5, **btn_opts)
 
-        # Individual LEDs
+        ttk.Button(main_frame, text="ALL OFF",
+                   command=lambda: self.send_stagekit_cmd(0x00, 0xFF)).grid(row=3, column=1, columnspan=2, **btn_opts)
+
+        # Color Selection
         self.selected_color = tk.IntVar(value=0x80)
 
-        color_frame = ttk.LabelFrame(parent, text="1. Select Active Color", padding=5)
-        color_frame.pack(fill="x", padx=10, pady=5)
+        color_frame = ttk.LabelFrame(content_container, text="1. Select Color", padding=5)
+        color_frame.pack(fill="x", padx=5, pady=5)
+
+        color_inner = ttk.Frame(color_frame)
+        color_inner.pack()
         colors = [("Red", 0x80), ("Green", 0x40), ("Blue", 0x20), ("Yellow", 0x60)]
         for name, val in colors:
-            ttk.Radiobutton(color_frame, text=name, variable=self.selected_color,
-                           value=val).pack(side="left", padx=10)
+            ttk.Radiobutton(color_inner, text=name, variable=self.selected_color,
+                           value=val).pack(side="left", padx=5)
 
-        grid_frame = ttk.LabelFrame(parent, text="2. Trigger Individual LEDs", padding=5)
-        grid_frame.pack(fill="x", padx=10, pady=5)
+        # Individual LEDs
+        grid_frame = ttk.LabelFrame(content_container, text="2. Individual LEDs", padding=5)
+        grid_frame.pack(fill="x", padx=5, pady=5)
+
+        led_inner = ttk.Frame(grid_frame)
+        led_inner.pack()
         for i in range(8):
             led_val = 1 << i
-            ttk.Button(grid_frame, text=f"LED {i+1}", width=6,
-                       command=lambda v=led_val: self.send_color_cmd(v)).grid(row=0, column=i, padx=2, pady=5)
+            ttk.Button(led_inner, text=f"{i+1}", width=3,
+                       command=lambda v=led_val: self.send_color_cmd(v)).grid(row=0, column=i, padx=1, pady=3)
 
-        pat_frame = ttk.LabelFrame(parent, text="3. Trigger Patterns", padding=5)
-        pat_frame.pack(fill="x", padx=10, pady=5)
-        patterns = [("All LEDs", 0xFF), ("No LEDs", 0x00), ("Odds", 0x55),
+        # Patterns
+        pat_frame = ttk.LabelFrame(content_container, text="3. Patterns", padding=5)
+        pat_frame.pack(fill="x", padx=5, pady=5)
+
+        patterns = [("All", 0xFF), ("None", 0x00), ("Odds", 0x55),
                    ("Evens", 0xAA), ("Left", 0x0F), ("Right", 0xF0)]
+        pat_inner = ttk.Frame(pat_frame)
+        pat_inner.pack()
         for i, (name, val) in enumerate(patterns):
-            ttk.Button(pat_frame, text=name,
-                       command=lambda v=val: self.send_color_cmd(v)).grid(row=0, column=i, padx=5, pady=5)
+            row = i // 3
+            col = i % 3
+            ttk.Button(pat_inner, text=name, width=6,
+                       command=lambda v=val: self.send_color_cmd(v)).grid(row=row, column=col, padx=3, pady=3)
+
+    def create_stagekit_status_tab(self, parent):
+        """DEPRECATED - kept for compatibility, redirects to new layout"""
+        self.create_stagekit_pico_list(parent)
+
+    def create_stagekit_test_tab(self, parent):
+        """DEPRECATED - kept for compatibility, redirects to new layout"""
+        self.create_stagekit_test_controls(parent)
 
     def create_song_browser_tab(self, parent):
         """Create song browser tab"""
