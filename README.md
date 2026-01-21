@@ -2,6 +2,8 @@
 
 This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges the gap between your game console, your PC, and real-world stage lighting.
 
+**Disclaimer:** This was primarily created using Claude Code after my initial Python project evolved into something larger with the Pico hardware element. 
+
 ## 📂 Project Structure
 
 The project consists of two main components:
