@@ -370,6 +370,9 @@ bool network_start_listener(stagekit_packet_cb callback)
         return false;
     }
 
+    // Enable broadcast reception - required to receive subnet broadcasts from Xbox
+    ip_set_option(udp_listener, SOF_BROADCAST);
+
     // Bind to listen port
     err_t err = udp_bind(udp_listener, IP_ADDR_ANY, RB3E_LISTEN_PORT);
     if (err != ERR_OK) {
