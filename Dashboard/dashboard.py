@@ -2656,12 +2656,21 @@ class RB3Dashboard:
         self.pico_tree.column("signal", width=70, minwidth=50)
         self.pico_tree.column("status", width=60, minwidth=50)
 
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.pico_tree.yview)
-        self.pico_tree.configure(yscrollcommand=scrollbar.set)
+        # Scrollbar - auto-hide when not needed
+        pico_scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.pico_tree.yview)
+
+        def on_pico_tree_scroll(*args):
+            pico_scrollbar.set(*args)
+            # Show scrollbar only if needed
+            if float(args[0]) <= 0 and float(args[1]) >= 1:
+                pico_scrollbar.pack_forget()
+            else:
+                pico_scrollbar.pack(side="right", fill="y")
+
+        self.pico_tree.configure(yscrollcommand=on_pico_tree_scroll)
 
         self.pico_tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # Don't pack scrollbar initially - it will appear when needed
 
         self.pico_tree.bind("<<TreeviewSelect>>", self.on_pico_select)
 
@@ -2675,25 +2684,56 @@ class RB3Dashboard:
                  foreground='gray', font=('TkDefaultFont', 8)).pack()
 
     def create_stagekit_test_controls(self, parent):
-        """Create Stage Kit test controls panel"""
-        # Scrollable frame for controls
+        """Create Stage Kit test controls panel with centered content"""
+        # Canvas for scrollable, centered content
         canvas = tk.Canvas(parent, highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        # Store canvas window id for repositioning
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="n")
 
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        def update_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Check if scrollbar is needed
+            bbox = canvas.bbox("all")
+            if bbox:
+                content_height = bbox[3] - bbox[1]
+                canvas_height = canvas.winfo_height()
+                if content_height <= canvas_height:
+                    scrollbar.pack_forget()
+                else:
+                    scrollbar.pack(side="right", fill="y")
+
+        def center_content(event=None):
+            # Center horizontally
+            canvas_width = event.width if event else canvas.winfo_width()
+            canvas.itemconfig(canvas_window, width=canvas_width)
+            # Update scroll region and scrollbar visibility
+            canvas.after_idle(update_scroll_region)
+
+        scrollable_frame.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", center_content)
+
+        def on_canvas_scroll(*args):
+            scrollbar.set(*args)
+            # Show scrollbar only if needed
+            if float(args[0]) <= 0 and float(args[1]) >= 1:
+                scrollbar.pack_forget()
+            else:
+                scrollbar.pack(side="right", fill="y")
+
+        canvas.configure(yscrollcommand=on_canvas_scroll)
 
         canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # Don't pack scrollbar initially - it will appear when needed
+
+        # Container to center content vertically within scrollable_frame
+        content_container = ttk.Frame(scrollable_frame)
+        content_container.pack(expand=True, pady=10)
 
         # Global Effects
-        main_frame = ttk.LabelFrame(scrollable_frame, text="Global Effects", padding=10)
+        main_frame = ttk.LabelFrame(content_container, text="Global Effects", padding=10)
         main_frame.pack(fill="x", padx=5, pady=5)
 
         btn_opts = {'padx': 3, 'pady': 3, 'sticky': 'ew'}
@@ -2728,7 +2768,7 @@ class RB3Dashboard:
         # Color Selection
         self.selected_color = tk.IntVar(value=0x80)
 
-        color_frame = ttk.LabelFrame(scrollable_frame, text="1. Select Color", padding=5)
+        color_frame = ttk.LabelFrame(content_container, text="1. Select Color", padding=5)
         color_frame.pack(fill="x", padx=5, pady=5)
 
         color_inner = ttk.Frame(color_frame)
@@ -2739,7 +2779,7 @@ class RB3Dashboard:
                            value=val).pack(side="left", padx=5)
 
         # Individual LEDs
-        grid_frame = ttk.LabelFrame(scrollable_frame, text="2. Individual LEDs", padding=5)
+        grid_frame = ttk.LabelFrame(content_container, text="2. Individual LEDs", padding=5)
         grid_frame.pack(fill="x", padx=5, pady=5)
 
         led_inner = ttk.Frame(grid_frame)
@@ -2750,7 +2790,7 @@ class RB3Dashboard:
                        command=lambda v=led_val: self.send_color_cmd(v)).grid(row=0, column=i, padx=1, pady=3)
 
         # Patterns
-        pat_frame = ttk.LabelFrame(scrollable_frame, text="3. Patterns", padding=5)
+        pat_frame = ttk.LabelFrame(content_container, text="3. Patterns", padding=5)
         pat_frame.pack(fill="x", padx=5, pady=5)
 
         patterns = [("All", 0xFF), ("None", 0x00), ("Odds", 0x55),
