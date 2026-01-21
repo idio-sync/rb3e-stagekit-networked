@@ -105,35 +105,10 @@ Download the pre-built firmware from the [Releases page](../../releases/latest):
 
 #### Step 2: Configure WiFi Credentials
 
-**Option A: Use the Dashboard (Recommended)**
-
-1.  Open the RB3E Dashboard application.
-2.  Go to the **Stage Kit** tab → **Status** sub-tab.
-3.  Click **"Generate WiFi Credentials File"**.
-4.  Enter your WiFi SSID and password.
-5.  Select your board type (Pico W or Pico 2 W).
-6.  Click **Create** and save the `.uf2` file.
-7.  Hold `BOOTSEL` and plug in the Pico again.
-8.  Drag the generated `wifi_config.uf2` onto the `RPI-RP2` drive.
-
-**Option B: Use the Command-Line Tool**
-
-Use the included Python tool to generate a UF2 containing your WiFi credentials:
-
-```bash
-cd firmware/tools
-pip install littlefs-python
-python generate_config_uf2.py --ssid "YourNetwork" --password "YourPassword"
-```
-
-For Pico 2 W, add `--board pico2_w`:
-```bash
-python generate_config_uf2.py --ssid "YourNetwork" --password "YourPassword" --board pico2_w
-```
-
-Then flash the generated `wifi_config.uf2`:
-1.  Hold `BOOTSEL` and plug in the Pico again.
-2.  Drag `wifi_config.uf2` onto the `RPI-RP2` drive.
+1.  Upon reboot, the Pico will broadcatst a "StageKit-xxxx" wifi network. 
+2.  Connect to the network with a laptop or phone.
+3.  Enter the WiFi SSID and password of the wifi network you want the stagekit device to connect to.
+4.  Hit Save. The Pico will reboot and connect to your wifo network. 
 
 #### Step 3: Connect Hardware
 1.  Plug the Stage Kit into the Pico using the OTG cable.
