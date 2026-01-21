@@ -61,6 +61,7 @@ In this configuration, power is injected into the Pico's GPIO pins, flows throug
 
 ### ⚠️ Limits
 * **Max Current:** ~1.2A total (Device + Pico W).
+* Fine if you're only connecting one stage kit device or are using a powered USB OTG hub.
 
 ## Method 2: The "Y-Split" (High Current)
 In this configuration, power is split *before* the Pico. The stage kit device draws current directly from the PSU, bypassing the Pico.
@@ -105,15 +106,15 @@ Download the pre-built firmware from the [Releases page](../../releases/latest):
 
 #### Step 2: Configure WiFi Credentials
 
-1.  Upon first boot, the Pico will create a WiFi access point named **"StageKit-Setup"** (or "StageKit-XXXXXX" with part of its MAC address).
+1.  Upon first boot, the Pico will create a WiFi access point named **StageKit-XXXXXX** (with part of its MAC address).
 2.  Connect to this network using a laptop or phone. The password is **`rockband`**.
 3.  A captive portal page should open automatically. If not, open a browser and navigate to `http://192.168.4.1`.
-4.  Enter the WiFi SSID and password of the network you want the Stage Kit to connect to.
-5.  Click **Save**. The Pico will reboot and connect to your WiFi network. 
+4.  Enter the WiFi SSID and password of the network you want the Stage Kit device to connect to.
+5.  Click **Save**. The Pico will reboot and connect to your WiFi network.
 
 #### Step 3: Connect Hardware
 1.  Plug the Stage Kit into the Pico using the OTG cable.
-2.  Power on the Pico.
+2.  Power on the Pico and it will start listening for RB3E network events on your network.
 
 ### Building Firmware from Source (Optional)
 
