@@ -2,6 +2,8 @@
 
 This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges the gap between your game console, your PC, and real-world stage lighting.
 
+**Disclaimer:** This was primarily created using Claude Code after my initial Python project evolved into something larger with the Pico hardware element. 
+
 ## 📂 Project Structure
 
 The project consists of two main components:
@@ -61,6 +63,7 @@ In this configuration, power is injected into the Pico's GPIO pins, flows throug
 
 ### ⚠️ Limits
 * **Max Current:** ~1.2A total (Device + Pico W).
+* Fine if you're only connecting one stage kit device or are using a powered USB OTG hub.
 
 ## Method 2: The "Y-Split" (High Current)
 In this configuration, power is split *before* the Pico. The stage kit device draws current directly from the PSU, bypassing the Pico.
@@ -105,14 +108,15 @@ Download the pre-built firmware from the [Releases page](../../releases/latest):
 
 #### Step 2: Configure WiFi Credentials
 
-1.  Upon reboot, the Pico will broadcatst a "StageKit-xxxx" wifi network. 
-2.  Connect to the network with a laptop or phone.
-3.  Enter the WiFi SSID and password of the wifi network you want the stagekit device to connect to.
-4.  Hit Save. The Pico will reboot and connect to your wifo network. 
+1.  Upon first boot, the Pico will create a WiFi access point named **StageKit-XXXXXX** (with part of its MAC address).
+2.  Connect to this network using a laptop or phone. The password is **`rockband`**.
+3.  A captive portal page should open automatically. If not, open a browser and navigate to `http://192.168.4.1`.
+4.  Enter the WiFi SSID and password of the network you want the Stage Kit device to connect to.
+5.  Click **Save**. The Pico will reboot and connect to your WiFi network.
 
 #### Step 3: Connect Hardware
 1.  Plug the Stage Kit into the Pico using the OTG cable.
-2.  Power on the Pico.
+2.  Power on the Pico and it will start listening for RB3E network events on your network.
 
 ### Building Firmware from Source (Optional)
 
@@ -236,11 +240,13 @@ Ensure your firewall allows UDP traffic on the following ports:
 
 ### Using the Stage Kit Manager
 * Navigate to the **Stage Kit** tab.
-* **Global Effects:** Use the buttons to manually trigger Fog, Strobe, or Flood colors on *all* connected Picos.
-* **Targeting:** In the "Status" tab, click a specific Pico in the list to target only that unit. Click "Clear Selection" (or deselect) to broadcast to all.
+* **Left Panel - Detected Picos:** Shows all Stage Kit Picos discovered on the network with their IP, name, USB status, signal strength, and connection status.
+* **Right Panel - Test Controls:** Use the buttons to manually trigger Fog, Strobe, or color effects.
+* **Targeting:** Click a specific Pico in the list to target only that unit. Deselect to broadcast to all devices.
 
 ### Browser & History
 * **Song Browser:** Once connected, click "Refresh Song List" to pull the database from the game. Double-clicking a song will tell the game to jump directly to that track (if supported by your RB3E build).
+* **Flat List Mode:** In Settings → Song Browser, enable "Show flat list" to display all songs without collapsible artist groupings.
 * **History:** Songs are logged automatically. Use "Export" to save your session data to CSV for spreadsheets.
 
 ---
@@ -261,9 +267,18 @@ Ensure your firewall allows UDP traffic on the following ports:
 * Check the **Log** tab in the dashboard for "Search error" or "VLC not found" messages.
 
 **Pico LED is blinking fast forever?**
-* It cannot connect to WiFi. Regenerate the `wifi_config.uf2` with correct credentials.
+* It cannot connect to WiFi. Re-flash the firmware to enter setup mode and reconfigure credentials.
 * Ensure the network is 2.4GHz (Pico W does not support 5GHz).
-* Verify the `settings.toml` file exists with valid SSID and password.
+* Check that the SSID and password were entered correctly during setup.
+
+**Can't connect to the StageKit-Setup network?**
+* The AP password is **`rockband`**.
+* Make sure your device supports 2.4GHz WiFi.
+* Try moving closer to the Pico.
+
+**Captive portal page doesn't open?**
+* Manually navigate to `http://192.168.4.1` in your browser.
+* Try disabling mobile data on your phone while connected to the Pico's network.
 
 **Last.fm Art is missing?**
 * Ensure the API Key is entered.
