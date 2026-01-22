@@ -2311,6 +2311,9 @@ class RB3Dashboard:
         )
         self.discord_presence.enabled = self.settings.get('discord_enabled', False)
 
+        # Blank screen window for hiding dashboard during songs
+        self.blank_screen_window = None
+
         # Create UI
         self.create_widgets()
 
@@ -3317,6 +3320,16 @@ class RB3Dashboard:
         ttk.Label(ha_frame, text="e.g. http://192.168.1.50:8123/api/webhook/rb3_event",
                   foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
 
+        # Display Settings
+        display_frame = ttk.LabelFrame(right_col, text="Display", padding=10)
+        display_frame.pack(fill='x', pady=5)
+
+        self.blank_screen_var = tk.BooleanVar(value=self.settings.get('blank_screen_on_song', False))
+        ttk.Checkbutton(display_frame, text="Black screen when song starts",
+                       variable=self.blank_screen_var).pack(anchor='w')
+        ttk.Label(display_frame, text="Hides dashboard with a black screen during songs",
+                 foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w', pady=(2, 0))
+
     def create_log_tab(self, parent):
         """Create log display tab with status indicators"""
         # Status section at top
@@ -3599,6 +3612,31 @@ class RB3Dashboard:
         if self.discord_presence and self.discord_presence.enabled:
             self.discord_presence.update_presence(artist, song)
 
+        # Blank screen if enabled
+        if self.settings.get('blank_screen_on_song', False):
+            self.root.after(0, self._show_blank_screen)
+
+    def _show_blank_screen(self):
+        """Show fullscreen black window to hide dashboard"""
+        if self.blank_screen_window is not None:
+            return  # Already showing
+
+        self.blank_screen_window = tk.Toplevel(self.root)
+        self.blank_screen_window.configure(bg='black')
+        self.blank_screen_window.attributes('-fullscreen', True)
+        self.blank_screen_window.attributes('-topmost', True)
+        # Prevent closing with Alt+F4
+        self.blank_screen_window.protocol("WM_DELETE_WINDOW", lambda: None)
+        # Allow Escape key to close (emergency exit)
+        self.blank_screen_window.bind('<Escape>', lambda e: self._hide_blank_screen())
+        self.blank_screen_window.focus_set()
+
+    def _hide_blank_screen(self):
+        """Hide the blank screen window"""
+        if self.blank_screen_window is not None:
+            self.blank_screen_window.destroy()
+            self.blank_screen_window = None
+
     def _do_scrobble(self, artist, song):
         """Perform the actual scrobble"""
         if self.scrobbler and self.scrobbler.enabled:
@@ -3621,6 +3659,9 @@ class RB3Dashboard:
             minutes = elapsed_seconds // 60
             seconds = elapsed_seconds % 60
             self.root.after(0, lambda: self.log_message(f"Song played for {minutes}:{seconds:02d}"))
+
+        # Hide blank screen if showing
+        self.root.after(0, self._hide_blank_screen)
 
     def on_ip_detected(self, ip_address):
         """Called when RB3Enhanced IP is detected"""
@@ -4244,7 +4285,8 @@ class RB3Dashboard:
             'video_monitor': self.get_selected_monitor_index(),
             'cookie_browser': self._get_cookie_browser_value(),
             'database_path': self.settings.get('database_path', ''),
-            'ha_webhook_url': self.ha_webhook_url_var.get().strip()
+            'ha_webhook_url': self.ha_webhook_url_var.get().strip(),
+            'blank_screen_on_song': self.blank_screen_var.get()
         }
 
     def save_settings(self):
