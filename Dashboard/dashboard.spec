@@ -21,7 +21,6 @@ hiddenimports = [
     'pypresence',
     'screeninfo',
     'requests',
-    'littlefs',
     'tkinter',
     'tkinter.ttk',
     'tkinter.messagebox',
@@ -45,7 +44,6 @@ hiddenimports = [
 hiddenimports += collect_submodules('googleapiclient')
 hiddenimports += collect_submodules('yt_dlp')
 hiddenimports += collect_submodules('PIL')
-hiddenimports += collect_submodules('littlefs')
 
 # Collect data files needed by packages
 datas = []
