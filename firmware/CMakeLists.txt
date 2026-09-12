@@ -55,6 +55,7 @@ add_executable(rb3e_stagekit
     src/network.c
     src/ap_server.c
     src/dhcpserver.c
+    src/sk_queue.c
 )
 
 # Include directories (src contains tusb_config.h and lwipopts.h)

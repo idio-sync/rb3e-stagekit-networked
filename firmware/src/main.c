@@ -25,7 +25,6 @@
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/watchdog.h"
-#include "hardware/sync.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -35,6 +34,7 @@
 #include "network.h"
 #include "rb3e_protocol.h"
 #include "ap_server.h"
+#include "sk_queue.h"
 
 //--------------------------------------------------------------------
 // Timing Constants (in milliseconds)
@@ -55,10 +55,11 @@
 // Shared State (for interrupt callbacks)
 //--------------------------------------------------------------------
 
-// Volatile for interrupt safety (network callbacks run in background)
-static volatile bool stagekit_command_pending = false;
-static volatile uint8_t pending_left_weight = 0;
-static volatile uint8_t pending_right_weight = 0;
+// Commands arrive on the background network callback and are drained by the
+// main loop. Stage Kit commands are distinct per-colour state rather than
+// successive approximations, so they are queued in order instead of being
+// collapsed into a single slot.
+static sk_queue_t stagekit_queue;
 static wifi_config_t stored_wifi_cfg;
 
 //--------------------------------------------------------------------
@@ -81,10 +82,9 @@ static bool wifi_is_connected = false; // Track WiFi state for heartbeat speed
 
 static void on_stagekit_packet(uint8_t left, uint8_t right)
 {
-    // Queue command for main loop to process
-    pending_left_weight = left;
-    pending_right_weight = right;
-    stagekit_command_pending = true;
+    // Queue command for main loop to process. A full queue drops the incoming
+    // command so everything already accepted still arrives in order.
+    sk_queue_push(&stagekit_queue, left, right);
 }
 
 //--------------------------------------------------------------------
@@ -316,6 +316,9 @@ int main(void)
 
     watchdog_update();
 
+    // Ready the command queue before the callback that fills it can run
+    sk_queue_init(&stagekit_queue);
+
     // Start UDP listener if WiFi connected
     if (wifi_is_connected) {
         printf("Starting UDP listener...\n");
@@ -355,22 +358,25 @@ int main(void)
         // Process USB tasks
         usb_host_task();
 
-        // Process pending StageKit command
-        if (stagekit_command_pending) {
-            uint8_t left, right;
-
-            uint32_t save = save_and_disable_interrupts();
-            stagekit_command_pending = false;
-            left = pending_left_weight;
-            right = pending_right_weight;
-            restore_interrupts(save);
-
+        // Process the oldest queued StageKit command. Only one per iteration:
+        // each control transfer needs an intervening usb_host_task() to
+        // complete, so attempting more here would just be refused.
+        sk_command_t command;
+        if (sk_queue_peek(&stagekit_queue, &command)) {
             was_active = true;
             last_packet_time = now;
 
             if (usb_stagekit_connected()) {
-                usb_send_stagekit_command(left, right);
-                lights_active = true;
+                // Pop only once the transfer is accepted. A busy control
+                // endpoint therefore delays the command to the next iteration
+                // rather than discarding it.
+                if (usb_send_stagekit_command(command.left, command.right)) {
+                    sk_queue_pop(&stagekit_queue);
+                    lights_active = true;
+                }
+            } else {
+                // No device to send to; discard so the queue cannot stall.
+                sk_queue_pop(&stagekit_queue);
             }
         }
 
@@ -447,7 +453,7 @@ int main(void)
         }
 
         // Adaptive delay
-        if (was_active || stagekit_command_pending) {
+        if (was_active || !sk_queue_empty(&stagekit_queue)) {
             sleep_us(LOOP_DELAY_ACTIVE_US);
         } else {
             sleep_us(LOOP_DELAY_IDLE_US);
