@@ -32,8 +32,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, filedialog
 import json
 from datetime import datetime
+from PIL import ImageTk
 
 from rb3dashboard.album_art import AlbumArtManager, LRUCache
+from rb3dashboard.dispatch import UiDispatcher
 from rb3dashboard.integrations import DISCORD_AVAILABLE, DiscordPresence, LastFmScrobbler
 from rb3dashboard.listener import UnifiedRB3EListener
 from rb3dashboard.song_browser import SongBrowser
@@ -80,6 +82,7 @@ class RB3Dashboard:
 
     def __init__(self):
         self.root = tk.Tk()
+        self.ui_dispatcher = UiDispatcher(self.root)
         self.root.title("RB3Enhanced Dashboard")
         self.root.geometry("1100x700")
         self.root.minsize(900, 600)
@@ -658,7 +661,11 @@ class RB3Dashboard:
     def create_song_browser_tab(self, parent):
         """Create song browser tab"""
         self.song_browser = SongBrowser(gui_callback=self.log_message)
-        self.album_art_manager = AlbumArtManager(gui_callback=self.log_message)
+        self.album_art_manager = AlbumArtManager(
+            gui_callback=self.log_message,
+            schedule=self.ui_dispatcher.post,
+            image_factory=ImageTk.PhotoImage,
+        )
         self._tree_image_refs = {}  # Keep strong references to PhotoImages to prevent GC
 
         lastfm_key = self.settings.get('lastfm_api_key', '')
@@ -1815,13 +1822,20 @@ class RB3Dashboard:
 
                 song_tag = 'evenrow' if row_index % 2 == 0 else 'oddrow'
 
-                album_art = None
-                if self.album_art_manager.api_key:
-                    album_art = self.album_art_manager.get_album_art(artist, song_album)
-
                 song_item = self.song_tree.insert(parent_item, 'end', text='',
                                                  values=(song_title, artist, song_album),
                                                  tags=(shortname, song_tag))
+
+                def update_artwork(cache_key, photo, row=song_item):
+                    if photo is not None and self.song_tree.exists(row):
+                        self._tree_image_refs[row] = photo
+                        self.song_tree.item(row, image=photo)
+
+                album_art = None
+                if self.album_art_manager.api_key:
+                    album_art = self.album_art_manager.get_album_art(
+                        artist, song_album, callback=update_artwork
+                    )
 
                 if album_art:
                     # Keep strong reference to prevent garbage collection
@@ -2241,6 +2255,10 @@ class RB3Dashboard:
 
     def on_closing(self):
         """Handle window close"""
+        if self.album_art_manager:
+            self.album_art_manager.close()
+        self.ui_dispatcher.close()
+
         if self.is_running:
             self.stop_listener()
 
