@@ -217,5 +217,44 @@ class SongBrowserImportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class AlbumArtImportTests(unittest.TestCase):
+    def test_album_art_import_does_not_start_desktop_or_external_services(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import sys
+            import threading
+            from unittest.mock import patch
+
+            class BlockDesktopImports(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if (fullname == 'dashboard'
+                            or fullname.split('.')[0] in {
+                                'googleapiclient', 'yt_dlp', 'pypresence',
+                                'screeninfo',
+                            }):
+                        raise AssertionError('Desktop dependency: ' + fullname)
+
+            def block_side_effects(event, args):
+                if event in {'socket.__new__', 'subprocess.Popen', 'os.system'}:
+                    raise AssertionError('Startup side effect: ' + event)
+
+            sys.meta_path.insert(0, BlockDesktopImports())
+            sys.addaudithook(block_side_effects)
+            with patch.object(threading.Thread, 'start',
+                              side_effect=AssertionError('Started a thread')):
+                from rb3dashboard.album_art import AlbumArtManager, LRUCache
+                assert AlbumArtManager is not None
+                assert LRUCache is not None
+            """)
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
