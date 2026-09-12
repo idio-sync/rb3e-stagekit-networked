@@ -11,6 +11,8 @@ The project consists of two main components:
 1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
 2.  **Pico W Firmware:** C firmware for the Raspberry Pi Pico W / Pico 2 W that converts a wired USB Stage Kit device (Santroller/Fatsco) into a wireless, networked UDP device.
 
+For module boundaries, runtime ownership, preserved data paths, validation, and the Stage 2 roadmap, see [Dashboard architecture](docs/dashboard-architecture.md).
+
 ---
 
 ## 🌟 Features
@@ -191,7 +193,7 @@ python -m pip install -r Dashboard/requirements.txt
 
 # Build executable
 cd Dashboard
-python -m PyInstaller dashboard.spec --clean
+python -m PyInstaller --noconfirm dashboard.spec
 ```
 
 The executable will be created in the `Dashboard/dist/` directory.
@@ -244,9 +246,12 @@ To fetch album art and scrobble tracks:
 5.  Create automation using the provided YAML in Home Assistant.
 
 ### 4. Network Ports
-Ensure your firewall allows UDP traffic on the following ports:
-* **21070:** Inbound (Game Events) & Outbound (Stage Kit Commands).
-* **21071:** Inbound (Pico Telemetry).
+Ensure your firewall allows the traffic used by your console, dashboard, and Picos:
+* **UDP 21070:** Console game and lighting events; dashboard manual Stage Kit commands.
+* **UDP 21071:** Dashboard discovery and Pico telemetry.
+* **TCP 21070 (HTTP):** Console song-list, song-jump, and existing RB3Enhanced web UI requests from the dashboard.
+
+The console sends gameplay lighting directly to the Picos. The dashboard observes those events and manages discovery, telemetry, and manual controls; it is not a required gameplay proxy.
 
 ---
 
@@ -255,9 +260,8 @@ Ensure your firewall allows UDP traffic on the following ports:
 ### Starting a Session
 1.  Ensure your RB3Enhanced console and PC are on the same network.
 2.  From the repository root, launch `python Dashboard/dashboard.py`.
-3.  Click **Start Listening** on the "Status" tab.
-4.  Start Rock Band 3 on your console.
-5.  The dashboard status should change to green, displaying the console's IP address.
+3.  The dashboard starts listening automatically. Start Rock Band 3 on your console.
+4.  The listener status on the **Log** tab should turn green, and the dashboard should display the console's IP address after a validated event arrives.
 
 Console discovery uses validated game events. Stage Kit test commands can appear
 in the lighting log, but they do not discover or replace the console. Lighting
