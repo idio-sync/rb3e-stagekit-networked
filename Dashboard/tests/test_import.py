@@ -32,7 +32,9 @@ class ListenerImportTests(unittest.TestCase):
             with patch.object(threading.Thread, 'start',
                               side_effect=AssertionError('Started a thread')):
                 from rb3dashboard.listener import UnifiedRB3EListener
+                from rb3dashboard.stagekit import StageKitTransport
                 UnifiedRB3EListener()
+                StageKitTransport()
             """)
         result = subprocess.run(
             [sys.executable, "-c", script],

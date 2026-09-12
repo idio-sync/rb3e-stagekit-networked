@@ -20,8 +20,6 @@ install_if_missing("Pillow", "PIL")
 install_if_missing("pypresence", "pypresence")
 install_if_missing("screeninfo", "screeninfo")
 
-import socket
-import struct
 import threading
 import time
 import os
@@ -40,6 +38,7 @@ from rb3dashboard.integrations import DISCORD_AVAILABLE, DiscordPresence, LastFm
 from rb3dashboard.listener import UnifiedRB3EListener
 from rb3dashboard.song_browser import SongBrowser
 from rb3dashboard.song_data import PlayStatistics, SongDatabase, SongHistory
+from rb3dashboard.stagekit import StageKitTransport
 from rb3dashboard.video import (
     SCREENINFO_AVAILABLE,
     StreamExtractor,
@@ -113,10 +112,9 @@ class RB3Dashboard:
         self.song_browser = None
         self.album_art_manager = None
 
-        # Telemetry socket for Pico devices
-        self.sock_telemetry = None
-        self.sock_control = None
-        self.telemetry_thread = None
+        # Stage Kit transport owns sockets and its telemetry worker.
+        self.stagekit_transport = None
+        self.device_cleanup_timer_id = None
 
         # Load settings
         self.settings = self.load_settings()
@@ -1637,71 +1635,20 @@ class RB3Dashboard:
             self.pico_target_label.config(text="Stage Kit Target: ALL DEVICES (Broadcast)")
 
     def send_stagekit_cmd(self, left, right):
-        """Send Stage Kit command to Pico(s)"""
-        if not self.sock_control:
+        """Send Stage Kit command to the selected Pico or all devices."""
+        if self.stagekit_transport is None:
             self.log_message("Control socket not initialized")
             return
-
-        target_ip = self.selected_pico_ip if self.selected_pico_ip else "255.255.255.255"
-        packet = struct.pack('>I4B2B', RB3E_EVENTS_MAGIC, 0, 6, 2, 0, left, right)
-
-        try:
-            self.sock_control.sendto(packet, (target_ip, RB3E_PORT))
-            self.log_message(f"Sent Stage Kit cmd L=0x{left:02x} R=0x{right:02x} to {target_ip}")
-        except Exception as e:
-            self.log_message(f"Send error: {e}")
+        self.stagekit_transport.send_command(left, right, self.selected_pico_ip)
 
     def send_color_cmd(self, left_pattern):
         """Send color command with selected color"""
         self.send_stagekit_cmd(left_pattern, self.selected_color.get())
 
-    def listen_telemetry(self):
-        """Listen for Pico telemetry broadcasts and send discovery packets"""
-        last_discovery_time = 0
-        discovery_interval = 5.0  # Send discovery every 5 seconds
-        discovery_packet = json.dumps({"type": "discovery"}).encode('utf-8')
-
-        # Calculate subnet broadcast address for more reliable discovery on multi-NIC systems
-        subnet_broadcast = None
-        try:
-            # Get local IP by creating a dummy connection (doesn't actually send data)
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-            # Calculate subnet broadcast (assumes /24, e.g., 192.168.1.50 -> 192.168.1.255)
-            subnet_broadcast = local_ip.rsplit('.', 1)[0] + '.255'
-        except Exception:
-            pass  # Fall back to global broadcast only
-
-        while self.is_running:
-            try:
-                data, addr = self.sock_telemetry.recvfrom(1024)
-                ip = addr[0]
-                status = json.loads(data.decode())
-                # Ignore discovery packets (we only care about telemetry)
-                if status.get('type') == 'discovery':
-                    continue
-                self.root.after(0, self.update_pico_device, ip, status)
-            except socket.timeout:
-                # On timeout, check if we should send discovery broadcast
-                now = time.time()
-                if now - last_discovery_time > discovery_interval:
-                    # Send to global broadcast
-                    try:
-                        self.sock_telemetry.sendto(discovery_packet, ("255.255.255.255", TELEMETRY_PORT))
-                    except Exception:
-                        pass
-                    # Also send to subnet broadcast for better multi-NIC compatibility
-                    if subnet_broadcast:
-                        try:
-                            self.sock_telemetry.sendto(discovery_packet, (subnet_broadcast, TELEMETRY_PORT))
-                        except Exception:
-                            pass
-                    last_discovery_time = now
-                continue
-            except Exception:
-                pass
+    def _on_stagekit_telemetry(self, transport, ip, status):
+        """Deliver only telemetry belonging to the active listening session."""
+        if self.is_running and self.stagekit_transport is transport:
+            self.update_pico_device(ip, status)
 
     def update_pico_device(self, ip, status):
         """Update Pico device in tree"""
@@ -1718,6 +1665,7 @@ class RB3Dashboard:
 
     def cleanup_devices(self):
         """Periodic cleanup of offline Pico devices"""
+        self.device_cleanup_timer_id = None
         if not self.is_running:
             return
 
@@ -1733,8 +1681,11 @@ class RB3Dashboard:
             if self.pico_tree.exists(ip):
                 self.pico_tree.delete(ip)
             del self.devices[ip]
+            if self.selected_pico_ip == ip:
+                self.selected_pico_ip = None
+                self.pico_target_label.config(text="Stage Kit Target: ALL DEVICES (Broadcast)")
 
-        self.root.after(1000, self.cleanup_devices)
+        self.device_cleanup_timer_id = self.root.after(1000, self.cleanup_devices)
 
     # =========================================================================
     # SONG BROWSER
@@ -1931,17 +1882,16 @@ class RB3Dashboard:
 
     def start_listener(self):
         """Start the unified listener"""
+        if self.is_running:
+            return
         try:
-            # Initialize control socket for Stage Kit
-            self.sock_control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock_control.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-            # Initialize telemetry socket for Pico status
-            self.sock_telemetry = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock_telemetry.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            self.sock_telemetry.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.sock_telemetry.bind(("0.0.0.0", TELEMETRY_PORT))
-            self.sock_telemetry.settimeout(0.1)
+            transport = StageKitTransport(
+                telemetry_callback=lambda ip, status: self.ui_dispatcher.post(
+                    self._on_stagekit_telemetry, transport, ip, status),
+                gui_callback=lambda message: self.ui_dispatcher.post(self.log_message, message),
+            )
+            self.stagekit_transport = transport
+            transport.start()
 
             # Initialize video components if enabled
             video_enabled = self.video_enabled_var.get()
@@ -2003,41 +1953,29 @@ class RB3Dashboard:
             self.listener_thread.daemon = True
             self.listener_thread.start()
 
-            # Set is_running BEFORE starting telemetry thread to avoid race condition
             self.is_running = True
-
-            # Start telemetry listener for Picos
-            self.telemetry_thread = threading.Thread(target=self.listen_telemetry)
-            self.telemetry_thread.daemon = True
-            self.telemetry_thread.start()
 
             self.status_label.config(text="Listening", foreground='green')
 
             # Start device cleanup
-            self.root.after(1000, self.cleanup_devices)
+            self.device_cleanup_timer_id = self.root.after(1000, self.cleanup_devices)
 
             self.log_message("Started listening for RB3Enhanced events")
 
         except Exception as e:
-            # Clean up any sockets that were created before the failure
-            if self.sock_telemetry:
-                try:
-                    self.sock_telemetry.close()
-                except Exception:
-                    pass
-                self.sock_telemetry = None
-            if self.sock_control:
-                try:
-                    self.sock_control.close()
-                except Exception:
-                    pass
-                self.sock_control = None
+            self.stop_listener()
             messagebox.showerror("Error", f"Failed to start: {e}")
             self.log_message(f"Failed to start: {e}")
 
     def stop_listener(self):
         """Stop the listener"""
         self.is_running = False
+        if self.device_cleanup_timer_id is not None:
+            self.root.after_cancel(self.device_cleanup_timer_id)
+            self.device_cleanup_timer_id = None
+        if self.stagekit_transport is not None:
+            self.stagekit_transport.stop()
+            self.stagekit_transport = None
 
         if self.listener:
             self.listener.stop()
@@ -2045,25 +1983,8 @@ class RB3Dashboard:
         if self.vlc_player:
             self.vlc_player.stop_current_video()
 
-        # Wait for threads to finish before closing sockets
-        if hasattr(self, 'listener_thread') and self.listener_thread and self.listener_thread.is_alive():
+        if self.listener_thread and self.listener_thread.is_alive():
             self.listener_thread.join(timeout=2.0)
-        if hasattr(self, 'telemetry_thread') and self.telemetry_thread and self.telemetry_thread.is_alive():
-            self.telemetry_thread.join(timeout=2.0)
-
-        if self.sock_telemetry:
-            try:
-                self.sock_telemetry.close()
-            except Exception:
-                pass
-            self.sock_telemetry = None
-
-        if self.sock_control:
-            try:
-                self.sock_control.close()
-            except Exception:
-                pass
-            self.sock_control = None
 
         self.status_label.config(text="Stopped", foreground='red')
         self.ip_status_label.config(text="Not detected", foreground='orange')
