@@ -18,6 +18,14 @@ suppressed so a token in a query string is never written to a log.
 No CORS headers are sent. The browser dashboard is served from this same
 origin, so it needs none, and adding a permissive header would expose the API
 to any page the user happens to have open.
+
+One rule for anyone editing ``do_POST``: every path that answers must first
+account for the request body. Answering a client that is still sending can
+reset the connection before it reads the response, so the refusal it needed to
+see never arrives. This went wrong three times during Stage 2, in the
+too-large, missing-token, and unknown-route paths, and each time it showed up
+as an intermittent failure rather than an obvious one. Consume the body with
+``_discard_body`` or ``_drain``, or close the connection deliberately.
 """
 
 import json
@@ -37,6 +45,11 @@ from . import assets
 HEARTBEAT_SECONDS = 15.0
 # Request bodies here are small JSON objects; anything larger is a mistake.
 MAX_BODY_BYTES = 64 * 1024
+# An over-large body is refused, but a client in the middle of sending one can
+# be reset before it reads the refusal. Draining a bounded amount first lets an
+# ordinary mistake receive a clean 413. Beyond this the connection is dropped
+# rather than reading anything a caller cares to send.
+MAX_DRAIN_BYTES = 1024 * 1024
 
 # Paths that exist but only answer GET. Posting to one is a wrong method, not a
 # missing endpoint, and the difference tells a client which mistake it made.
@@ -202,13 +215,25 @@ class ApiHandler(BaseHTTPRequestHandler):
             length = 0
         if length <= 0:
             return
-        if length > MAX_BODY_BYTES:
+        if not self._drain(length):
             self.close_connection = True
-            return
+
+    def _drain(self, length):
+        """Read and discard ``length`` bytes; return whether it was consumed."""
+        if length <= 0:
+            return True
+        if length > MAX_DRAIN_BYTES:
+            return False
+        remaining = length
         try:
-            self.rfile.read(length)
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 64 * 1024))
+                if not chunk:
+                    return False
+                remaining -= len(chunk)
         except OSError:
-            self.close_connection = True
+            return False
+        return True
 
     def _read_json_body(self):
         """Return the decoded body, or None after sending an error response."""
@@ -218,12 +243,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._error(400, "A valid Content-Length is required")
             return None
         if length < 0 or length > MAX_BODY_BYTES:
-            # The body is refused unread, so the client may still be sending.
-            # Announce the close, or it can hit a reset while writing and never
-            # see why it was refused.
-            self.close_connection = True
+            drained = self._drain(length)
+            headers = () if drained else (("Connection", "close"),)
+            if not drained:
+                self.close_connection = True
             self._write(413, json.dumps({"error": "The request body is too large"}),
-                        extra_headers=(("Connection", "close"),))
+                        extra_headers=headers)
             return None
         if length == 0:
             return {}
