@@ -89,5 +89,41 @@ class VideoImportTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class SongDataImportTests(unittest.TestCase):
+    def test_song_data_import_uses_only_stdlib_and_starts_no_services(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import sys
+            import threading
+            from unittest.mock import patch
+
+            class BlockUIImports(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.split('.')[0] in {'dashboard', 'tkinter'}:
+                        raise AssertionError('UI dependency: ' + fullname)
+
+            def block_side_effects(event, args):
+                if event in {'socket.__new__', 'subprocess.Popen', 'os.system', 'os.mkdir'}:
+                    raise AssertionError('Startup side effect: ' + event)
+
+            sys.dont_write_bytecode = True
+            sys.meta_path.insert(0, BlockUIImports())
+            sys.addaudithook(block_side_effects)
+            with patch.object(threading.Thread, 'start',
+                              side_effect=AssertionError('Started a thread')):
+                from rb3dashboard.song_data import SongDatabase, SongHistory, PlayStatistics
+                assert not SongDatabase().is_loaded()
+                assert SongHistory().get_count() == 0
+            """)
+        result = subprocess.run(
+            [sys.executable, '-S', '-c', script],  # No installed third-party packages.
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
