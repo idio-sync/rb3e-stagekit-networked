@@ -9,15 +9,20 @@ display dependency. Gameplay lighting continues to travel from the console
 directly to each Pico; this process observes events and holds shared state.
 
 Stage Kit discovery is off unless it is explicitly enabled, because each Pico
-remembers a single dashboard address. Configuration arrives in a later Stage 2
-task; today the defaults are used.
+remembers a single dashboard address.
+
+Settings come from defaults, then an optional JSON file, then ``RB3E_``
+environment variables. Pass ``--config PATH`` or set ``RB3E_CONFIG`` to name
+the file.
 """
 
+import argparse
 import signal
 import sys
 import threading
 import time
 
+from rb3dashboard.runtime.config import ConfigError, ServerConfig
 from rb3dashboard.runtime.server import ServerApplication
 
 
@@ -67,10 +72,35 @@ def run(application, stop=None, install_handlers=install_signal_handlers):
     return 0
 
 
-def main(argv=None, application_factory=None, runner=run):
+def parse_arguments(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="rb3server", description="Headless RB3Enhanced dashboard server")
+    parser.add_argument(
+        "--config", default=None,
+        help="Path to a JSON configuration file. Environment variables "
+             "prefixed RB3E_ override its values.")
+    return parser.parse_args(argv)
+
+
+def build_application(config):
+    return ServerApplication(log_sink=print_log, **config.application_kwargs())
+
+
+def main(argv=None, application_factory=None, runner=run,
+         config_loader=ServerConfig.load):
+    arguments = parse_arguments(argv)
     if application_factory is None:
+        try:
+            config = config_loader(path=arguments.config)
+        except ConfigError as error:
+            # Configuration problems are the operator's to fix, so report the
+            # reason plainly rather than a traceback.
+            print_log("error", str(error))
+            return 2
+        print_log("info", "Configuration: %s" % config.describe())
+
         def application_factory():
-            return ServerApplication(log_sink=print_log)
+            return build_application(config)
     try:
         application = application_factory()
     except Exception as error:

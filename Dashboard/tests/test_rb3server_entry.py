@@ -123,7 +123,7 @@ class MainTests(unittest.TestCase):
     def test_main_returns_zero_when_the_server_runs_and_stops(self):
         application = FakeApplication()
 
-        code = rb3server.main(application_factory=lambda: application,
+        code = rb3server.main(argv=[], application_factory=lambda: application,
                               runner=lambda app: 0)
 
         self.assertEqual(code, 0)
@@ -132,15 +132,52 @@ class MainTests(unittest.TestCase):
         def explode():
             raise ValueError("bad configuration")
 
-        code = rb3server.main(application_factory=explode, runner=lambda app: 0)
+        code = rb3server.main(argv=[], application_factory=explode, runner=lambda app: 0)
 
         self.assertEqual(code, 2)
+
+    def test_a_configuration_error_reports_a_distinct_exit_code(self):
+        """An operator mistake should read as a message, not a traceback."""
+        from rb3dashboard.runtime.config import ConfigError
+
+        def explode(path=None):
+            raise ConfigError("web_port must be between 1 and 65535, not 0")
+
+        code = rb3server.main(argv=[], config_loader=explode,
+                              runner=lambda app: 0)
+
+        self.assertEqual(code, 2)
+        self.assertIn("web_port",
+                      " ".join(str(call) for call in self.logged.call_args_list))
+
+    def test_the_effective_configuration_is_logged_at_startup(self):
+        from rb3dashboard.runtime.config import ServerConfig
+
+        rb3server.main(argv=[],
+                       config_loader=lambda path=None: ServerConfig.load(environ={}),
+                       runner=lambda app: 0)
+
+        logged = " ".join(str(call) for call in self.logged.call_args_list)
+        self.assertIn("web_port", logged)
+
+    def test_the_config_path_argument_is_passed_to_the_loader(self):
+        from rb3dashboard.runtime.config import ServerConfig
+        seen = []
+
+        def loader(path=None):
+            seen.append(path)
+            return ServerConfig.load(environ={})
+
+        rb3server.main(argv=["--config", "server.json"], config_loader=loader,
+                       runner=lambda app: 0)
+
+        self.assertEqual(seen, ["server.json"])
 
     def test_a_start_failure_reports_a_nonzero_exit_code(self):
         def explode(application):
             raise OSError("port in use")
 
-        code = rb3server.main(application_factory=FakeApplication, runner=explode)
+        code = rb3server.main(argv=[], application_factory=FakeApplication, runner=explode)
 
         self.assertEqual(code, 1)
 
