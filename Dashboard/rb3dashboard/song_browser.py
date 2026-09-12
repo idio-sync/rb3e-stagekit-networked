@@ -49,13 +49,37 @@ class SongBrowser:
 
         return songs
 
+    def _build_song_state(self, songs, source_ip):
+        """Validate songs and build their artist index before publishing state."""
+        if not isinstance(songs, list):
+            raise ValueError("Song list must be a list")
+        if source_ip is not None and not isinstance(source_ip, str):
+            raise ValueError("Song source IP must be a string or None")
+
+        artists_index = {}
+        gui_fields = ('artist', 'title', 'album', 'shortname')
+        for song in songs:
+            if not isinstance(song, dict):
+                raise ValueError("Each song must be a dictionary")
+            for field in gui_fields:
+                if field in song and not isinstance(song[field], str):
+                    raise ValueError(f"Song {field} must be a string")
+
+            artist = song.get('artist', 'Unknown Artist')
+            if artist not in artists_index:
+                artists_index[artist] = []
+            artists_index[artist].append(song)
+
+        for artist in artists_index:
+            artists_index[artist].sort(key=lambda x: x.get('title', ''))
+
+        return songs, artists_index, source_ip
+
     def fetch_song_list(self, ip_address):
         """Fetch song list from RB3Enhanced web interface"""
         if not ip_address:
             self.safe_callback("No RB3Enhanced IP detected")
             return False
-
-        self.rb3_ip = ip_address
 
         try:
             self.safe_callback("Fetching song list from RB3Enhanced...")
@@ -65,17 +89,9 @@ class SongBrowser:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
 
-            self.songs_data = self.parse_ini_format(response.text)
-
-            self.artists_index = {}
-            for song in self.songs_data:
-                artist = song.get('artist', 'Unknown Artist')
-                if artist not in self.artists_index:
-                    self.artists_index[artist] = []
-                self.artists_index[artist].append(song)
-
-            for artist in self.artists_index:
-                self.artists_index[artist].sort(key=lambda x: x.get('title', ''))
+            songs_data = self.parse_ini_format(response.text)
+            song_state = self._build_song_state(songs_data, ip_address)
+            self.songs_data, self.artists_index, self.rb3_ip = song_state
 
             self.safe_callback(f"Loaded {len(self.songs_data)} songs from {len(self.artists_index)} artists")
 
@@ -137,19 +153,13 @@ class SongBrowser:
             with open(cache_path, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
 
-            self.songs_data = cache_data.get('songs', [])
-            self.rb3_ip = cache_data.get('source_ip')
+            if not isinstance(cache_data, dict):
+                raise ValueError("Song cache must be a dictionary")
 
-            # Build artists index
-            self.artists_index = {}
-            for song in self.songs_data:
-                artist = song.get('artist', 'Unknown Artist')
-                if artist not in self.artists_index:
-                    self.artists_index[artist] = []
-                self.artists_index[artist].append(song)
-
-            for artist in self.artists_index:
-                self.artists_index[artist].sort(key=lambda x: x.get('title', ''))
+            song_state = self._build_song_state(
+                cache_data.get('songs', []), cache_data.get('source_ip'),
+            )
+            self.songs_data, self.artists_index, self.rb3_ip = song_state
 
             self.safe_callback(f"Loaded {len(self.songs_data)} songs from cache")
             return True
@@ -168,8 +178,11 @@ class SongBrowser:
             return False
 
         try:
-            url = f"http://{self.rb3_ip}:21070/jump?shortname={shortname}"
-            response = requests.get(url, timeout=10)
+            url = f"http://{self.rb3_ip}:21070/jump"
+            response = requests.get(
+                url, params={'shortname': shortname}, timeout=10,
+            )
+            response.raise_for_status()
             self.safe_callback(f"Sent play command for: {shortname}")
             return True
         except Exception as e:
