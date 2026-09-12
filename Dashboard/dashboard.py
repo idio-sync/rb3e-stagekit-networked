@@ -1,24 +1,35 @@
 # RB3Enhanced Unified Dashboard
 # Combines Stage Kit Fleet Manager with Music Video Player
 
-# Quick dependency installer
+# Standard-library startup checks must not install or contact anything.
+import importlib.util
 import sys
-import subprocess
 
-def install_if_missing(package_name, import_name):
-    try:
-        __import__(import_name)
-    except ImportError:
-        print(f"Installing {package_name}...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
-        print(f"{package_name} installed!")
+_REQUIRED_DEPENDENCIES = {
+    "googleapiclient": "google-api-python-client",
+    "yt_dlp": "yt-dlp",
+    "PIL": "Pillow",
+    "requests": "requests",
+}
 
-# Install missing packages
-install_if_missing("google-api-python-client", "googleapiclient")
-install_if_missing("yt-dlp", "yt_dlp")
-install_if_missing("Pillow", "PIL")
-install_if_missing("pypresence", "pypresence")
-install_if_missing("screeninfo", "screeninfo")
+
+def _missing_dependencies():
+    return [
+        package_name
+        for import_name, package_name in _REQUIRED_DEPENDENCIES.items()
+        if importlib.util.find_spec(import_name) is None
+    ]
+
+
+if __name__ == "__main__":
+    missing_dependencies = _missing_dependencies()
+    if missing_dependencies:
+        raise SystemExit(
+            "Missing dashboard dependencies: "
+            + ", ".join(missing_dependencies)
+            + ". From the repository root, run: "
+            + "python -m pip install -r Dashboard/requirements.txt"
+        )
 
 import threading
 import time
@@ -28,7 +39,6 @@ import webbrowser
 import ctypes
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, filedialog
-import json
 from datetime import datetime
 from PIL import ImageTk
 
@@ -38,6 +48,7 @@ from rb3dashboard.integrations import DISCORD_AVAILABLE, DiscordPresence, LastFm
 from rb3dashboard.listener import UnifiedRB3EListener
 from rb3dashboard.song_browser import SongBrowser
 from rb3dashboard.song_data import PlayStatistics, SongDatabase, SongHistory
+from rb3dashboard.settings import SettingsStore
 from rb3dashboard.stagekit import StageKitTransport
 from rb3dashboard.video import (
     SCREENINFO_AVAILABLE,
@@ -117,6 +128,7 @@ class RB3Dashboard:
         self.device_cleanup_timer_id = None
 
         # Load settings
+        self.settings_store = SettingsStore()
         self.settings = self.load_settings()
 
         # History and statistics tracking
@@ -340,24 +352,7 @@ class RB3Dashboard:
 
     def get_settings_path(self):
         """Get settings file path"""
-        try:
-            appdata_dir = os.environ.get('APPDATA')
-            if appdata_dir:
-                settings_dir = os.path.join(appdata_dir, 'RB3Dashboard')
-                os.makedirs(settings_dir, exist_ok=True)
-                return os.path.join(settings_dir, 'settings.json')
-        except Exception:
-            pass
-
-        try:
-            user_home = os.path.expanduser("~")
-            settings_dir = os.path.join(user_home, '.rb3dashboard')
-            os.makedirs(settings_dir, exist_ok=True)
-            return os.path.join(settings_dir, 'settings.json')
-        except Exception:
-            pass
-
-        return 'rb3_dashboard_settings.json'
+        return str(self.settings_store.path)
 
     def create_widgets(self):
         """Create all GUI widgets"""
@@ -2028,7 +2023,8 @@ class RB3Dashboard:
 
     def get_current_settings(self):
         """Get all current settings"""
-        return {
+        settings = self.settings.copy()
+        settings.update({
             'youtube_api_key': self.api_key_var.get().strip(),
             'lastfm_api_key': self.lastfm_api_key_var.get().strip(),
             'lastfm_api_secret': self.lastfm_secret_var.get().strip(),
@@ -2052,17 +2048,16 @@ class RB3Dashboard:
             'database_path': self.settings.get('database_path', ''),
             'ha_webhook_url': self.ha_webhook_url_var.get().strip(),
             'blank_screen_on_song': self.blank_screen_var.get()
-        }
+        })
+        return settings
 
     def save_settings(self):
         """Save settings to file"""
         try:
             settings = self.get_current_settings()
-            self.settings = settings
-
             settings_path = self.get_settings_path()
-            with open(settings_path, 'w') as f:
-                json.dump(settings, f, indent=2)
+            self.settings_store.save(settings)
+            self.settings = settings
 
             # Update album art manager
             if self.album_art_manager:
@@ -2135,44 +2130,7 @@ class RB3Dashboard:
 
     def load_settings(self):
         """Load settings from file"""
-        settings_path = self.get_settings_path()
-
-        defaults = {
-            'youtube_api_key': '',
-            'lastfm_api_key': '',
-            'lastfm_api_secret': '',
-            'lastfm_session_key': '',
-            'scrobble_enabled': False,
-            'discord_enabled': False,
-            'discord_client_id': '',  # Empty = use RB3 Deluxe app by default
-            'history_enabled': True,
-            'stats_enabled': True,
-            'song_browser_expanded': False,
-            'video_enabled': False,
-            'fullscreen': True,
-            'muted': True,
-            'always_on_top': False,
-            'sync_video_to_song': True,
-            'auto_quit_on_menu': True,
-            'video_start_delay': 0.0,
-            'video_monitor': 0,
-            'cookie_browser': '',
-            'database_path': '',
-            'ha_webhook_url': ''
-        }
-
-        try:
-            with open(settings_path, 'r') as f:
-                loaded = json.load(f)
-                # Merge with defaults
-                for key, value in defaults.items():
-                    if key not in loaded:
-                        loaded[key] = value
-                return loaded
-        except FileNotFoundError:
-            return defaults
-        except Exception:
-            return defaults
+        return self.settings_store.load()
 
     def on_closing(self):
         """Handle window close"""
@@ -2189,11 +2147,9 @@ class RB3Dashboard:
 
         try:
             settings = self.get_current_settings()
-            settings_path = self.get_settings_path()
-            with open(settings_path, 'w') as f:
-                json.dump(settings, f, indent=2)
-        except Exception:
-            pass
+            self.settings_store.save(settings)
+        except Exception as exc:
+            self.log_message(f"Failed to save settings during shutdown: {exc}")
 
         self.root.destroy()
 

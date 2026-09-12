@@ -170,14 +170,16 @@ Simply download and run - no Python installation required!
 
 If you prefer to run from source or want to modify the code:
 
-1.  **Python 3.8+**: Download from [python.org](https://www.python.org/).
+1.  **Python 3.11 (recommended and tested)**: Download from [python.org](https://www.python.org/). The application source uses Python 3.8-compatible APIs, but current dependency releases can require newer Python versions.
 2.  Clone or download this repository.
-3.  Open a terminal/command prompt in the directory.
-4.  Run the dashboard:
+3.  Open a terminal/command prompt in the repository root.
+4.  Install the dashboard dependencies, then launch it:
     ```bash
-    python dashboard.py
+    python -m pip install -r Dashboard/requirements.txt
+    python Dashboard/dashboard.py
     ```
-    *Note: On the first launch, the script will automatically attempt to install required Python dependencies (`yt_dlp`, `pypresence`, `google-api-python-client`, `Pillow`, `screeninfo`).*
+
+The dashboard reports missing dependencies at startup. It does not install packages automatically.
 
 ### Option 3: Build Your Own Executable
 
@@ -185,13 +187,14 @@ To build the executable yourself:
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+python -m pip install -r Dashboard/requirements.txt
 
 # Build executable
-pyinstaller dashboard.spec --clean
+cd Dashboard
+python -m PyInstaller dashboard.spec --clean
 ```
 
-The executable will be created in the `dist/` directory.
+The executable will be created in the `Dashboard/dist/` directory.
 
 ### Development tests
 
@@ -251,7 +254,7 @@ Ensure your firewall allows UDP traffic on the following ports:
 
 ### Starting a Session
 1.  Ensure your RB3Enhanced console and PC are on the same network.
-2.  Launch `dashboard.py`.
+2.  From the repository root, launch `python Dashboard/dashboard.py`.
 3.  Click **Start Listening** on the "Status" tab.
 4.  Start Rock Band 3 on your console.
 5.  The dashboard status should change to green, displaying the console's IP address.
@@ -286,11 +289,11 @@ statistics without time fields retain their play counts and start time totals at
 ## 🧩 Troubleshooting
 
 **Dashboard won't start?**
-* Try the pre-built executable from the [Releases page](../../releases/latest) with Python and dependancies already included.
-* If running from source, ensure you have Python 3.8 or newer installed.
-* If dependencies fail to install automatically, run:
+* Try the pre-built executable from the [Releases page](../../releases/latest), which already includes its runtime dependencies.
+* If running from source, use the tested Python 3.11 runtime and install the dependencies explicitly.
+* From the repository root, run:
     ```bash
-    pip install -r requirements.txt
+    python -m pip install -r Dashboard/requirements.txt
     ```
 
 **Videos aren't playing?**

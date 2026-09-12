@@ -46,6 +46,133 @@ class ListenerImportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class DashboardEntryPointImportTests(unittest.TestCase):
+    def test_import_does_not_install_packages_start_tk_or_open_sockets(self):
+        script = textwrap.dedent("""\
+            import socket
+            import subprocess
+            import sys
+            import tkinter
+            from unittest.mock import patch
+
+            def block_side_effects(event, args):
+                if event == 'socket.__new__':
+                    raise AssertionError('Opened a socket')
+
+            sys.addaudithook(block_side_effects)
+            with patch.object(subprocess, 'check_call',
+                              side_effect=AssertionError('Ran pip')), \\
+                 patch.object(subprocess, 'Popen',
+                              side_effect=AssertionError('Started a process')), \\
+                 patch.object(tkinter, 'Tk',
+                              side_effect=AssertionError('Started Tk')):
+                import dashboard
+                assert dashboard.RB3Dashboard is not None
+            """)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_missing_dependency_never_runs_pip(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import subprocess
+            import sys
+            from unittest.mock import patch
+
+            class MissingGoogleApi(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.split('.')[0] == 'googleapiclient':
+                        raise ImportError('Simulated missing dependency')
+
+            sys.meta_path.insert(0, MissingGoogleApi())
+            with patch.object(subprocess, 'check_call',
+                              side_effect=AssertionError('Ran pip')):
+                try:
+                    import dashboard
+                except ImportError:
+                    pass
+            """)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_startup_reports_explicit_install_command_for_missing_dependency(self):
+        script = textwrap.dedent("""\
+            import importlib.util
+            import runpy
+            from unittest.mock import patch
+
+            real_find_spec = importlib.util.find_spec
+            def missing_pillow(name, package=None):
+                if name == 'PIL':
+                    return None
+                return real_find_spec(name, package)
+
+            with patch.object(importlib.util, 'find_spec', side_effect=missing_pillow):
+                runpy.run_path('dashboard.py', run_name='__main__')
+            """)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("python -m pip install -r Dashboard/requirements.txt", result.stderr)
+
+    def test_missing_optional_dependencies_disable_features_without_blocking_startup(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import runpy
+            import sys
+            import tkinter
+            from unittest.mock import patch
+
+            optional_import = sys.argv[1]
+            class MissingOptional(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.split('.')[0] == optional_import:
+                        raise ImportError('Simulated missing optional dependency')
+
+            class TkReached(Exception):
+                pass
+
+            sys.meta_path.insert(0, MissingOptional())
+            with patch.object(tkinter, 'Tk', side_effect=TkReached):
+                try:
+                    runpy.run_path('dashboard.py', run_name='__main__')
+                except TkReached:
+                    pass
+            """)
+        expected_diagnostics = {
+            "pypresence": "Discord Rich Presence will be disabled",
+            "screeninfo": "multi-monitor selection will be disabled",
+        }
+        for optional_import, diagnostic in expected_diagnostics.items():
+            with self.subTest(optional_import=optional_import):
+                result = subprocess.run(
+                    [sys.executable, "-c", script, optional_import],
+                    cwd=Path(__file__).resolve().parents[1],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(diagnostic, result.stdout)
+
+
 class VideoImportTests(unittest.TestCase):
     def test_video_import_needs_no_ui_or_startup_services(self):
         script = textwrap.dedent("""\
