@@ -115,6 +115,20 @@ def make_app():
 
 
 class DesktopLifecycleTests(unittest.TestCase):
+    def test_accepted_song_list_remains_visible_when_cache_save_fails(self):
+        app = self.app
+        app.is_running = True
+        client = SongBrowser()
+        client.songs_data = [{'shortname': 'new'}]
+        client.artists_index = {'Unknown Artist': client.songs_data}
+        with patch.object(client, 'save_to_cache', return_value=False):
+            app._accept_song_list(app._generation, app._browser_generation, client, True)
+        self.assertIs(app.song_browser, client)
+        app.populate_song_tree.assert_called_once_with()
+        self.assertEqual(app.song_count_label.options['text'], '1 songs, 1 artists')
+        self.assertIn('cache failed', app.browser_status_label.options['text'].lower())
+        self.assertNotIn('and cached', app.browser_status_label.options['text'])
+
     def setUp(self):
         self.app = make_app()
         self.stack = ExitStack()

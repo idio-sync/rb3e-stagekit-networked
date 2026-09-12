@@ -2,7 +2,9 @@
 
 import json
 import os
+import re
 import sys
+import tempfile
 import time
 
 import requests
@@ -30,6 +32,7 @@ class SongBrowser:
         """Parse INI format song data from RB3Enhanced"""
         songs = []
         current_song = {}
+        in_section = False
 
         for line in ini_data.split('\n'):
             line = line.strip()
@@ -37,12 +40,20 @@ class SongBrowser:
                 continue
 
             if line.startswith('[') and line.endswith(']'):
+                if not line[1:-1].strip() or '[' in line[1:-1] or ']' in line[1:-1]:
+                    raise ValueError("Invalid song section")
                 if current_song:
                     songs.append(current_song)
                 current_song = {}
-            elif '=' in line:
+                in_section = True
+            elif in_section and '=' in line:
                 key, value = line.split('=', 1)
-                current_song[key.strip()] = value.strip()
+                key = key.strip()
+                if not re.fullmatch(r'[A-Za-z0-9_-]+', key):
+                    raise ValueError("Invalid song field")
+                current_song[key] = value.strip()
+            else:
+                raise ValueError("Expected song section or key=value field")
 
         if current_song:
             songs.append(current_song)
@@ -76,7 +87,10 @@ class SongBrowser:
         return songs, artists_index, source_ip
 
     def fetch_song_list(self, ip_address, persist=True):
-        """Fetch song list from RB3Enhanced web interface"""
+        """Fetch songs; False also reports requested persistence failure.
+
+        A cache failure retains the successfully fetched in-memory song list.
+        """
         if not ip_address:
             self.safe_callback("No RB3Enhanced IP detected")
             return False
@@ -96,8 +110,10 @@ class SongBrowser:
             self.safe_callback(f"Loaded {len(self.songs_data)} songs from {len(self.artists_index)} artists")
 
             # Desktop requests defer persistence until the owner accepts the result.
-            if persist:
-                self.save_to_cache()
+            if persist and not self.save_to_cache():
+                self.safe_callback("Song list loaded but not cached")
+                self.loading = False
+                return False
 
             self.loading = False
             return True
@@ -127,8 +143,7 @@ class SongBrowser:
 
     def save_to_cache(self):
         """Save song list to JSON cache"""
-        if not self.songs_data:
-            return False
+        temporary_path = None
         try:
             cache_path = self.get_cache_path()
             cache_data = {
@@ -136,13 +151,27 @@ class SongBrowser:
                 'cached_at': time.time(),
                 'source_ip': self.rb3_ip
             }
-            with open(cache_path, 'w', encoding='utf-8') as f:
+            with tempfile.NamedTemporaryFile(
+                    mode='w', encoding='utf-8', dir=os.path.dirname(cache_path),
+                    prefix=os.path.basename(cache_path) + '.', suffix='.tmp',
+                    delete=False) as f:
+                temporary_path = f.name
                 json.dump(cache_data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, cache_path)
+            temporary_path = None
             self.safe_callback(f"Cached {len(self.songs_data)} songs to {cache_path}")
             return True
         except Exception as e:
             self.safe_callback(f"Failed to save cache: {e}")
             return False
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
 
     def load_from_cache(self):
         """Load song list from JSON cache"""
@@ -154,11 +183,11 @@ class SongBrowser:
             with open(cache_path, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
 
-            if not isinstance(cache_data, dict):
-                raise ValueError("Song cache must be a dictionary")
+            if not isinstance(cache_data, dict) or 'songs' not in cache_data:
+                raise ValueError("Song cache must be a dictionary containing songs")
 
             song_state = self._build_song_state(
-                cache_data.get('songs', []), cache_data.get('source_ip'),
+                cache_data['songs'], cache_data.get('source_ip'),
             )
             self.songs_data, self.artists_index, self.rb3_ip = song_state
 

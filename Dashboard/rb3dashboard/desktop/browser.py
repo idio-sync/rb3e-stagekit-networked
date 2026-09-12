@@ -147,13 +147,14 @@ class BrowserViewMixin:
         if (self._closing or not self.is_running or session != self._generation
                 or generation != self._browser_generation):
             return
+        cached = False
         if success:
             self.song_browser = client
             self.song_browser.gui_callback = self.log_message
-            self.song_browser.save_to_cache()
-        self.on_song_list_loaded(success)
+            cached = self.song_browser.save_to_cache()
+        self.on_song_list_loaded(success, cached)
 
-    def on_song_list_loaded(self, success):
+    def on_song_list_loaded(self, success, cached=False):
         self.load_songs_button.config(state='normal', text='Refresh Song List')
 
         if success:
@@ -161,7 +162,8 @@ class BrowserViewMixin:
             count = len(self.song_browser.songs_data)
             artist_count = len(self.song_browser.artists_index)
             self.song_count_label.config(text=f"{count} songs, {artist_count} artists")
-            self.browser_status_label.config(text="Song list loaded and cached")
+            status = "Song list loaded and cached" if cached else "Song list loaded; cache failed"
+            self.browser_status_label.config(text=status)
         else:
             self.browser_status_label.config(text="Failed to load song list")
     def populate_song_tree(self, filter_text=""):

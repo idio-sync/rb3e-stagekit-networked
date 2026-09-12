@@ -105,6 +105,9 @@ class SongBrowserTests(unittest.TestCase):
     def test_cache_rejects_invalid_roots_and_gui_field_types(self):
         invalid_caches = [
             [],
+            {},
+            {'error': 'unavailable'},
+            {'songs': None},
             {'songs': {}},
             {'songs': [], 'source_ip': 1234},
             {'songs': [{'artist': []}]},
@@ -191,6 +194,57 @@ class SongBrowserTests(unittest.TestCase):
             timeout=10,
         )
         self.assertIn('Sent play command for: song & version', self.messages)
+
+    def test_failed_cache_write_or_replace_preserves_previous_bytes(self):
+        for failure in ('dump', 'replace'):
+            with self.subTest(failure=failure):
+                self.set_existing_state()
+                self.assertTrue(self.browser.save_to_cache())
+                previous = self.cache_path.read_bytes()
+                self.browser.songs_data = [{'shortname': 'new'}]
+                target = song_browser.json if failure == 'dump' else song_browser.os
+                with patch.object(target, failure, side_effect=OSError('disk full')):
+                    self.assertFalse(self.browser.save_to_cache())
+                self.assertEqual(self.cache_path.read_bytes(), previous)
+                self.assertEqual(list(self.directory.iterdir()), [self.cache_path])
+
+    def test_persist_failure_returns_false_but_retains_fetched_songs(self):
+        response = Mock(text='[new]\nshortname=new\n')
+        with patch.object(song_browser.requests, 'get', return_value=response), \
+                patch.object(self.browser, 'save_to_cache', return_value=False):
+            self.assertFalse(self.browser.fetch_song_list('192.0.2.2'))
+        self.assertEqual(self.browser.songs_data, [{'shortname': 'new'}])
+        self.assertFalse(self.browser.loading)
+        self.assertTrue(any('not cached' in message for message in self.messages))
+
+    def test_actual_malformed_http_content_preserves_accepted_state_and_cache(self):
+        bodies = ('<html>service unavailable</html>', '<html class=error>oops</html>',
+                  'shortname=missing_section', '[broken', '[ok]\nshortname=ok\nerror',
+                  '[ok]\n=missing_key', '[ok]\n<html class=error>oops</html>')
+        for body in bodies:
+            with self.subTest(body=body):
+                self.set_existing_state()
+                self.assertTrue(self.browser.save_to_cache())
+                expected = deepcopy(self.browser.__dict__)
+                previous = self.cache_path.read_bytes()
+                with patch.object(song_browser.requests, 'get', return_value=Mock(text=body)):
+                    self.assertFalse(self.browser.fetch_song_list('192.0.2.99'))
+                self.assert_existing_state_unchanged(expected)
+                self.assertEqual(self.cache_path.read_bytes(), previous)
+                self.assertFalse(self.browser.loading)
+
+    def test_http_minimal_equals_and_empty_lists_round_trip(self):
+        for body, expected in (
+                ('[only]\nshortname=only\ntitle=One = One\n',
+                 [{'shortname': 'only', 'title': 'One = One'}]),
+                ('', []), (' \n\t', []), ('[empty]\n', [])):
+            with self.subTest(body=body):
+                self.set_existing_state()
+                with patch.object(song_browser.requests, 'get', return_value=Mock(text=body)):
+                    self.assertTrue(self.browser.fetch_song_list('192.0.2.2'))
+                restored = song_browser.SongBrowser()
+                self.assertTrue(restored.load_from_cache())
+                self.assertEqual(restored.songs_data, expected)
 
     def test_play_returns_false_for_http_error(self):
         self.browser.rb3_ip = '192.0.2.40'
