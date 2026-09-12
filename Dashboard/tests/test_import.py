@@ -47,6 +47,32 @@ class ListenerImportTests(unittest.TestCase):
 
 
 class DashboardEntryPointImportTests(unittest.TestCase):
+    def test_desktop_package_defers_ui_and_optional_dependencies(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import sys
+
+            class BlockDesktopImports(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.split('.')[0] in {
+                        'tkinter', 'PIL', 'googleapiclient', 'yt_dlp',
+                        'pypresence', 'screeninfo',
+                    }:
+                        raise AssertionError('Desktop dependency: ' + fullname)
+
+            sys.meta_path.insert(0, BlockDesktopImports())
+            import rb3dashboard.desktop
+            assert 'rb3dashboard.desktop.app' not in sys.modules
+            """)
+        result = subprocess.run(
+            [sys.executable, "-S", "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_import_does_not_install_packages_start_tk_or_open_sockets(self):
         script = textwrap.dedent("""\
             import socket
