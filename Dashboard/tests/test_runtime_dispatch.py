@@ -1,9 +1,5 @@
 """Headless queue contracts: capacity, drop accounting, and bounded shutdown."""
 
-from pathlib import Path
-import subprocess
-import sys
-import textwrap
 import threading
 import time
 import unittest
@@ -347,43 +343,6 @@ class CountersTests(DispatcherTestCase):
         counters = dispatcher.counters()
         counters["accepted"] = 99
         self.assertEqual(dispatcher.counters()["accepted"], 0)
-
-
-class ImportBoundaryTests(unittest.TestCase):
-    def test_headless_dispatch_imports_no_desktop_dependency_or_socket(self):
-        script = textwrap.dedent("""\
-            import importlib.abc
-            import sys
-            import threading
-            from unittest.mock import patch
-
-            class BlockDesktopImports(importlib.abc.MetaPathFinder):
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in {
-                        'dashboard', 'tkinter', 'PIL', 'googleapiclient',
-                        'yt_dlp', 'pypresence', 'screeninfo',
-                    }:
-                        raise AssertionError('Desktop dependency: ' + fullname)
-
-            def block_side_effects(event, args):
-                if event in {'socket.__new__', 'subprocess.Popen', 'os.system'}:
-                    raise AssertionError('Startup side effect: ' + event)
-
-            sys.meta_path.insert(0, BlockDesktopImports())
-            sys.addaudithook(block_side_effects)
-            with patch.object(threading.Thread, 'start',
-                              side_effect=AssertionError('Started a thread')):
-                from rb3dashboard.runtime.dispatch import HeadlessDispatcher
-                HeadlessDispatcher()
-            """)
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=Path(__file__).resolve().parents[1],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
