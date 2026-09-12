@@ -87,6 +87,7 @@ class UnifiedRB3EListener:
         self.pending_video = None
         self._video_timer = None
         self._video_generation = 0
+        self._video_cancel_event = threading.Event()
         self._video_lookup_thread = None
         self._video_lookup_request = None
         self._video_lookup_generation = None
@@ -108,6 +109,8 @@ class UnifiedRB3EListener:
     def _cancel_pending_video_locked(self):
         """Invalidate lookups and delayed starts. Caller must hold _state_lock."""
         self._video_generation += 1
+        self._video_cancel_event.set()
+        self._video_cancel_event = threading.Event()
         self.pending_video = None
         self._video_lookup_request = None
         self._video_lookup_generation = None
@@ -509,11 +512,13 @@ class UnifiedRB3EListener:
                 return
             self._video_timer = None
             video_settings = self.video_settings.copy()
+            player = self.vlc_player
+            cancel_event = self._video_cancel_event
 
         stream_url, video_id, artist, song, shortname, video_title = video
         # Keep external player/GUI calls outside the shared state lock.
-        self.vlc_player.play_video(stream_url, video_id, artist, song,
-                                   video_settings, shortname, video_title)
+        player.play_video(stream_url, video_id, artist, song,
+                          video_settings, shortname, video_title, cancel_event)
 
     def get_rb3_ip(self) -> Optional[str]:
         return self.rb3_ip_address

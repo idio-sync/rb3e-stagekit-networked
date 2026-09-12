@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+import threading
 import time
 from collections import deque
 from typing import Dict, Optional, Tuple
@@ -388,6 +389,8 @@ class VLCPlayer:
     def __init__(self, gui_callback=None, song_database=None):
         self.vlc_path = self.find_vlc()
         self.current_process = None
+        self._process_lock = threading.Lock()
+        self._play_generation = 0
         self.played_videos = deque(maxlen=10)  # FIFO cache of recent video IDs
         self.gui_callback = gui_callback
         self.song_database = song_database
@@ -416,29 +419,68 @@ class VLCPlayer:
         return None
 
     def stop_current_video(self):
-        """Stop any currently playing video"""
-        if self.current_process and self.current_process.poll() is None:
+        """Invalidate launches and detach ownership before waiting on a process."""
+        with self._process_lock:
+            self._play_generation += 1
+            process, self.current_process = self.current_process, None
+        self._stop_process(process)
+
+    def _stop_process(self, process):
+        if process is not None:
             try:
-                self.current_process.terminate()
-                self.current_process.wait(timeout=3)
+                if process.poll() is not None:
+                    return
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
                 if self.gui_callback:
                     self.gui_callback("VLC stopped")
-            except subprocess.TimeoutExpired:
-                self.current_process.kill()
             except Exception:
                 pass
-            finally:
-                self.current_process = None
 
-    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None, video_title: str = None):
-        """Play video with VLC"""
+    def _play_is_current(self, generation, cancel_event):
+        # Caller holds _process_lock; no listener lock or blocking work here.
+        return (generation == self._play_generation
+                and (cancel_event is None or not cancel_event.is_set()))
+
+    def _launch_process(self, command, generation, cancel_event, **kwargs):
+        with self._process_lock:
+            if not self._play_is_current(generation, cancel_event):
+                return None
+        # Popen itself can block. A stop/replacement may proceed while it runs.
+        process = subprocess.Popen(command, **kwargs)
+        with self._process_lock:
+            if self._play_is_current(generation, cancel_event):
+                self.current_process = process
+                return process
+        # This process was never published, so only this launch owns cleanup.
+        self._stop_process(process)
+        return None
+
+    def _discard_process(self, process):
+        with self._process_lock:
+            if self.current_process is not process:
+                return
+            self.current_process = None
+        self._stop_process(process)
+
+    def play_video(self, video_url: str, video_id: str, artist: str, song: str, settings: dict, shortname: str = None, video_title: str = None, cancel_event=None):
+        """Play with per-call cancellation and exclusive process ownership."""
         if not self.vlc_path:
             if self.gui_callback:
                 self.gui_callback("VLC not available")
             return
 
-        self.stop_current_video()
-        self.current_video_title = video_title  # Store for logging
+        with self._process_lock:
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            self._play_generation += 1
+            generation = self._play_generation
+            previous, self.current_process = self.current_process, None
+        self._stop_process(previous)
+        process = None
 
         try:
             vlc_cmd = [
@@ -485,19 +527,37 @@ class VLCPlayer:
                     "--network-caching=2000",
                 ])
 
-            self.current_process = subprocess.Popen(
-                vlc_cmd,
+            process = self._launch_process(
+                vlc_cmd, generation, cancel_event,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
+            if process is None:
+                return
 
             time.sleep(2)
 
-            if self.current_process.poll() is not None:
+            with self._process_lock:
+                current = self._play_is_current(generation, cancel_event)
+            if not current:
+                # Cancellation rejects further launch/retry work. An already
+                # owned process is stopped by stop_current_video(), preserving
+                # the listener's auto-quit-disabled menu policy.
+                return
+            if process.poll() is not None:
                 vlc_cmd = [self.vlc_path, video_url]
-                self.current_process = subprocess.Popen(vlc_cmd)
+                self._discard_process(process)
+                process = self._launch_process(vlc_cmd, generation, cancel_event)
+                if process is None:
+                    return
 
-            self.played_videos.append(video_id)  # deque auto-removes oldest when full
+            with self._process_lock:
+                current = self._play_is_current(generation, cancel_event)
+                if current:
+                    self.current_video_title = video_title
+                    self.played_videos.append(video_id)
+            if not current:
+                return
 
             if self.gui_callback:
                 self.gui_callback(f"Playing: {artist} - {song}")
@@ -505,6 +565,8 @@ class VLCPlayer:
                     self.gui_callback(f"Video: '{video_title}'")
 
         except Exception as e:
+            if process is not None:
+                self._discard_process(process)
             if self.gui_callback:
                 self.gui_callback(f"Error playing video: {e}")
 

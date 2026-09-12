@@ -187,14 +187,16 @@ class ListenerPacketTests(unittest.TestCase):
         self.assertEqual(plays, [])
 
         self.listener.process_packet(packet(1, b"\x01"))
-        self.assertEqual(plays, [(
+        self.assertEqual([play[:-1] for play in plays], [(
             "https://video.invalid/stream", "video-id", "Artist", "Song",
             {"muted": True}, "song_shortname", "Video title",
         )])
+        self.assertFalse(plays[0][-1].is_set())
         self.assertIsNone(self.listener.pending_video)
 
         self.listener.process_packet(packet(1, b"\x00"))
         self.assertEqual(stops, ["stopped"])
+        self.assertTrue(plays[0][-1].is_set())
 
     def test_song_packet_sends_home_assistant_payload(self):
         delivered = threading.Event()
