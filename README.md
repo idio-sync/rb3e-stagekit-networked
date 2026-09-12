@@ -252,6 +252,10 @@ Ensure your firewall allows UDP traffic on the following ports:
 4.  Start Rock Band 3 on your console.
 5.  The dashboard status should change to green, displaying the console's IP address.
 
+Console discovery uses validated game events. Stage Kit test commands can appear
+in the lighting log, but they do not discover or replace the console. Lighting
+packets from an already detected console also count toward its connection activity.
+
 ### Using the Stage Kit Manager
 * Navigate to the **Stage Kit** tab.
 * **Left Panel - Detected Picos:** Shows all Stage Kit Picos discovered on the network with their IP, name, USB status, signal strength, and connection status.

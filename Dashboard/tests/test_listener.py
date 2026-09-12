@@ -12,9 +12,10 @@ from unittest.mock import patch
 from rb3dashboard.listener import UnifiedRB3EListener
 
 
-def packet(event_type, payload):
+def packet(event_type, payload, *, declared_size=None, platform=0):
     """Build a wire fixture independently of the production constants."""
-    return b"RB3E" + bytes((0, event_type, len(payload), 0)) + payload
+    size = len(payload) if declared_size is None else declared_size
+    return b"RB3E" + bytes((0, event_type, size, platform)) + payload
 
 
 class ListenerPacketTests(unittest.TestCase):
@@ -73,6 +74,47 @@ class ListenerPacketTests(unittest.TestCase):
         self.assertEqual(self.listener.current_shortname, "")
         self.assertEqual((self.listener.current_song, self.listener.current_artist), ("", ""))
         self.assertEqual(self.updates[-1], ("", ""))
+
+    def test_truncated_payload_does_not_change_song_or_send_webhook(self):
+        self.send_song_metadata()
+        self.updates.clear()
+        webhooks = []
+        self.listener.trigger_webhook = lambda *args: webhooks.append(args)
+        self.listener.process_packet(packet(2, b"Partial", declared_size=20))
+        self.assertEqual(self.listener.current_song, "Song")
+        self.assertEqual(self.updates, [])
+        self.assertEqual(webhooks, [])
+
+    def test_binary_handlers_do_not_read_beyond_declared_payload(self):
+        cases = [
+            packet(6, b"\xff\x80", declared_size=1),
+            packet(5, struct.pack(">5IB", 100000, 10000, 20000, 30000, 40000, 5), declared_size=20),
+            packet(7, bytes((1, 0, 1, 0, 3, 2, 1, 0, 0, 1, 2, 3)), declared_size=11),
+        ]
+        for data in cases:
+            with self.subTest(event_type=data[5]):
+                outputs = []
+                listener = UnifiedRB3EListener(
+                    stagekit_callback=lambda *args: outputs.append(args),
+                    game_info_callback=lambda *args: outputs.append(args),
+                )
+                listener.process_packet(data)
+                self.assertEqual(outputs, [])
+                self.assertEqual(listener.current_score, 0)
+                self.assertEqual(listener.band_info['members'], [False] * 4)
+
+    def test_empty_state_payload_does_not_end_current_song(self):
+        self.send_song_metadata()
+        self.listener.process_packet(packet(1, b"\x01"))
+        self.listener.process_packet(packet(1, b""))
+        self.assertEqual(self.listener.game_state, 1)
+        self.assertEqual(self.ended, [])
+
+    def test_trailing_bytes_are_ignored_after_declared_payload(self):
+        self.listener.process_packet(packet(2, b"Song") + b"padding")
+        self.listener.process_packet(packet(6, b"\xff\x80") + b"padding")
+        self.assertEqual(self.updates, [("Song", "")])
+        self.assertEqual(self.lighting, [(255, 128)])
 
     def test_text_state_packets_start_and_end_a_song(self):
         self.send_song_metadata()
@@ -194,6 +236,94 @@ class FakeDatagramSocket:
 
 
 class ListenerNetworkTests(unittest.TestCase):
+    def receive(self, listener, datagrams):
+        sock = FakeDatagramSocket(listener, datagrams)
+        with patch("rb3dashboard.listener.socket.socket", return_value=sock):
+            listener.start_listening()
+
+    def test_invalid_packets_do_not_detect_console_or_refresh_activity(self):
+        valid = packet(2, b"Song")
+        cases = [
+            b"", valid[:7], b"NOPE" + valid[4:], valid[:4] + b"\x01" + valid[5:],
+            packet(2, b"Partial", declared_size=20),
+            packet(6, b"\xff\x80", declared_size=1),
+            packet(5, bytes(20)), packet(7, bytes(11)), packet(1, b""),
+            packet(255, b"unknown"), packet(10, b"unsupported DX data"),
+        ]
+        for data in cases:
+            for known_console in (None, "192.0.2.10"):
+                with self.subTest(data=data, known_console=known_console):
+                    detected = []
+                    listener = UnifiedRB3EListener(ip_detected_callback=detected.append)
+                    listener.rb3_ip_address = known_console
+                    previous_time = datetime(2026, 1, 1) if known_console else None
+                    listener.last_packet_time = previous_time
+                    self.receive(listener, [(data, ("192.0.2.99", 21070))])
+                    self.assertEqual(listener.get_rb3_ip(), known_console)
+                    self.assertEqual(listener.last_packet_time, previous_time)
+                    self.assertEqual(detected, [])
+                    self.assertFalse(listener.is_rb3_active())
+
+    def test_stagekit_broadcasts_are_dispatched_without_identifying_console(self):
+        detected, lighting = [], []
+        listener = UnifiedRB3EListener(
+            ip_detected_callback=detected.append,
+            stagekit_callback=lambda *args: lighting.append(args),
+        )
+        self.receive(listener, [(packet(6, b"\x00\x01"), ("192.0.2.50", 54321))])
+        self.assertEqual(lighting, [(0, 1)])
+        self.assertEqual(detected, [])
+        self.assertIsNone(listener.get_rb3_ip())
+        self.assertIsNone(listener.last_packet_time)
+
+    def test_stagekit_broadcasts_do_not_replace_console_or_keep_it_active(self):
+        detected, lighting = [], []
+        listener = UnifiedRB3EListener(
+            ip_detected_callback=detected.append,
+            stagekit_callback=lambda *args: lighting.append(args),
+        )
+        listener.rb3_ip_address = "192.0.2.10"
+        previous_time = datetime(2026, 1, 1)
+        listener.last_packet_time = previous_time
+        # A relay may bind the same source port as the console, so port alone
+        # cannot distinguish manual lighting commands from game events.
+        self.receive(listener, [(packet(6, b"\x00\xff"), ("192.0.2.50", 21070))])
+        self.assertEqual(lighting, [(0, 255)])
+        self.assertEqual(detected, [])
+        self.assertEqual(listener.get_rb3_ip(), "192.0.2.10")
+        self.assertEqual(listener.last_packet_time, previous_time)
+        self.assertFalse(listener.is_rb3_active())
+
+    def test_lighting_from_identified_console_refreshes_activity(self):
+        listener = UnifiedRB3EListener()
+        listener.rb3_ip_address = "192.0.2.10"
+        listener.last_packet_time = datetime(2026, 1, 1)
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        with patch("rb3dashboard.listener.datetime") as clock:
+            clock.now.return_value = now
+            self.receive(listener, [(packet(6, b"\xff\x80"), ("192.0.2.10", 21070))])
+            self.assertEqual(listener.last_packet_time, now)
+            self.assertTrue(listener.is_rb3_active())
+
+    def test_song_metadata_can_identify_console_without_initial_alive_packet(self):
+        detected, updates = [], []
+        listener = UnifiedRB3EListener(
+            ip_detected_callback=detected.append,
+            song_update_callback=lambda *args: updates.append(args),
+        )
+        self.receive(listener, [(packet(2, b"Song", platform=1), ("192.0.2.10", 21070))])
+        self.assertEqual(detected, ["192.0.2.10"])
+        self.assertEqual(updates, [("Song", "")])
+        self.assertIsNotNone(listener.last_packet_time)
+
+    def test_valid_game_event_can_update_console_address(self):
+        detected = []
+        listener = UnifiedRB3EListener(ip_detected_callback=detected.append)
+        listener.rb3_ip_address = "192.0.2.10"
+        self.receive(listener, [(packet(0, b"test-build"), ("192.0.2.11", 21070))])
+        self.assertEqual(detected, ["192.0.2.11"])
+        self.assertEqual(listener.get_rb3_ip(), "192.0.2.11")
+
     def test_receive_loop_detects_console_and_dispatches_packets_until_stopped(self):
         detected, updates = [], []
         listener = UnifiedRB3EListener(

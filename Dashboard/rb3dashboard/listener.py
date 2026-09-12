@@ -10,8 +10,6 @@ from typing import Optional
 import requests
 
 from .protocol import (
-    RB3E_EVENTS_MAGIC,
-    RB3E_EVENTS_PROTOCOL,
     RB3E_EVENT_ALIVE,
     RB3E_EVENT_BAND_INFO,
     RB3E_EVENT_SCORE,
@@ -23,6 +21,7 @@ from .protocol import (
     RB3E_EVENT_STATE,
     RB3E_EVENT_VENUE_NAME,
     RB3E_PORT,
+    parse_packet,
 )
 
 
@@ -113,17 +112,7 @@ class UnifiedRB3EListener:
             while self.running:
                 try:
                     data, addr = self.sock.recvfrom(1024)
-                    sender_ip = addr[0]
-                    self.last_packet_time = datetime.now()
-
-                    if self.rb3_ip_address != sender_ip:
-                        self.rb3_ip_address = sender_ip
-                        if self.gui_callback:
-                            self.gui_callback(f"RB3Enhanced detected at: {sender_ip}")
-                        if self.ip_detected_callback:
-                            self.ip_detected_callback(sender_ip)
-
-                    self.process_packet(data)
+                    self.process_packet(data, sender_ip=addr[0])
 
                 except socket.timeout:
                     continue
@@ -141,21 +130,35 @@ class UnifiedRB3EListener:
             if self.gui_callback:
                 self.gui_callback(f"Failed to start listener: {e}")
 
-    def process_packet(self, data: bytes):
-        """Process incoming RB3Enhanced packet"""
-        if len(data) < 8:
+    def process_packet(self, data: bytes, sender_ip: Optional[str] = None):
+        """Validate a datagram before updating connection state or dispatching it."""
+        parsed = parse_packet(data)
+        if parsed is None:
             return
 
         try:
-            magic = struct.unpack('>I', data[:4])[0]
-            version, packet_type, packet_size, platform = struct.unpack('BBBB', data[4:8])
+            packet_type, payload = parsed
 
-            if magic != RB3E_EVENTS_MAGIC or version != RB3E_EVENTS_PROTOCOL:
-                return
+            # Manual lighting commands share the game's packet format. They
+            # can be displayed, but cannot discover or replace the console.
+            if sender_ip is not None:
+                with self._state_lock:
+                    is_console_packet = (
+                        packet_type != RB3E_EVENT_STAGEKIT or sender_ip == self.rb3_ip_address
+                    )
+                    ip_changed = False
+                    if is_console_packet:
+                        self.last_packet_time = datetime.now()
+                        ip_changed = self.rb3_ip_address != sender_ip
+                        self.rb3_ip_address = sender_ip
 
-            packet_data = ""
-            if packet_size > 0:
-                packet_data = data[8:8+packet_size].rstrip(b'\x00').decode('utf-8', errors='ignore')
+                if ip_changed:
+                    if self.gui_callback:
+                        self.gui_callback(f"RB3Enhanced detected at: {sender_ip}")
+                    if self.ip_detected_callback:
+                        self.ip_detected_callback(sender_ip)
+
+            packet_data = payload.rstrip(b'\x00').decode('utf-8', errors='ignore')
 
             # Handle events
             if packet_type == RB3E_EVENT_ALIVE:
@@ -192,55 +195,53 @@ class UnifiedRB3EListener:
 
             elif packet_type == RB3E_EVENT_STAGEKIT:
                 # Forward to Stage Kit handler
-                if self.stagekit_callback and len(data) >= 10:
-                    left_weight = data[8]
-                    right_weight = data[9]
+                if self.stagekit_callback:
+                    left_weight = payload[0]
+                    right_weight = payload[1]
                     self.stagekit_callback(left_weight, right_weight)
 
             elif packet_type == RB3E_EVENT_SCORE:
                 # NOTE: RB3Enhanced defines this event type but doesn't actually send it
                 # Score packet: total_score (4 bytes), member_scores (4x4 bytes), stars (1 byte)
-                if len(data) >= 29:
-                    total_score = struct.unpack('>I', data[8:12])[0]
-                    member1 = struct.unpack('>I', data[12:16])[0]
-                    member2 = struct.unpack('>I', data[16:20])[0]
-                    member3 = struct.unpack('>I', data[20:24])[0]
-                    member4 = struct.unpack('>I', data[24:28])[0]
-                    stars = data[28]
+                total_score = struct.unpack('>I', payload[0:4])[0]
+                member1 = struct.unpack('>I', payload[4:8])[0]
+                member2 = struct.unpack('>I', payload[8:12])[0]
+                member3 = struct.unpack('>I', payload[12:16])[0]
+                member4 = struct.unpack('>I', payload[16:20])[0]
+                stars = payload[20]
 
-                    with self._state_lock:
-                        self.current_score = total_score
-                        self.current_stars = stars
-                        self.member_scores = [member1, member2, member3, member4]
+                with self._state_lock:
+                    self.current_score = total_score
+                    self.current_stars = stars
+                    self.member_scores = [member1, member2, member3, member4]
 
-                    if self.game_info_callback:
-                        self.game_info_callback('score', {
-                            'total': total_score,
-                            'members': [member1, member2, member3, member4],
-                            'stars': stars
-                        })
+                if self.game_info_callback:
+                    self.game_info_callback('score', {
+                        'total': total_score,
+                        'members': [member1, member2, member3, member4],
+                        'stars': stars
+                    })
 
             elif packet_type == RB3E_EVENT_BAND_INFO:
                 # NOTE: RB3Enhanced defines this event type but doesn't actually send it
                 # Band info: member_exists (4 bytes), difficulties (4 bytes), instruments (4 bytes)
-                if len(data) >= 20:
-                    members = [bool(data[8]), bool(data[9]), bool(data[10]), bool(data[11])]
-                    difficulties = [data[12], data[13], data[14], data[15]]
-                    instruments = [data[16], data[17], data[18], data[19]]
+                members = [bool(payload[0]), bool(payload[1]), bool(payload[2]), bool(payload[3])]
+                difficulties = [payload[4], payload[5], payload[6], payload[7]]
+                instruments = [payload[8], payload[9], payload[10], payload[11]]
 
-                    with self._state_lock:
-                        self.band_info = {
-                            'members': members,
-                            'difficulties': difficulties,
-                            'instruments': instruments
-                        }
+                with self._state_lock:
+                    self.band_info = {
+                        'members': members,
+                        'difficulties': difficulties,
+                        'instruments': instruments
+                    }
 
-                    if self.game_info_callback:
-                        self.game_info_callback('band', {
-                            'members': members,
-                            'difficulties': difficulties,
-                            'instruments': instruments
-                        })
+                if self.game_info_callback:
+                    self.game_info_callback('band', {
+                        'members': members,
+                        'difficulties': difficulties,
+                        'instruments': instruments
+                    })
 
             elif packet_type == RB3E_EVENT_VENUE_NAME:
                 with self._state_lock:
