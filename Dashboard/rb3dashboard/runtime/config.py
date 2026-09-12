@@ -104,6 +104,7 @@ _FIELDS = {
     "discovery_interval": (_as_float, 5.0),
     "ha_webhook_url": (_as_text, ""),
     "console_address": (_as_text, ""),
+    "history_enabled": (_as_bool, True),
     "data_dir": (_as_text, ""),
     "device_offline_after": (_as_float, 10.0),
     "device_forget_after": (_as_float, 30.0),
@@ -250,6 +251,8 @@ class ServerConfig:
             "console_address": self.console_address,
             "command_rate": self.command_rate,
             "command_burst": self.command_burst,
+            "history_enabled": self.history_enabled,
+            "data_dir": self.data_dir,
         }
 
     def describe(self):

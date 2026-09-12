@@ -42,7 +42,7 @@ MAX_BODY_BYTES = 64 * 1024
 # missing endpoint, and the difference tells a client which mistake it made.
 READ_ONLY_ROUTES = frozenset({
     "/api/health", "/api/state", "/api/devices", "/api/songs", "/api/events",
-    "/api/stagekit/scenes",
+    "/api/stagekit/scenes", "/api/history",
 })
 
 
@@ -75,12 +75,15 @@ class ApiHandler(BaseHTTPRequestHandler):
     def log_error(self, fmt, *args):
         return
 
-    def _write(self, status, body, content_type="application/json"):
+    def _write(self, status, body, content_type="application/json",
+               extra_headers=()):
         payload = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in extra_headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -141,6 +144,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._json(200, self._songs())
         if route == "/api/stagekit/scenes":
             return self._json(200, {"scenes": self.application.scenes()})
+        if route == "/api/history":
+            return self._json(200, self._history(query))
         if route == "/api/events":
             return self._stream(query)
         return self._error(404, "Unknown endpoint: %s" % parsed.path)
@@ -190,7 +195,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._error(400, "A valid Content-Length is required")
             return None
         if length < 0 or length > MAX_BODY_BYTES:
-            self._error(413, "The request body is too large")
+            # The body is refused unread, so the client may still be sending.
+            # Announce the close, or it can hit a reset while writing and never
+            # see why it was refused.
+            self.close_connection = True
+            self._write(413, json.dumps({"error": "The request body is too large"}),
+                        extra_headers=(("Connection", "close"),))
             return None
         if length == 0:
             return {}
@@ -242,6 +252,18 @@ class ApiHandler(BaseHTTPRequestHandler):
         if ok:
             return self._json(200, {"shortname": shortname})
         return self._console_error(reason)
+
+    def _history(self, query):
+        store = getattr(self.application, "history", None)
+        if store is None:
+            # History being switched off is a configuration state, so answer
+            # with an empty record rather than an error a client must special
+            # case.
+            return {"enabled": False, "plays": [],
+                    "summary": {"plays": 0, "seconds": 0.0, "best_score": None}}
+        limit = _first_int(query.get("limit"), default=50)
+        return {"enabled": True, "plays": store.recent_plays(limit),
+                "summary": store.summary()}
 
     # -- lighting --------------------------------------------------------
 

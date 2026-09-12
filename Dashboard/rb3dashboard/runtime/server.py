@@ -16,6 +16,7 @@ straight to the Picos; the server neither relays them nor records each one,
 which would advance the state version many times a second for no benefit.
 """
 
+import os
 import threading
 import time
 
@@ -25,6 +26,7 @@ from ..stagekit import StageKitTransport
 from .dispatch import HeadlessDispatcher
 from .ratelimit import RateLimiter
 from .scenes import SceneRunner, scene_listing
+from .store import SessionStore, StoreError
 from .state import ApplicationState
 from .supervisor import ServiceSupervisor
 from .web.service import WebService
@@ -148,6 +150,8 @@ class ServerApplication:
                  console_address="",
                  command_rate=10.0,
                  command_burst=20.0,
+                 history_enabled=True,
+                 data_dir="",
                  webhook_url="",
                  device_offline_after=10.0,
                  device_forget_after=30.0,
@@ -197,6 +201,12 @@ class ServerApplication:
         self.songs = song_browser_factory(
             gui_callback=self._post(self._record_log))
 
+        self.history = None
+        if history_enabled and data_dir:
+            self.history = SessionStore(
+                os.path.join(data_dir, SessionStore.DEFAULT_FILENAME),
+                clock=clock)
+
         self.transport = None
         if stagekit_enabled:
             self.transport = transport_factory(
@@ -233,6 +243,8 @@ class ServerApplication:
         supervisor = ServiceSupervisor(on_error=self._on_service_error)
         supervisor.add("state", lambda: None, self.state.close)
         supervisor.add("dispatcher", self.dispatcher.start, self.dispatcher.close)
+        if self.history is not None:
+            supervisor.add("history", self._open_history, self._close_history)
         if self.transport is not None:
             supervisor.add("stagekit", self.transport.start, self.transport.stop)
         supervisor.add("listener", self._listener_service.start,
@@ -398,9 +410,52 @@ class ServerApplication:
     def _on_song_started(self, artist, song, shortname):
         self.state.update_game(artist=artist, song=song, shortname=shortname,
                                song_start_time=self._clock())
+        self._remember(lambda store: store.start_play(shortname, song, artist))
 
     def _on_song_ended(self, artist, song, shortname, elapsed_seconds):
         self.state.update_game(song_start_time=None)
+        game = self.state.snapshot()["game"]
+        self._remember(lambda store: store.finish_play(
+            score=game.get("score"), stars=game.get("stars"),
+            seconds=elapsed_seconds))
+
+    # -- history ---------------------------------------------------------
+
+    def _open_history(self):
+        """Open the history database. A failure disables history, not the server.
+
+        Lighting and live state are what this process exists for; losing the
+        ability to write history is worth a loud complaint, not a refusal to
+        start.
+        """
+        try:
+            self.history.open()
+        except StoreError as error:
+            self._record_log(str(error), level="error")
+            self._record_log("Continuing without session history",
+                             level="warning")
+            self.history = None
+            return
+        self.history.begin_session(self.console_address())
+
+    def _close_history(self):
+        if self.history is None:
+            return
+        try:
+            self.history.end_session()
+        finally:
+            self.history.close()
+
+    def _remember(self, action):
+        """Apply a history write, never letting storage break live handling."""
+        store = self.history
+        if store is None:
+            return
+        try:
+            action(store)
+        except Exception as error:
+            self._record_log("Could not record history: %s" % error,
+                             level="warning")
 
     def _on_game_info(self, kind, value):
         if kind == "score":
