@@ -105,7 +105,7 @@ class ActivityViewMixin:
             self.blank_screen_window = None
     def on_game_info(self, info_type, data):
         """Called when game info updates (score, band, venue, screen)"""
-        self.root.after(0, lambda: self._update_game_info(info_type, data))
+        self._update_game_info(info_type, data)
     def _update_game_info(self, info_type, data):
         """Update game info UI (called on main thread)"""
         try:

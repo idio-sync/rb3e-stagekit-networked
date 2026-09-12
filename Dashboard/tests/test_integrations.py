@@ -131,7 +131,29 @@ class DiscordPresenceTests(unittest.TestCase):
         self.assertFalse(self.presence.connect())
         self.assertFalse(self.presence.connected)
         self.assertIsNone(self.presence.rpc)
+        self.rpc.close.assert_called_once_with()
         self.assertTrue(any('Discord unavailable' in message for message in self.messages))
+
+    def test_explicit_connect_closes_previously_lost_rpc_before_replacing_it(self):
+        self.presence.rpc = self.rpc
+        self.presence.connected = False
+        replacement = Mock()
+        self.factory.return_value = replacement
+        self.assertTrue(self.presence.connect())
+        self.rpc.close.assert_called_once_with()
+        self.assertIs(self.presence.rpc, replacement)
+
+    def test_disconnect_releases_rpc_even_if_clear_fails_or_connection_was_lost(self):
+        for connected in (True, False):
+            with self.subTest(connected=connected):
+                self.rpc.reset_mock()
+                self.rpc.clear.side_effect = OSError('Pipe lost')
+                self.presence.rpc = self.rpc
+                self.presence.connected = connected
+                self.presence.disconnect()
+                self.rpc.close.assert_called_once_with()
+                self.assertIsNone(self.presence.rpc)
+                self.assertFalse(self.presence.connected)
 
     def test_disabled_presence_does_not_connect_or_update(self):
         self.presence.enabled = False

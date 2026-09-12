@@ -74,9 +74,17 @@ class LogViewMixin:
         formatted_message = f"[{timestamp}] {message}\n"
 
         try:
-            self.root.after(0, self._update_log, formatted_message)
+            if self._closing:
+                return
+            if self.ui_dispatcher.is_owner_thread():
+                self._update_log(formatted_message)
+            else:
+                self.ui_dispatcher.post(self._deliver_log, self._generation, formatted_message)
         except Exception:
             print(f"[LOG] {message}")
+    def _deliver_log(self, generation, message):
+        if not self._closing and generation == self._generation:
+            self._update_log(message)
     def _update_log(self, message):
         try:
             self.log_text.insert('end', message)

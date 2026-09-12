@@ -207,6 +207,8 @@ class DiscordPresence:
             return False
 
         try:
+            if self.rpc is not None:
+                self.disconnect()
             self.rpc = Presence(self.client_id)
             self.rpc.connect()
             self.connected = True
@@ -215,8 +217,7 @@ class DiscordPresence:
                 self.gui_callback("Discord Rich Presence connected")
             return True
         except Exception as e:
-            self.connected = False
-            self.rpc = None
+            self.disconnect()
             if self.gui_callback:
                 self.gui_callback(f"Discord connection failed: {e}")
             return False
@@ -300,15 +301,20 @@ class DiscordPresence:
                 pass
 
     def disconnect(self):
-        """Disconnect from Discord"""
-        if self.rpc and self.connected:
+        """Release an owned RPC even after connection or clear failures."""
+        rpc, self.rpc = self.rpc, None
+        was_connected, self.connected = self.connected, False
+        if rpc is not None:
             try:
-                self.rpc.clear()
-                self.rpc.close()
+                if was_connected:
+                    rpc.clear()
             except Exception:
                 pass
-            self.connected = False
-            self.rpc = None
+            finally:
+                try:
+                    rpc.close()
+                except Exception:
+                    pass
             if self.gui_callback:
                 self.gui_callback("Discord Rich Presence disconnected")
 

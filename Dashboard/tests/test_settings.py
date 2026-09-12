@@ -278,6 +278,9 @@ class DashboardSettingsTests(unittest.TestCase):
             loaded = store.load()
 
             app = RB3Dashboard.__new__(RB3Dashboard)
+            app._closing = False
+            app.stop_listener = lambda: None
+            app.integration_worker = SimpleNamespace(close=lambda: None)
             app.settings_store = store
             app.album_art_manager = None
             app.ui_dispatcher = SimpleNamespace(close=lambda: None)

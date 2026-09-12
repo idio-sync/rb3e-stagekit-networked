@@ -122,17 +122,37 @@ class BrowserViewMixin:
             messagebox.showwarning("No Connection", "RB3Enhanced not detected yet.")
             return
 
-        if self.song_browser.loading:
+        if self._closing:
             return
-
+        self._browser_generation += 1
+        generation = self._browser_generation
+        session = self._generation
+        ip_address = self.detected_ip
+        # Never let an obsolete request mutate the shared browser or its cache.
+        client = SongBrowser(gui_callback=self._session_callback(self.log_message))
         self.load_songs_button.config(state='disabled', text='Loading...')
         self.browser_status_label.config(text="Loading song list...")
 
         def load_thread():
-            success = self.song_browser.fetch_song_list(self.detected_ip)
-            self.root.after(0, self.on_song_list_loaded, success)
+            success = client.fetch_song_list(ip_address, persist=False)
+            self.ui_dispatcher.post(self._accept_song_list, session, generation, client, success)
 
-        threading.Thread(target=load_thread, daemon=True).start()
+        try:
+            threading.Thread(target=load_thread, name='RB3E-song-list', daemon=True).start()
+        except Exception as exc:
+            self.log_message(f"Failed to load song list: {exc}")
+            self.on_song_list_loaded(False)
+
+    def _accept_song_list(self, session, generation, client, success):
+        if (self._closing or not self.is_running or session != self._generation
+                or generation != self._browser_generation):
+            return
+        if success:
+            self.song_browser = client
+            self.song_browser.gui_callback = self.log_message
+            self.song_browser.save_to_cache()
+        self.on_song_list_loaded(success)
+
     def on_song_list_loaded(self, success):
         self.load_songs_button.config(state='normal', text='Refresh Song List')
 
@@ -146,6 +166,8 @@ class BrowserViewMixin:
             self.browser_status_label.config(text="Failed to load song list")
     def populate_song_tree(self, filter_text=""):
         """Populate song tree"""
+        self._artwork_generation += 1
+        generation = self._artwork_generation
         for item in self.song_tree.get_children():
             self.song_tree.delete(item)
 
@@ -201,7 +223,8 @@ class BrowserViewMixin:
                                                  tags=(shortname, song_tag))
 
                 def update_artwork(cache_key, photo, row=song_item):
-                    if photo is not None and self.song_tree.exists(row):
+                    if (not self._closing and generation == self._artwork_generation
+                            and photo is not None and self.song_tree.exists(row)):
                         self._tree_image_refs[row] = photo
                         self.song_tree.item(row, image=photo)
 
@@ -218,10 +241,17 @@ class BrowserViewMixin:
 
                 row_index += 1
     def on_search_changed(self, event=None):
-        if hasattr(self.song_browser, 'search_timeout') and self.song_browser.search_timeout:
-            self.root.after_cancel(self.song_browser.search_timeout)
-        self.song_browser.search_timeout = self.root.after(300, self.perform_search)
+        self._cancel_timer('search_timer_id')
+        generation = self._generation
+        self.search_timer_id = self.root.after(
+            300, lambda: self._search_if_current(generation))
+
+    def _search_if_current(self, generation):
+        if not self._closing and generation == self._generation:
+            self.perform_search()
+
     def perform_search(self):
+        self.search_timer_id = None
         search_text = self.search_var.get().strip()
         self.populate_song_tree(search_text)
     def on_song_double_click(self, event):

@@ -33,6 +33,7 @@ class ListenerImportTests(unittest.TestCase):
                               side_effect=AssertionError('Started a thread')):
                 from rb3dashboard.listener import UnifiedRB3EListener
                 from rb3dashboard.stagekit import StageKitTransport
+                from rb3dashboard.desktop.integrations import DesktopIntegrationWorker
                 UnifiedRB3EListener()
                 StageKitTransport()
             """)

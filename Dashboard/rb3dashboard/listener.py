@@ -46,6 +46,8 @@ class UnifiedRB3EListener:
 
         self.sock = None
         self.running = False
+        self._run_token = None
+        self._run_started = False
 
         # Lock for thread-safe access to shared state
         self._state_lock = threading.Lock()
@@ -113,39 +115,71 @@ class UnifiedRB3EListener:
             self._video_timer.cancel()
             self._video_timer = None
 
-    def start_listening(self):
-        """Start listening for RB3Enhanced events"""
+    def prepare_start(self):
+        """Reserve a run synchronously before a background thread is started."""
+        with self._state_lock:
+            if self._run_token is not None:
+                raise RuntimeError("Listener already started or starting")
+            self._run_token = object()
+            self._run_started = False
+            return self._run_token
+
+    def _run_is_current(self, token):
+        with self._state_lock:
+            return self._run_token is token
+
+    def start_listening(self, run_token=None):
+        """Block while receiving; an optional reserved token makes startup cancelable."""
+        token = self.prepare_start() if run_token is None else run_token
+        with self._state_lock:
+            if self._run_token is not token or self._run_started:
+                return
+            self._run_started = True
+        sock = None
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.sock.settimeout(5.0)
-            self.sock.bind(("0.0.0.0", RB3E_PORT))
-            self.running = True
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            with self._state_lock:
+                if self._run_token is not token:
+                    return
+                self.sock = sock
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.settimeout(5.0)
+            sock.bind(("0.0.0.0", RB3E_PORT))
+            with self._state_lock:
+                if self._run_token is not token:
+                    return
+                self.running = True
 
             if self.gui_callback:
                 self.gui_callback(f"Listening for RB3Enhanced events on port {RB3E_PORT}")
 
-            while self.running:
+            while self._run_is_current(token):
                 try:
-                    data, addr = self.sock.recvfrom(1024)
-                    self.process_packet(data, sender_ip=addr[0])
-
+                    data, addr = sock.recvfrom(1024)
+                    if self._run_is_current(token):
+                        self.process_packet(data, sender_ip=addr[0])
                 except socket.timeout:
                     continue
                 except socket.error as e:
-                    if self.running and self.gui_callback:
+                    if self._run_is_current(token) and self.gui_callback:
                         self.gui_callback(f"Socket error: {e}")
-
+                    break
         except Exception as e:
-            if self.sock:
+            if self._run_is_current(token) and self.gui_callback:
+                self.gui_callback(f"Failed to start listener: {e}")
+        finally:
+            if sock is not None:
                 try:
-                    self.sock.close()
+                    sock.close()
                 except Exception:
                     pass
-                self.sock = None
-            if self.gui_callback:
-                self.gui_callback(f"Failed to start listener: {e}")
+            with self._state_lock:
+                if self._run_token is token:
+                    self._run_token = None
+                    self.sock = None
+                    self.running = False
+                    self._cancel_pending_video_locked()
 
     def process_packet(self, data: bytes, sender_ip: Optional[str] = None):
         """Validate a datagram before updating connection state or dispatching it."""
@@ -517,9 +551,14 @@ class UnifiedRB3EListener:
         threading.Thread(target=_send, daemon=True).start()
 
     def stop(self):
-        """Stop listening"""
+        """Invalidate setup and receive work without touching a later run's socket."""
         with self._state_lock:
             self.running = False
+            self._run_token = None
+            sock, self.sock = self.sock, None
             self._cancel_pending_video_locked()
-        if self.sock:
-            self.sock.close()
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass

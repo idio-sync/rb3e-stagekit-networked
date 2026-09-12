@@ -522,6 +522,8 @@ class AlbumArtDeliveryTests(AlbumArtTestCase):
 
     def make_browser_app(self, dashboard_class):
         app = dashboard_class.__new__(dashboard_class)
+        app._closing = False
+        app._artwork_generation = 0
         app.song_tree = OwnerTree(self.root)
         app.settings = {"lastfm_api_key": "key", "song_browser_expanded": True}
         app.album_art_manager = self.manager

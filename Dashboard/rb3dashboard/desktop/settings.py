@@ -381,40 +381,16 @@ class SettingsViewMixin:
             if self.song_history:
                 self.song_history.enabled = settings.get('history_enabled', True)
 
-            # Update scrobbler
-            if self.scrobbler:
-                self.scrobbler.api_key = settings.get('lastfm_api_key', '')
-                self.scrobbler.api_secret = settings.get('lastfm_api_secret', '')
-                self.scrobbler.session_key = settings.get('lastfm_session_key', '')
-                self.scrobbler.enabled = settings.get('scrobble_enabled', False)
-
-                # Update status label
-                if self.scrobbler.is_configured():
-                    self.lastfm_status_label.config(text="Configured", foreground='green')
-                else:
-                    self.lastfm_status_label.config(text="Not configured", foreground='gray')
-
-            # Update Discord presence
-            if self.discord_presence:
-                old_enabled = self.discord_presence.enabled
-                new_enabled = settings.get('discord_enabled', False)
-                # Always has a valid client_id (defaults to RB3 Deluxe app)
-                new_client_id = settings.get('discord_client_id', DiscordPresence.DEFAULT_CLIENT_ID)
-
-                self.discord_presence.client_id = new_client_id
-                self.discord_presence.enabled = new_enabled
-
-                # Connect/disconnect as needed
-                if new_enabled and not old_enabled:
-                    if self.discord_presence.connect():
-                        self.discord_status_label.config(text="Connected", foreground='green')
-                        # Set idle presence immediately so it shows game is being played
-                        self.discord_presence.set_idle()
-                    else:
-                        self.discord_status_label.config(text="Connection failed", foreground='red')
-                elif not new_enabled and old_enabled:
-                    self.discord_presence.disconnect()
-                    self.discord_status_label.config(text="Disabled", foreground='gray')
+            # External service configuration runs on the integration owner.
+            configured = all(settings.get(key) for key in (
+                'lastfm_api_key', 'lastfm_api_secret', 'lastfm_session_key'))
+            self.lastfm_status_label.config(
+                text='Configured' if configured else 'Not configured',
+                foreground='green' if configured else 'gray')
+            if not settings.get('scrobble_enabled', False):
+                self._cancel_scrobble()
+            if self.is_running:
+                self._configure_integrations()
 
             # Update stream extractor cookie browser
             if self.stream_extractor:

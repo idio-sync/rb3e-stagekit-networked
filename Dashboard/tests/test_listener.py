@@ -240,6 +240,87 @@ class FakeDatagramSocket:
 
 
 class ListenerNetworkTests(unittest.TestCase):
+    def test_reserved_start_is_canceled_before_thread_entry_and_can_restart(self):
+        listener = UnifiedRB3EListener()
+        token = listener.prepare_start()
+        listener.stop()
+        with patch('rb3dashboard.listener.socket.socket') as factory:
+            listener.start_listening(token)
+            factory.assert_not_called()
+        sock = FakeDatagramSocket(listener, [])
+        with patch('rb3dashboard.listener.socket.socket', return_value=sock):
+            listener.start_listening()
+        self.assertEqual(sock.bound_address, ('0.0.0.0', 21070))
+        self.assertTrue(sock.closed)
+
+    def test_old_setup_failure_cannot_close_or_stop_new_run(self):
+        entered, release, receiving = (threading.Event() for _ in range(3))
+        listener = UnifiedRB3EListener()
+        old = FakeDatagramSocket(listener, [])
+        new = FakeDatagramSocket(listener, [])
+        receive_release = threading.Event()
+
+        def bind(address):
+            entered.set()
+            release.wait(3)
+            raise OSError('Old setup failed')
+
+        def receive(size):
+            receiving.set()
+            receive_release.wait(3)
+            raise socket.timeout()
+
+        old.bind = bind
+        new.recvfrom = receive
+        with patch('rb3dashboard.listener.socket.socket', side_effect=[old, new]):
+            first = threading.Thread(target=listener.start_listening)
+            first.start()
+            second = None
+            try:
+                self.assertTrue(entered.wait(2))
+                listener.stop()
+                second = threading.Thread(target=listener.start_listening)
+                second.start()
+                self.assertTrue(receiving.wait(2))
+                release.set()
+                first.join(2)
+                self.assertIs(listener.sock, new)
+                self.assertTrue(listener.running)
+                self.assertFalse(new.closed)
+            finally:
+                listener.stop()
+                release.set()
+                receive_release.set()
+                first.join(2)
+                if second is not None:
+                    second.join(2)
+
+    def test_stop_during_bind_cannot_revive_receiver(self):
+        entered, release = threading.Event(), threading.Event()
+        updates = []
+        listener = UnifiedRB3EListener(song_update_callback=lambda *a: updates.append(a))
+        sock = FakeDatagramSocket(listener, [(packet(2, b'Stale'), ('192.0.2.1', 1))])
+
+        def bind(address):
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError('Bind barrier not released')
+
+        sock.bind = bind
+        with patch('rb3dashboard.listener.socket.socket', return_value=sock):
+            worker = threading.Thread(target=listener.start_listening)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                listener.stop()
+            finally:
+                release.set()
+                worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(updates, [])
+        self.assertFalse(listener.running)
+        self.assertTrue(sock.closed)
+
     def receive(self, listener, datagrams):
         sock = FakeDatagramSocket(listener, datagrams)
         with patch("rb3dashboard.listener.socket.socket", return_value=sock):

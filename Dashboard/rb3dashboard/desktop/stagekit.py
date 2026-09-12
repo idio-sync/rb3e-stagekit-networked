@@ -251,7 +251,7 @@ class StageKitViewMixin:
                 self.selected_pico_ip = None
                 self.pico_target_label.config(text="Stage Kit Target: ALL DEVICES (Broadcast)")
 
-        self.device_cleanup_timer_id = self.root.after(1000, self.cleanup_devices)
+        self.device_cleanup_timer_id = self._session_timer(1000, self.cleanup_devices)
     def on_stagekit_event(self, left_weight, right_weight):
         """Called when stage kit/lighting event is received"""
         if not self.log_stagekit_var.get():

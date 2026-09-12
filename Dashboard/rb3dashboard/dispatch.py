@@ -24,6 +24,9 @@ class UiDispatcher:
         if threading.get_ident() != self._owner:
             raise RuntimeError("UI dispatcher must be drained and closed by its owner")
 
+    def is_owner_thread(self):
+        return threading.get_ident() == self._owner
+
     def post(self, callback, *args):
         """Return whether the callback was accepted; never call Tk here."""
         with self._lock:

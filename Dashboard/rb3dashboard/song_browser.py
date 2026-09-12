@@ -75,7 +75,7 @@ class SongBrowser:
 
         return songs, artists_index, source_ip
 
-    def fetch_song_list(self, ip_address):
+    def fetch_song_list(self, ip_address, persist=True):
         """Fetch song list from RB3Enhanced web interface"""
         if not ip_address:
             self.safe_callback("No RB3Enhanced IP detected")
@@ -95,8 +95,9 @@ class SongBrowser:
 
             self.safe_callback(f"Loaded {len(self.songs_data)} songs from {len(self.artists_index)} artists")
 
-            # Save to cache for next launch
-            self.save_to_cache()
+            # Desktop requests defer persistence until the owner accepts the result.
+            if persist:
+                self.save_to_cache()
 
             self.loading = False
             return True

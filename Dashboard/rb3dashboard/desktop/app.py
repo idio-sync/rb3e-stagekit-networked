@@ -12,6 +12,7 @@ from rb3dashboard.song_data import PlayStatistics, SongHistory
 from rb3dashboard.stagekit import StageKitTransport
 from rb3dashboard.video import StreamExtractor, VLCPlayer, YouTubeSearcher
 
+from rb3dashboard.desktop.integrations import DesktopIntegrationWorker
 from rb3dashboard.desktop.activity import ActivityViewMixin
 from rb3dashboard.desktop.browser import BrowserViewMixin
 from rb3dashboard.desktop.history import HistoryViewMixin
@@ -37,6 +38,14 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
 
         # Application state
         self.is_running = False
+        self._closing = False
+        self._generation = 0
+        self._browser_generation = 0
+        self._artwork_generation = 0
+        self._integration_generation = 0
+        self._scrobble_generation = 0
+        self.search_timer_id = None
+        self.startup_timer_id = None
         self.detected_ip = None
 
         # Stage Kit state
@@ -101,6 +110,9 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
         # Auto-load database if path saved
         self.auto_load_database()
 
+        self.integration_worker = DesktopIntegrationWorker(
+            self.scrobbler, self.discord_presence, self.log_message)
+
         # Handle window closing
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -146,120 +158,130 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
 
         # Activity info overlay - positioned inline with tabs
         self.create_activity_bar(container)
+    def _session_callback(self, callback):
+        """Capture this session before handing a nonblocking callback to a worker."""
+        generation = self._generation
+        return lambda *args: self.ui_dispatcher.post(
+            self._deliver_session, generation, callback, args)
+
+    def _deliver_session(self, generation, callback, args):
+        if not self._closing and self.is_running and generation == self._generation:
+            callback(*args)
+
+    def _session_timer(self, delay, callback):
+        generation = self._generation
+        return self.root.after(delay, lambda: self._deliver_session(generation, callback, ()))
+
+    def _cancel_timer(self, name):
+        timer = getattr(self, name)
+        if timer is not None:
+            self.root.after_cancel(timer)
+            setattr(self, name, None)
+
+    def _cancel_scrobble(self):
+        self._scrobble_generation += 1
+        self._cancel_timer('scrobble_timer_id')
+
+    def _configure_integrations(self):
+        self._integration_generation += 1
+        generation = self._integration_generation
+        self.integration_worker.configure(
+            self.settings, lambda text, color: self.ui_dispatcher.post(
+                self._on_integration_status, generation, text, color))
+
+    def _on_integration_status(self, generation, text, color):
+        if not self._closing and generation == self._integration_generation:
+            self.discord_status_label.config(text=text, foreground=color)
+
     def on_song_update(self, song, artist):
-        """Called when song/artist info updates"""
-        # Update the activity label - only show when playing
+        """Apply a listener update completely on the UI owner."""
         if song and artist:
-            activity_text = f"{artist} - {song}"
-            self.root.after(0, lambda: self._show_activity(activity_text))
-        elif song:
-            self.root.after(0, lambda: self._show_activity(song))
-        elif artist:
-            self.root.after(0, lambda: self._show_activity(artist))
+            self._show_activity(f"{artist} - {song}")
+        elif song or artist:
+            self._show_activity(song or artist)
         else:
-            self.root.after(0, self._hide_activity)
+            self._hide_activity()
+            self.integration_worker.idle()
+            self._cancel_scrobble()
+        self.song_var.set(song or "")
+        self.artist_var.set(artist or "")
 
-        # Keep these for other uses (Discord, etc.)
-        self.root.after(0, lambda: self.song_var.set(song if song else ""))
-        self.root.after(0, lambda: self.artist_var.set(artist if artist else ""))
-
-        # Set Discord to idle state and cancel pending scrobble when returning to menu
-        if not song and not artist:
-            if self.discord_presence and self.discord_presence.enabled:
-                self.discord_presence.set_idle()
-            # Cancel any pending scrobble (song ended early)
-            if self.scrobble_timer_id:
-                try:
-                    self.root.after_cancel(self.scrobble_timer_id)
-                except Exception:
-                    pass
-                self.scrobble_timer_id = None
     def on_song_started(self, artist, song, shortname):
-        """Called when a song actually starts playing (game state 0->1)"""
+        """Track a song on the owner and enqueue its external side effects."""
         if not artist and not song:
             return
-
-        # Track in session history (duration updated when song ends)
+        self._cancel_scrobble()
         if self.song_history and self.song_history.enabled:
             self.song_history.add_song(artist, song, "", shortname)
-            self.root.after(0, self.refresh_history_display)
-
-        # Track in persistent stats (time added when song ends)
+            self.refresh_history_display()
         if self.play_stats and self.settings.get('stats_enabled', True):
             self.play_stats.record_play(artist, song)
-
-        # Last.fm scrobbling - update now playing
-        if self.scrobbler and self.scrobbler.enabled:
-            self.scrobbler.update_now_playing(artist, song)
-
-            # Cancel any existing scrobble timer from previous song
-            if self.scrobble_timer_id:
-                try:
-                    self.root.after_cancel(self.scrobble_timer_id)
-                except Exception:
-                    pass
-                self.scrobble_timer_id = None
-
-            # Schedule scrobble after appropriate time (4 min or 50%)
+        self.integration_worker.song_started(artist, song)
+        if self.settings.get('scrobble_enabled', False):
             duration = 0
             if self.song_database:
                 duration = self.song_database.get_song_duration(shortname, artist, song) or 0
-
-            if duration > 0:
-                scrobble_time = min(duration * 0.5, 240)  # 50% or 4 minutes
-            else:
-                scrobble_time = 240  # Default to 4 minutes
-
-            # Schedule the scrobble (convert to milliseconds) and store ID for cancellation
-            self.scrobble_timer_id = self.root.after(
+            scrobble_time = min(duration * 0.5, 240) if duration > 0 else 240
+            token = self._scrobble_generation
+            self.scrobble_timer_id = self._session_timer(
                 int(scrobble_time * 1000),
-                lambda a=artist, s=song: self._do_scrobble(a, s)
-            )
-
-        # Discord Rich Presence - update now playing
-        if self.discord_presence and self.discord_presence.enabled:
-            self.discord_presence.update_presence(artist, song)
-
-        # Blank screen if enabled
+                lambda: self._scrobble_if_current(token, artist, song))
         if self.settings.get('blank_screen_on_song', False):
-            self.root.after(0, self._show_blank_screen)
+            self._show_blank_screen()
+
+    def _scrobble_if_current(self, token, artist, song):
+        if token == self._scrobble_generation:
+            self._do_scrobble(artist, song)
+
     def _do_scrobble(self, artist, song):
-        """Perform the actual scrobble"""
-        if self.scrobbler and self.scrobbler.enabled:
-            self.scrobbler.scrobble(artist, song)
+        self.scrobble_timer_id = None
+        if self.is_running and not self._closing and self.settings.get('scrobble_enabled', False):
+            self.integration_worker.scrobble(artist, song)
+
     def on_song_ended(self, artist, song, shortname, elapsed_seconds):
-        """Called when a song ends (game state 1->0) with actual elapsed time"""
+        self._cancel_scrobble()
         if elapsed_seconds > 0:
-            # Update session history with actual elapsed time
             if self.song_history and self.song_history.enabled:
                 self.song_history.update_last_song_duration(elapsed_seconds)
-                self.root.after(0, self.refresh_history_display)
-
-            # Update all-time stats with actual elapsed time
             if self.play_stats and self.settings.get('stats_enabled', True):
                 self.play_stats.add_play_time(artist, song, elapsed_seconds)
-                self.root.after(0, self.refresh_history_display)
+            self.refresh_history_display()
+            minutes, seconds = divmod(elapsed_seconds, 60)
+            self.log_message(f"Song played for {minutes}:{seconds:02d}")
+        self._hide_blank_screen()
 
-            # Log the actual playtime
-            minutes = elapsed_seconds // 60
-            seconds = elapsed_seconds % 60
-            self.root.after(0, lambda: self.log_message(f"Song played for {minutes}:{seconds:02d}"))
-
-        # Hide blank screen if showing
-        self.root.after(0, self._hide_blank_screen)
     def on_ip_detected(self, ip_address):
-        """Called when RB3Enhanced IP is detected"""
+        if ip_address != self.detected_ip:
+            self._browser_generation += 1
+            self.load_songs_button.config(
+                text='Refresh Song List' if self.song_browser.songs_data else 'Load Song List')
         self.detected_ip = ip_address
-        self.root.after(0, self._update_ip_ui, ip_address)
+        self._update_ip_ui(ip_address)
+
+    def _run_listener(self, listener, token, finished):
+        try:
+            listener.start_listening(token)
+        finally:
+            finished()
+
+    def _on_listener_finished(self):
+        self.stop_listener()
+        self.log_message("Listener exited; stopped desktop services")
+
     def start_listener(self):
         """Start the unified listener"""
-        if self.is_running:
+        self._cancel_timer('startup_timer_id')
+        if self.is_running or self._closing:
             return
+        self._generation += 1
+        self.is_running = True
+        session_log = self._session_callback(self.log_message)
         try:
+            self._configure_integrations()
             transport = StageKitTransport(
-                telemetry_callback=lambda ip, status: self.ui_dispatcher.post(
-                    self._on_stagekit_telemetry, transport, ip, status),
-                gui_callback=lambda message: self.ui_dispatcher.post(self.log_message, message),
+                telemetry_callback=self._session_callback(
+                    lambda ip, status: self._on_stagekit_telemetry(transport, ip, status)),
+                gui_callback=session_log,
             )
             self.stagekit_transport = transport
             transport.start()
@@ -270,7 +292,7 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
 
             # Always check VLC if video is enabled
             if video_enabled:
-                self.vlc_player = VLCPlayer(gui_callback=self.log_message,
+                self.vlc_player = VLCPlayer(gui_callback=session_log,
                                            song_database=self.song_database)
 
                 if self.vlc_player.vlc_path:
@@ -284,9 +306,9 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
                     self.log_message("Initializing video components...")
                     self.youtube_searcher = YouTubeSearcher(api_key,
                                                             song_database=self.song_database,
-                                                            gui_callback=self.log_message)
+                                                            gui_callback=session_log)
                     cookie_browser = self.settings.get('cookie_browser', '')
-                    self.stream_extractor = StreamExtractor(gui_callback=self.log_message,
+                    self.stream_extractor = StreamExtractor(gui_callback=session_log,
                                                             cookie_browser=cookie_browser)
                     if cookie_browser:
                         self.log_message(f"Using {cookie_browser} cookies for age-restricted videos")
@@ -298,13 +320,13 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
 
             # Create unified listener
             self.listener = UnifiedRB3EListener(
-                gui_callback=self.log_message,
-                ip_detected_callback=self.on_ip_detected,
-                song_update_callback=self.on_song_update,
-                stagekit_callback=self.on_stagekit_event,
-                song_started_callback=self.on_song_started,
-                song_ended_callback=self.on_song_ended,
-                game_info_callback=self.on_game_info
+                gui_callback=session_log,
+                ip_detected_callback=self._session_callback(self.on_ip_detected),
+                song_update_callback=self._session_callback(self.on_song_update),
+                stagekit_callback=self._session_callback(self.on_stagekit_event),
+                song_started_callback=self._session_callback(self.on_song_started),
+                song_ended_callback=self._session_callback(self.on_song_ended),
+                game_info_callback=self._session_callback(self.on_game_info)
             )
 
             # Set the HA webhook URL
@@ -320,8 +342,11 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
             self.listener.update_video_settings(video_settings, video_enabled)
 
             # Start listener thread
-            self.listener_thread = threading.Thread(target=self.listener.start_listening)
-            self.listener_thread.daemon = True
+            token = self.listener.prepare_start()
+            self.listener_thread = threading.Thread(
+                target=self._run_listener,
+                args=(self.listener, token, self._session_callback(self._on_listener_finished)),
+                name='RB3E-listener', daemon=True)
             self.listener_thread.start()
 
             self.is_running = True
@@ -329,7 +354,7 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
             self.status_label.config(text="Listening", foreground='green')
 
             # Start device cleanup
-            self.device_cleanup_timer_id = self.root.after(1000, self.cleanup_devices)
+            self.device_cleanup_timer_id = self._session_timer(1000, self.cleanup_devices)
 
             self.log_message("Started listening for RB3Enhanced events")
 
@@ -338,63 +363,73 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
             messagebox.showerror("Error", f"Failed to start: {e}")
             self.log_message(f"Failed to start: {e}")
     def stop_listener(self):
-        """Stop the listener"""
+        """Invalidate UI/results first; release services without waiting on callbacks."""
         self.is_running = False
-        if self.device_cleanup_timer_id is not None:
-            self.root.after_cancel(self.device_cleanup_timer_id)
-            self.device_cleanup_timer_id = None
-        if self.stagekit_transport is not None:
-            self.stagekit_transport.stop()
-            self.stagekit_transport = None
-
-        if self.listener:
-            self.listener.stop()
-
-        if self.vlc_player:
-            self.vlc_player.stop_current_video()
-
-        if self.listener_thread and self.listener_thread.is_alive():
-            self.listener_thread.join(timeout=2.0)
-
+        self._generation += 1
+        self._browser_generation += 1
+        self._artwork_generation += 1
+        self._integration_generation += 1
+        self._cancel_scrobble()
+        for name in ('device_cleanup_timer_id', 'search_timer_id', 'startup_timer_id'):
+            self._cancel_timer(name)
+        self.integration_worker.stop()
+        transport, self.stagekit_transport = self.stagekit_transport, None
+        listener, self.listener = self.listener, None
+        player, self.vlc_player = self.vlc_player, None
+        self.youtube_searcher = self.stream_extractor = None
+        # A failed cleanup must not prevent the remaining owners from stopping.
+        for callback in (transport.stop if transport else None,
+                         listener.stop if listener else None,
+                         player.stop_current_video if player else None):
+            if callback:
+                try:
+                    callback()
+                except Exception as exc:
+                    self.log_message(f"Failed to stop service: {exc}")
+        self.listener_thread = None
+        self._hide_blank_screen()
         self.status_label.config(text="Stopped", foreground='red')
         self.ip_status_label.config(text="Not detected", foreground='orange')
+        self.discord_status_label.config(text="Not connected", foreground='gray')
         self.web_ui_button.config(state='disabled')
-        self.load_songs_button.config(state='disabled')
+        self.load_songs_button.config(state='disabled', text='Refresh Song List')
         self.detected_ip = None
-
-        # Reset activity bar to waiting state
+        self.song_var.set('')
+        self.artist_var.set('')
         self.activity_content_frame.pack_forget()
         self.activity_song_label.config(text="")
         if self.activity_separator.winfo_ismapped():
             self.activity_separator.pack_forget()
         self.activity_waiting_label.pack(side='left')
-
         self.log_message("Stopped listening")
+
     def load_settings(self):
         """Load settings from file"""
         return self.settings_store.load()
     def on_closing(self):
-        """Handle window close"""
+        """Cancel owned work before destroying Tk; integrations close on their owner."""
+        if self._closing:
+            return
+        self._closing = True
+        self.stop_listener()
+        self.integration_worker.close()
         if self.album_art_manager:
             self.album_art_manager.close()
         self.ui_dispatcher.close()
-
-        if self.is_running:
-            self.stop_listener()
-
-        # Disconnect Discord presence
-        if self.discord_presence:
-            self.discord_presence.disconnect()
-
         try:
             settings = self.get_current_settings()
             self.settings_store.save(settings)
         except Exception as exc:
             self.log_message(f"Failed to save settings during shutdown: {exc}")
-
         self.root.destroy()
+
     def run(self):
-        """Start the application"""
-        # Auto-start listener after UI is ready
-        self.root.after(100, self.start_listener)
+        """Start the application."""
+        generation = self._generation
+        self.startup_timer_id = self.root.after(100, lambda: self._auto_start(generation))
         self.root.mainloop()
+
+    def _auto_start(self, generation):
+        self.startup_timer_id = None
+        if not self._closing and generation == self._generation:
+            self.start_listener()
