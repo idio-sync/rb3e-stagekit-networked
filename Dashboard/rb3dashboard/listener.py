@@ -83,6 +83,8 @@ class UnifiedRB3EListener:
         self.video_settings = {}
         self.video_enabled = False
         self.pending_video = None
+        self._video_timer = None
+        self._video_generation = 0
 
     def set_video_components(self, youtube_searcher, vlc_player, stream_extractor):
         """Set video player components"""
@@ -95,6 +97,16 @@ class UnifiedRB3EListener:
         with self._state_lock:
             self.video_settings = settings.copy()
             self.video_enabled = enabled
+            if not enabled:
+                self._cancel_pending_video_locked()
+
+    def _cancel_pending_video_locked(self):
+        """Invalidate lookups and delayed starts. Caller must hold _state_lock."""
+        self._video_generation += 1
+        self.pending_video = None
+        if self._video_timer is not None:
+            self._video_timer.cancel()
+            self._video_timer = None
 
     def start_listening(self):
         """Start listening for RB3Enhanced events"""
@@ -170,6 +182,8 @@ class UnifiedRB3EListener:
 
             elif packet_type == RB3E_EVENT_SONG_NAME:
                 with self._state_lock:
+                    if self.current_song != packet_data:
+                        self._cancel_pending_video_locked()
                     self.current_song = packet_data
                     song, artist = self.current_song, self.current_artist
 
@@ -182,6 +196,8 @@ class UnifiedRB3EListener:
 
             elif packet_type == RB3E_EVENT_SONG_ARTIST:
                 with self._state_lock:
+                    if self.current_artist != packet_data:
+                        self._cancel_pending_video_locked()
                     self.current_artist = packet_data
                     song, artist = self.current_song, self.current_artist
                 if self.song_update_callback:
@@ -190,6 +206,8 @@ class UnifiedRB3EListener:
 
             elif packet_type == RB3E_EVENT_SONG_SHORTNAME:
                 with self._state_lock:
+                    if self.current_shortname != packet_data:
+                        self._cancel_pending_video_locked()
                     self.current_shortname = packet_data
                 self.check_song_ready()
 
@@ -266,15 +284,27 @@ class UnifiedRB3EListener:
         try:
             new_state = int(packet_data) if packet_data.isdigit() else ord(packet_data[0]) if packet_data else 0
 
-            # Read current state with lock
+            # Commit transitions before callbacks can deliver old video work.
             with self._state_lock:
                 old_state = self.game_state
+                self.game_state = new_state
                 artist = self.current_artist
                 song = self.current_song
                 shortname = self.current_shortname
                 has_pending = self.pending_video is not None
                 video_enabled = self.video_enabled
                 auto_quit = self.video_settings.get('auto_quit_on_menu', True)
+                elapsed_seconds = 0
+                if old_state == 0 and new_state == 1:
+                    self.song_start_time = time.time()
+                elif old_state == 1 and new_state == 0:
+                    self._cancel_pending_video_locked()
+                    if self.song_start_time:
+                        elapsed_seconds = int(time.time() - self.song_start_time)
+                    self.song_start_time = None
+                    self.current_song = ""
+                    self.current_artist = ""
+                    self.current_shortname = ""
 
             if old_state == 0 and new_state == 1:
                 if self.gui_callback:
@@ -282,10 +312,6 @@ class UnifiedRB3EListener:
 
                 # Trigger HA Webhook (Playing)
                 self.trigger_webhook("state", "playing")
-
-                # Record start time for elapsed time tracking
-                with self._state_lock:
-                    self.song_start_time = time.time()
 
                 # Notify that song has started (for history/scrobbling)
                 if self.song_started_callback and (song or artist):
@@ -295,13 +321,6 @@ class UnifiedRB3EListener:
                     self.start_pending_video()
 
             elif old_state == 1 and new_state == 0:
-                # Calculate elapsed time
-                elapsed_seconds = 0
-                with self._state_lock:
-                    if self.song_start_time:
-                        elapsed_seconds = int(time.time() - self.song_start_time)
-                    self.song_start_time = None
-
                 if self.gui_callback:
                     self.gui_callback("Returned to menus")
 
@@ -316,17 +335,8 @@ class UnifiedRB3EListener:
                     if self.vlc_player:
                         self.vlc_player.stop_current_video()
 
-                with self._state_lock:
-                    self.pending_video = None
-                    self.current_song = ""
-                    self.current_artist = ""
-                    self.current_shortname = ""
-
                 if self.song_update_callback:
                     self.song_update_callback("", "")
-
-            with self._state_lock:
-                self.game_state = new_state
 
         except Exception:
             pass
@@ -347,13 +357,14 @@ class UnifiedRB3EListener:
     def prepare_video(self):
         """Search for and prepare video (thread-safe)"""
         with self._state_lock:
-            video_enabled = self.video_enabled
+            if not self.running or not self.video_enabled or self._video_timer is not None:
+                return
             artist = self.current_artist
             song = self.current_song
             shortname = self.current_shortname
-            current_game_state = self.game_state
+            generation = self._video_generation
 
-        if not video_enabled or not self.youtube_searcher or not self.stream_extractor:
+        if not self.youtube_searcher or not self.stream_extractor:
             return
 
         try:
@@ -370,6 +381,9 @@ class UnifiedRB3EListener:
 
                 if stream_url:
                     with self._state_lock:
+                        if (generation != self._video_generation or not self.running
+                                or not self.video_enabled or self._video_timer is not None):
+                            return
                         self.pending_video = (stream_url, video_id, artist, song, shortname, video_title)
                         current_game_state = self.game_state
 
@@ -386,36 +400,42 @@ class UnifiedRB3EListener:
     def start_pending_video(self):
         """Start the pending video (thread-safe)"""
         with self._state_lock:
-            if not self.pending_video or not self.vlc_player:
+            if (not self.running or not self.video_enabled or self.game_state != 1
+                    or not self.pending_video or not self.vlc_player
+                    or self._video_timer is not None):
                 return
-            # Unpack with video_title (6 elements)
-            stream_url, video_id, artist, song, shortname, video_title = self.pending_video
+            video = self.pending_video
+            generation = self._video_generation
+            # Consume before launching: slow playback must not erase a later song.
+            self.pending_video = None
             delay = self.video_settings.get('video_start_delay', 0.0)
+            timer = None
+            if delay > 0:
+                timer = threading.Timer(delay, self._play_video_now, args=(generation, video))
+                timer.daemon = True
+                self._video_timer = timer
 
-        if delay > 0:
+        if timer is not None:
             if self.gui_callback:
                 self.gui_callback(f"Waiting {delay}s before starting video...")
-            # Use threading.Timer to avoid blocking the listener thread
-            timer = threading.Timer(delay, self._play_video_now,
-                                   args=(stream_url, video_id, artist, song, shortname, video_title))
-            timer.daemon = True
             timer.start()
         else:
-            self._play_video_now(stream_url, video_id, artist, song, shortname, video_title)
+            self._play_video_now(generation, video)
 
-    def _play_video_now(self, stream_url, video_id, artist, song, shortname, video_title=None):
+    def _play_video_now(self, generation, video):
         """Actually play the video (called after delay if any, thread-safe)"""
-        if not self.vlc_player or not self.running:
-            return
-
         with self._state_lock:
+            # Timer.cancel() alone cannot prevent an already queued callback.
+            if (generation != self._video_generation or not self.running
+                    or not self.video_enabled or self.game_state != 1 or not self.vlc_player):
+                return
+            self._video_timer = None
             video_settings = self.video_settings.copy()
 
+        stream_url, video_id, artist, song, shortname, video_title = video
+        # Keep external player/GUI calls outside the shared state lock.
         self.vlc_player.play_video(stream_url, video_id, artist, song,
                                    video_settings, shortname, video_title)
-
-        with self._state_lock:
-            self.pending_video = None
 
     def get_rb3_ip(self) -> Optional[str]:
         return self.rb3_ip_address
@@ -454,6 +474,8 @@ class UnifiedRB3EListener:
 
     def stop(self):
         """Stop listening"""
-        self.running = False
+        with self._state_lock:
+            self.running = False
+            self._cancel_pending_video_locked()
         if self.sock:
             self.sock.close()

@@ -220,6 +220,8 @@ To enable the "Music Video" feature, you need a **YouTube Data API v3 Key**.
 3.  Create an API Key (Credentials).
 4.  Paste the key into the Dashboard Settings.
 
+Delayed video starts are canceled when the song ends, the song changes, listening stops, or video playback is disabled through saved settings. **Auto-quit VLC on menu return** controls whether an already playing video is stopped; pending starts are canceled regardless of this setting.
+
 ### 2. Album Art & Scrobbling
 To fetch album art and scrobble tracks:
 1.  Go to [Last.fm API Account Create](https://www.last.fm/api/account/create).
