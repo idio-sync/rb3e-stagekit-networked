@@ -1,7 +1,14 @@
-"""Read-only HTTP API and live event stream over the shared server state.
+"""HTTP API and live event stream over the shared server state.
 
 Routes are served from the standard library, so the server adds no dependency.
-Everything here reads state; commands arrive in a later task.
+Most routes read state. The console operations are the exception, and they are
+an explicit allowlist of two: refresh the song list, and jump to a song. The
+console also serves /execute, which runs DTA script on it, so this server never
+exposes a generic proxy and never builds a console path from a request. A
+shortname travels as a query parameter value and cannot become a path.
+
+The console defaults to AllowCORS off, so a browser cannot call it directly and
+proxying here is the only way the dashboard page can reach it at all.
 
 Authentication uses a bearer token. The token may also be supplied as a query
 parameter because the browser ``EventSource`` API cannot set request headers,
@@ -26,6 +33,14 @@ except ImportError:  # pragma: no cover - Python 2 is unsupported
 
 
 HEARTBEAT_SECONDS = 15.0
+# Request bodies here are small JSON objects; anything larger is a mistake.
+MAX_BODY_BYTES = 64 * 1024
+
+# Paths that exist but only answer GET. Posting to one is a wrong method, not a
+# missing endpoint, and the difference tells a client which mistake it made.
+READ_ONLY_ROUTES = frozenset({
+    "/api/health", "/api/state", "/api/devices", "/api/songs", "/api/events",
+})
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -111,18 +126,65 @@ class ApiHandler(BaseHTTPRequestHandler):
             snapshot = self.application.state.snapshot()
             return self._json(200, {"version": snapshot["version"],
                                     "devices": snapshot["devices"]})
+        if route == "/api/songs":
+            return self._json(200, self._songs())
         if route == "/api/events":
             return self._stream(query)
         return self._error(404, "Unknown endpoint: %s" % parsed.path)
 
     def do_POST(self):
-        self._error(405, "This endpoint is read-only")
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        route = parsed.path.rstrip("/") or "/"
+
+        if not self._authorised(query):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Bearer realm="rb3dashboard"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+
+        # Only these console operations are reachable. The console also serves
+        # /execute, which runs DTA script on it, so there is deliberately no
+        # generic proxy and no path taken from the request.
+        if route == "/api/songs/refresh":
+            return self._refresh_songs()
+        if route == "/api/songs/jump":
+            return self._jump_to_song()
+        if route in READ_ONLY_ROUTES:
+            return self._error(405, "This endpoint is read-only")
+        return self._error(404, "Unknown endpoint: %s" % parsed.path)
 
     def do_PUT(self):
-        self._error(405, "This endpoint is read-only")
+        self._error(405, "This endpoint does not accept PUT")
 
     def do_DELETE(self):
-        self._error(405, "This endpoint is read-only")
+        self._error(405, "This endpoint does not accept DELETE")
+
+    # -- request bodies -------------------------------------------------
+
+    def _read_json_body(self):
+        """Return the decoded body, or None after sending an error response."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._error(400, "A valid Content-Length is required")
+            return None
+        if length < 0 or length > MAX_BODY_BYTES:
+            self._error(413, "The request body is too large")
+            return None
+        if length == 0:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            document = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeError):
+            self._error(400, "The request body must be JSON")
+            return None
+        if not isinstance(document, dict):
+            self._error(400, "The request body must be a JSON object")
+            return None
+        return document
 
     # -- payloads -------------------------------------------------------
 
@@ -134,6 +196,40 @@ class ApiHandler(BaseHTTPRequestHandler):
             "owns_discovery": bool(application.owns_discovery()),
             "version": application.state.version(),
         }
+
+    def _songs(self):
+        browser = getattr(self.application, "songs", None)
+        songs = list(getattr(browser, "songs_data", []) or [])
+        return {
+            "source": getattr(browser, "rb3_ip", None),
+            "count": len(songs),
+            "songs": songs,
+        }
+
+    def _refresh_songs(self):
+        ok, reason = self.application.refresh_songs()
+        if ok:
+            return self._json(200, self._songs())
+        return self._console_error(reason)
+
+    def _jump_to_song(self):
+        document = self._read_json_body()
+        if document is None:
+            return None
+        shortname = document.get("shortname")
+        if not isinstance(shortname, str) or not shortname.strip():
+            return self._error(400, "A shortname is required")
+        ok, reason = self.application.jump_to_song(shortname)
+        if ok:
+            return self._json(200, {"shortname": shortname})
+        return self._console_error(reason)
+
+    def _console_error(self, reason):
+        """Separate 'nothing to talk to yet' from 'the console misbehaved'."""
+        reason = reason or "The console request failed"
+        if "detected" in reason:
+            return self._error(409, reason)
+        return self._error(502, reason)
 
     def _stream(self, query):
         """Send state snapshots as server-sent events until the client leaves."""

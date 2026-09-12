@@ -103,6 +103,7 @@ _FIELDS = {
     "discovery_enabled": (_as_bool, True),
     "discovery_interval": (_as_float, 5.0),
     "ha_webhook_url": (_as_text, ""),
+    "console_address": (_as_text, ""),
     "data_dir": (_as_text, ""),
     "device_offline_after": (_as_float, 10.0),
     "device_forget_after": (_as_float, 30.0),
@@ -244,6 +245,7 @@ class ServerConfig:
             "web_host": self.web_host,
             "web_port": self.web_port,
             "auth_token": self.auth_token,
+            "console_address": self.console_address,
         }
 
     def describe(self):

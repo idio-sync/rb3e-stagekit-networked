@@ -20,6 +20,7 @@ import threading
 import time
 
 from ..listener import UnifiedRB3EListener
+from ..song_browser import SongBrowser
 from ..stagekit import StageKitTransport
 from .dispatch import HeadlessDispatcher
 from .state import ApplicationState
@@ -141,6 +142,8 @@ class ServerApplication:
                  web_port=8321,
                  auth_token="",
                  web_service_factory=None,
+                 song_browser_factory=SongBrowser,
+                 console_address="",
                  webhook_url="",
                  device_offline_after=10.0,
                  device_forget_after=30.0,
@@ -159,6 +162,10 @@ class ServerApplication:
         self._console_timeout = console_timeout
         self._stagekit_enabled = stagekit_enabled
         self._owns_discovery = bool(stagekit_enabled and discovery_enabled)
+        self._configured_console = console_address
+        # One console conversation at a time: the browser holds parsed state
+        # that two concurrent refreshes would interleave.
+        self._console_lock = threading.Lock()
 
         self.state = ApplicationState(clock=clock) if state is None else state
         self.dispatcher = HeadlessDispatcher(
@@ -177,6 +184,9 @@ class ServerApplication:
         # Existing webhook behaviour is preserved; Stage 2 replaces its
         # delivery path in the outbound integration task.
         self.listener.set_webhook_url(webhook_url)
+
+        self.songs = song_browser_factory(
+            gui_callback=self._post(self._record_log))
 
         self.transport = None
         if stagekit_enabled:
@@ -240,6 +250,36 @@ class ServerApplication:
     def owns_discovery(self):
         """Whether this process claims Pico telemetry by sending discovery."""
         return self._owns_discovery
+
+    # -- console ---------------------------------------------------------
+
+    def console_address(self):
+        """The console to talk to: configured if given, otherwise detected."""
+        if self._configured_console:
+            return self._configured_console
+        return self.state.snapshot()["console"]["address"]
+
+    def refresh_songs(self):
+        """Fetch the console song list. Returns (ok, reason)."""
+        address = self.console_address()
+        if not address:
+            return False, "No console has been detected yet"
+        with self._console_lock:
+            # persist=False: the song cache file belongs to the desktop, and
+            # the server must not overwrite it. Server-side storage arrives
+            # with the persistence task.
+            if not self.songs.fetch_song_list(address, persist=False):
+                return False, "The console did not return a usable song list"
+        return True, None
+
+    def jump_to_song(self, shortname):
+        """Ask the console to jump to a song. Returns (ok, reason)."""
+        if not self.console_address():
+            return False, "No console has been detected yet"
+        with self._console_lock:
+            if not self.songs.play_song(shortname):
+                return False, "The console refused the song jump"
+        return True, None
 
     # -- commands -------------------------------------------------------
 
