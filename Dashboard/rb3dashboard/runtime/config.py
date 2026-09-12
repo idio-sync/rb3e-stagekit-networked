@@ -96,6 +96,7 @@ _FIELDS = {
     # TCP 21070 belongs to the console's own song list, song jump, and web UI,
     # so the dashboard server never claims that number by default.
     "web_port": (_as_int, 8321),
+    "web_enabled": (_as_bool, True),
     "auth_token": (_as_text, ""),
     "stagekit_enabled": (_as_bool, False),
     "discovery_targets": (_as_list, []),
@@ -239,6 +240,10 @@ class ServerConfig:
             "discovery_enabled": self.discovery_enabled,
             "discovery_interval": self.discovery_interval,
             "telemetry_address": self.telemetry_address,
+            "web_enabled": self.web_enabled,
+            "web_host": self.web_host,
+            "web_port": self.web_port,
+            "auth_token": self.auth_token,
         }
 
     def describe(self):

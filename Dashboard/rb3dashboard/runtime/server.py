@@ -24,6 +24,7 @@ from ..stagekit import StageKitTransport
 from .dispatch import HeadlessDispatcher
 from .state import ApplicationState
 from .supervisor import ServiceSupervisor
+from .web.service import WebService
 
 
 class ListenerService:
@@ -135,6 +136,11 @@ class ServerApplication:
                  discovery_enabled=True,
                  discovery_interval=5.0,
                  telemetry_address="0.0.0.0",
+                 web_enabled=True,
+                 web_host="0.0.0.0",
+                 web_port=8321,
+                 auth_token="",
+                 web_service_factory=None,
                  webhook_url="",
                  device_offline_after=10.0,
                  device_forget_after=30.0,
@@ -186,6 +192,12 @@ class ServerApplication:
                 bind_address=telemetry_address,
             )
 
+        self.web = None
+        if web_enabled:
+            factory = WebService if web_service_factory is None else web_service_factory
+            self.web = factory(self, host=web_host, port=web_port,
+                               auth_token=auth_token, log_sink=log_sink)
+
         self._listener_service = ListenerService(
             self.listener, on_error=self._on_listener_error)
         self._maintenance = MaintenanceService(
@@ -208,6 +220,10 @@ class ServerApplication:
                        self._listener_service.stop)
         supervisor.add("maintenance", self._maintenance.start,
                        self._maintenance.stop)
+        if self.web is not None:
+            # The web service starts last and therefore stops first, so no new
+            # request can arrive while the services behind it are shutting down.
+            supervisor.add("web", self.web.start, self.web.stop)
         return supervisor
 
     # -- lifecycle ------------------------------------------------------

@@ -1,0 +1,305 @@
+"""Read-only API and event stream, served on a loopback ephemeral port."""
+
+import json
+import threading
+import time
+import unittest
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from rb3dashboard.runtime.state import ApplicationState
+from rb3dashboard.runtime.web.service import WebService
+
+
+class FakeApplication:
+    """Only what the API reads: state and two lifecycle flags."""
+
+    def __init__(self, state=None, running=True, owns_discovery=False):
+        self.state = ApplicationState() if state is None else state
+        self._running = running
+        self._owns = owns_discovery
+
+    def is_running(self):
+        return self._running
+
+    def owns_discovery(self):
+        return self._owns
+
+
+class WebTestCase(unittest.TestCase):
+    def serve(self, application=None, **kwargs):
+        self.application = FakeApplication() if application is None else application
+        kwargs.setdefault("auth_token", "")
+        kwargs.setdefault("heartbeat", 0.2)
+        service = WebService(self.application, host="127.0.0.1", port=0, **kwargs)
+        service.start()
+        self.addCleanup(service.stop)
+        self.service = service
+        host, port = service.address
+        self.base = "http://127.0.0.1:%d" % port
+        return service
+
+    def get(self, path, token=None, timeout=5):
+        request = Request(self.base + path)
+        if token is not None:
+            request.add_header("Authorization", "Bearer " + token)
+        response = urlopen(request, timeout=timeout)
+        return response.getcode(), json.loads(response.read().decode("utf-8"))
+
+
+class HealthTests(WebTestCase):
+    def test_health_is_available_without_a_token(self):
+        self.serve(auth_token="secret")
+
+        status, document = self.get("/api/health")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(document["status"], "ok")
+        self.assertTrue(document["running"])
+        self.assertFalse(document["owns_discovery"])
+
+    def test_health_reports_discovery_ownership(self):
+        self.serve(application=FakeApplication(owns_discovery=True))
+
+        self.assertTrue(self.get("/api/health")[1]["owns_discovery"])
+
+
+class AuthTests(WebTestCase):
+    def test_state_requires_the_token_when_one_is_configured(self):
+        self.serve(auth_token="secret")
+
+        with self.assertRaises(HTTPError) as caught:
+            self.get("/api/state")
+
+        self.assertEqual(caught.exception.code, 401)
+
+    def test_a_wrong_token_is_refused(self):
+        self.serve(auth_token="secret")
+
+        with self.assertRaises(HTTPError) as caught:
+            self.get("/api/state", token="guess")
+
+        self.assertEqual(caught.exception.code, 401)
+
+    def test_the_correct_token_is_accepted(self):
+        self.serve(auth_token="secret")
+
+        self.assertEqual(self.get("/api/state", token="secret")[0], 200)
+
+    def test_a_query_token_works_for_clients_that_cannot_set_headers(self):
+        """EventSource cannot send an Authorization header."""
+        self.serve(auth_token="secret")
+
+        self.assertEqual(self.get("/api/state?token=secret")[0], 200)
+
+    def test_the_api_is_open_when_no_token_is_configured(self):
+        self.serve(auth_token="")
+
+        self.assertEqual(self.get("/api/state")[0], 200)
+
+    def test_an_open_api_is_reported_as_a_warning(self):
+        logged = []
+        self.serve(auth_token="", log_sink=lambda level, msg: logged.append((level, msg)))
+
+        warnings = [msg for level, msg in logged if level == "warning"]
+        self.assertTrue(any("open to anyone" in msg for msg in warnings))
+
+
+class ReadTests(WebTestCase):
+    def test_state_returns_the_snapshot_and_its_version(self):
+        state = ApplicationState()
+        state.update_game(song="Roundabout", artist="Yes")
+        self.serve(application=FakeApplication(state=state))
+
+        status, document = self.get("/api/state")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(document["game"]["song"], "Roundabout")
+        self.assertEqual(document["version"], state.version())
+
+    def test_devices_returns_only_devices_and_the_version(self):
+        state = ApplicationState()
+        state.record_device("192.0.2.7", {"name": "Pico"})
+        self.serve(application=FakeApplication(state=state))
+
+        status, document = self.get("/api/devices")
+
+        self.assertEqual(sorted(document), ["devices", "version"])
+        self.assertEqual(document["devices"]["192.0.2.7"]["name"], "Pico")
+
+    def test_an_unknown_endpoint_is_a_404(self):
+        self.serve()
+
+        with self.assertRaises(HTTPError) as caught:
+            self.get("/api/nope")
+
+        self.assertEqual(caught.exception.code, 404)
+
+    def test_writes_are_refused_because_the_api_is_read_only(self):
+        self.serve()
+        request = Request(self.base + "/api/state", data=b"{}", method="POST")
+
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=5)
+
+        self.assertEqual(caught.exception.code, 405)
+
+    def test_responses_are_not_cached(self):
+        self.serve()
+        response = urlopen(self.base + "/api/state", timeout=5)
+
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store")
+
+
+class StreamTests(WebTestCase):
+    def open_stream(self, path="/api/events", timeout=5):
+        response = urlopen(self.base + path, timeout=timeout)
+        self.addCleanup(response.close)
+        return response
+
+    def read_event(self, response, timeout=5):
+        """Read one complete server-sent event block."""
+        deadline = time.time() + timeout
+        lines = []
+        while time.time() < deadline:
+            line = response.readline().decode("utf-8")
+            if line in ("\n", "\r\n"):
+                if lines:
+                    return lines
+                continue
+            if not line:
+                break
+            lines.append(line.rstrip("\r\n"))
+        self.fail("No complete event arrived: %r" % (lines,))
+
+    def test_the_stream_opens_with_the_current_state(self):
+        state = ApplicationState()
+        state.update_game(song="Roundabout")
+        self.serve(application=FakeApplication(state=state))
+
+        event = self.read_event(self.open_stream())
+
+        self.assertIn("event: state", event)
+        payload = json.loads([line for line in event
+                              if line.startswith("data: ")][0][6:])
+        self.assertEqual(payload["game"]["song"], "Roundabout")
+
+    def test_the_stream_delivers_later_changes(self):
+        state = ApplicationState()
+        self.serve(application=FakeApplication(state=state))
+        response = self.open_stream()
+        self.read_event(response)
+
+        state.update_game(song="Heart of the Sunrise")
+        event = self.read_event(response)
+
+        payload = json.loads([line for line in event
+                              if line.startswith("data: ")][0][6:])
+        self.assertEqual(payload["game"]["song"], "Heart of the Sunrise")
+
+    def test_events_carry_the_version_as_an_id(self):
+        state = ApplicationState()
+        state.update_game(song="Roundabout")
+        self.serve(application=FakeApplication(state=state))
+
+        event = self.read_event(self.open_stream())
+
+        self.assertIn("id: %d" % state.version(), event)
+
+    def test_a_client_can_resume_from_a_version_it_already_has(self):
+        state = ApplicationState()
+        state.update_game(song="Roundabout")
+        self.serve(application=FakeApplication(state=state))
+        response = self.open_stream("/api/events?since=0")
+
+        event = self.read_event(response)
+
+        self.assertIn("id: %d" % state.version(), event)
+
+    def test_a_caught_up_client_receives_a_heartbeat(self):
+        state = ApplicationState()
+        self.serve(application=FakeApplication(state=state), heartbeat=0.1)
+        response = self.open_stream("/api/events?since=999999")
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            line = response.readline().decode("utf-8")
+            if line.startswith(":"):
+                return
+        self.fail("No heartbeat arrived")
+
+    def test_the_stream_requires_a_token_when_one_is_configured(self):
+        self.serve(auth_token="secret")
+
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(self.base + "/api/events", timeout=5)
+
+        self.assertEqual(caught.exception.code, 401)
+
+    def test_shutdown_releases_an_open_stream(self):
+        """An idle stream must not keep the server from stopping."""
+        state = ApplicationState()
+        service = self.serve(application=FakeApplication(state=state),
+                             heartbeat=30)
+        self.read_event(self.open_stream())
+
+        finished = threading.Event()
+        threading.Thread(target=lambda: (service.stop(), finished.set())).start()
+
+        self.assertTrue(finished.wait(10))
+
+    def test_a_disconnecting_client_does_not_break_the_server(self):
+        state = ApplicationState()
+        self.serve(application=FakeApplication(state=state))
+        response = urlopen(self.base + "/api/events", timeout=5)
+        self.read_event(response)
+        response.close()
+
+        state.update_game(song="Still Serving")
+        self.assertEqual(self.get("/api/state")[0], 200)
+
+
+class ConnectionTests(WebTestCase):
+    def test_an_idle_connection_is_dropped_rather_than_held_forever(self):
+        """A keep-alive socket that goes quiet must not hold a thread."""
+        import socket as socket_module
+
+        self.serve(connection_timeout=0.3)
+        client = socket_module.create_connection(("127.0.0.1", self.service.address[1]),
+                                                 timeout=5)
+        self.addCleanup(client.close)
+
+        client.settimeout(5)
+        self.assertEqual(client.recv(1024), b"",
+                         "The server should have closed the idle connection")
+
+
+class BindingTests(WebTestCase):
+    def test_the_bound_port_is_reported(self):
+        service = self.serve()
+
+        self.assertEqual(service.address[0], "127.0.0.1")
+        self.assertGreater(service.address[1], 0)
+
+    def test_a_port_conflict_fails_the_start(self):
+        """A conflict must surface through the supervisor, not a dead thread."""
+        first = self.serve()
+        host, port = first.address
+
+        second = WebService(FakeApplication(), host="127.0.0.1", port=port)
+        with self.assertRaises(OSError):
+            second.start()
+        self.addCleanup(second.stop)
+
+    def test_stopping_is_idempotent(self):
+        service = self.serve()
+
+        service.stop()
+        service.stop()
+
+    def test_stopping_without_starting_is_safe(self):
+        WebService(FakeApplication()).stop()
+
+
+if __name__ == "__main__":
+    unittest.main()

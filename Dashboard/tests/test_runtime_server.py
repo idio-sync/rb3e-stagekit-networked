@@ -23,6 +23,7 @@ class FakeListener:
         self.stop_calls = 0
         self.webhook_url = None
         self.start_error = None
+        self.stopped_at = None
 
     def set_webhook_url(self, url):
         self.webhook_url = url
@@ -43,6 +44,8 @@ class FakeListener:
 
     def stop(self):
         self.stop_calls += 1
+        FakeWebService.ORDER[0] += 1
+        self.stopped_at = FakeWebService.ORDER[0]
         self.released.set()
         self.running = False
 
@@ -87,6 +90,29 @@ class FakeTransport:
         return True
 
 
+class FakeWebService:
+    ORDER = [0]
+
+    def __init__(self, application, host, port, auth_token):
+        self.application = application
+        self.host = host
+        self.port = port
+        self.auth_token = auth_token
+        self.started = False
+        self.start_error = None
+        self.stopped_at = None
+
+    def start(self):
+        if self.start_error is not None:
+            raise self.start_error
+        self.started = True
+
+    def stop(self):
+        FakeWebService.ORDER[0] += 1
+        self.stopped_at = FakeWebService.ORDER[0]
+        self.started = False
+
+
 class FakeClock:
     def __init__(self, now=1000.0):
         self.now = now
@@ -116,6 +142,8 @@ class ServerTestCase(unittest.TestCase):
             return transport
 
         kwargs.setdefault("maintenance_interval", 0.01)
+        # Composition tests must never bind a real, fixed public port.
+        kwargs.setdefault("web_enabled", False)
         application = ServerApplication(
             listener_factory=listener_factory,
             transport_factory=transport_factory,
@@ -442,6 +470,63 @@ class DiscoveryOwnershipTests(ServerTestCase):
         warning = [text for text in messages if "192.0.2.7" in text]
         self.assertEqual(len(warning), 1)
         self.assertNotIn("another dashboard", warning[0])
+
+
+class WebWiringTests(ServerTestCase):
+    def make_web(self, **kwargs):
+        created = []
+
+        def factory(application, host=None, port=None, auth_token=None,
+                    log_sink=None):
+            service = FakeWebService(application, host, port, auth_token)
+            created.append(service)
+            return service
+
+        application = self.make(web_enabled=True, web_service_factory=factory,
+                                web_host="127.0.0.1", web_port=0,
+                                auth_token="secret", **kwargs)
+        return application, created
+
+    def test_the_web_service_receives_its_configuration(self):
+        application, created = self.make_web()
+        application.start()
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].host, "127.0.0.1")
+        self.assertEqual(created[0].auth_token, "secret")
+        self.assertTrue(created[0].started)
+
+    def test_the_web_service_stops_before_the_services_behind_it(self):
+        """No request may arrive while the listener is being torn down."""
+        application, created = self.make_web()
+        application.start()
+        self.assertTrue(self.listeners[0].receiving.wait(5))
+
+        application.stop()
+
+        self.assertLess(created[0].stopped_at, self.listeners[0].stopped_at)
+
+    def test_a_failing_web_start_rolls_back_the_listener(self):
+        application, created = self.make_web()
+        created_holder = created
+
+        def failing_factory(application_, host=None, port=None,
+                            auth_token=None, log_sink=None):
+            service = FakeWebService(application_, host, port, auth_token)
+            service.start_error = OSError("web port in use")
+            created_holder.append(service)
+            return service
+
+        application = self.make(web_enabled=True,
+                                web_service_factory=failing_factory)
+        with self.assertRaises(OSError):
+            application.start()
+
+        self.assertFalse(application.is_running())
+        self.assertEqual(self.listeners[-1].stop_calls, 1)
+
+    def test_no_web_service_is_built_when_disabled(self):
+        self.assertIsNone(self.make(web_enabled=False).web)
 
 
 class CommandTests(ServerTestCase):
