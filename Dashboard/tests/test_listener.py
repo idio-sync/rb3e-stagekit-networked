@@ -335,7 +335,9 @@ class ListenerNetworkTests(unittest.TestCase):
             packet(2, b"Partial", declared_size=20),
             packet(6, b"\xff\x80", declared_size=1),
             packet(5, bytes(20)), packet(7, bytes(11)), packet(1, b""),
-            packet(255, b"unknown"), packet(10, b"unsupported DX data"),
+            packet(255, b"unknown"),
+            # Mod data is supported, but its identify value is still required.
+            packet(10, b"short"),
         ]
         for data in cases:
             for known_console in (None, "192.0.2.10"):

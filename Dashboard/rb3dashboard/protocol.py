@@ -40,6 +40,11 @@ _MIN_PAYLOAD_SIZES = {
     RB3E_EVENT_BAND_INFO: 12,  # Four members, difficulties, and instruments
     RB3E_EVENT_VENUE_NAME: 0,
     RB3E_EVENT_SCREEN_NAME: 0,
+    # Mod data carries a ten-byte identify value followed by a string of up to
+    # 240 bytes. Upstream describes it as arbitrary information sent by mods
+    # such as rb3dx, and the sender chooses how much it transmits, so only the
+    # identify value is required. Treat the string as a variable tail.
+    RB3E_EVENT_DX_DATA: 10,
 }
 
 
