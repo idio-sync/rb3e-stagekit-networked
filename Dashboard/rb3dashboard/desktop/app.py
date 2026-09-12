@@ -7,6 +7,7 @@ from tkinter import messagebox, ttk
 from rb3dashboard.dispatch import UiDispatcher
 from rb3dashboard.integrations import DiscordPresence, LastFmScrobbler
 from rb3dashboard.listener import UnifiedRB3EListener
+from rb3dashboard.serverclient import ServerClient, ServerPoller
 from rb3dashboard.settings import SettingsStore
 from rb3dashboard.song_data import PlayStatistics, SongHistory
 from rb3dashboard.stagekit import StageKitTransport
@@ -59,6 +60,7 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
         # Components
         self.listener = None
         self.listener_thread = None
+        self.server_poller = None
         self.youtube_searcher = None
         self.vlc_player = None
         self.stream_extractor = None
@@ -268,6 +270,15 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
         self.stop_listener()
         self.log_message("Listener exited; stopped desktop services")
 
+    def observe_only(self):
+        """Whether this desktop follows a server instead of the wire.
+
+        Observing requires a server address: without one there would be nothing
+        to follow and the dashboard would simply show nothing.
+        """
+        return bool(self.settings.get('observe_only')
+                    and str(self.settings.get('server_url', '')).strip())
+
     def start_listener(self):
         """Start the unified listener"""
         self._cancel_timer('startup_timer_id')
@@ -276,6 +287,9 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
         self._generation += 1
         self.is_running = True
         session_log = self._session_callback(self.log_message)
+        if self.observe_only():
+            self._start_observing(session_log)
+            return
         try:
             self._configure_integrations()
             transport = StageKitTransport(
@@ -362,6 +376,62 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
             self.stop_listener()
             messagebox.showerror("Error", f"Failed to start: {e}")
             self.log_message(f"Failed to start: {e}")
+    def _start_observing(self, session_log):
+        """Follow a headless server: bind no port and claim no device.
+
+        Neither the listener nor the Stage Kit transport starts, so this
+        desktop never binds UDP 21070 and never broadcasts discovery. That is
+        the point: a Pico keeps one dashboard address, so a second discoverer
+        would pull telemetry away from the server every few seconds.
+        """
+        try:
+            client = ServerClient(self.settings.get('server_url', ''),
+                                  token=self.settings.get('server_token', ''))
+            self.server_poller = ServerPoller(
+                client,
+                on_state=self._session_callback(self.apply_server_state),
+                on_error=self._session_callback(self._on_server_error),
+                on_recover=self._session_callback(self._on_server_recovered),
+            )
+            self.server_poller.start()
+        except Exception as exc:
+            self.stop_listener()
+            self.log_message(f"Failed to follow the server: {exc}")
+            return
+        self.status_label.config(text="Following server", foreground='green')
+        self.log_message(f"Following the dashboard server at {client.base_url}")
+        self.log_message("Not listening on the network: the server owns "
+                         "discovery and device telemetry")
+
+    def _on_server_error(self, error):
+        self.log_message(f"Dashboard server unreachable: {error}")
+        self.status_label.config(text="Server unreachable", foreground='red')
+
+    def _on_server_recovered(self):
+        self.log_message("Dashboard server is answering again")
+        self.status_label.config(text="Following server", foreground='green')
+
+    def apply_server_state(self, snapshot):
+        """Show a server snapshot using the existing display paths."""
+        if not self.is_running:
+            return
+        console = snapshot.get('console') or {}
+        address = console.get('address')
+        if address and address != self.detected_ip:
+            self.on_ip_detected(address)
+
+        game = snapshot.get('game') or {}
+        song, artist = game.get('song', ''), game.get('artist', '')
+        if (song, artist) != (self.song_var.get(), self.artist_var.get()):
+            self.on_song_update(song, artist)
+
+        for device_ip, device in (snapshot.get('devices') or {}).items():
+            self.update_pico_device(device_ip, {
+                'name': device.get('name', device_ip),
+                'usb_status': device.get('usb_status', 'Unknown'),
+                'wifi_signal': device.get('wifi_signal', 0),
+            })
+
     def stop_listener(self):
         """Invalidate UI/results first; release services without waiting on callbacks."""
         self.is_running = False
@@ -373,6 +443,12 @@ class RB3Dashboard(ThemeViewMixin, BrowserViewMixin, HistoryViewMixin, StageKitV
         for name in ('device_cleanup_timer_id', 'search_timer_id', 'startup_timer_id'):
             self._cancel_timer(name)
         self.integration_worker.stop()
+        poller, self.server_poller = getattr(self, 'server_poller', None), None
+        if poller is not None:
+            try:
+                poller.stop()
+            except Exception as exc:
+                self.log_message(f"Failed to stop server polling: {exc}")
         transport, self.stagekit_transport = self.stagekit_transport, None
         listener, self.listener = self.listener, None
         player, self.vlc_player = self.vlc_player, None

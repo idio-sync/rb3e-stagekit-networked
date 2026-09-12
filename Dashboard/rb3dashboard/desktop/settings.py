@@ -240,6 +240,37 @@ class SettingsViewMixin:
         ttk.Label(ha_frame, text="e.g. http://192.168.1.50:8123/api/webhook/rb3_event",
                   foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
 
+        # Dashboard Server
+        server_frame = ttk.LabelFrame(right_col, text="Dashboard Server", padding=10)
+        server_frame.pack(fill='x', pady=5)
+
+        self.observe_only_var = tk.BooleanVar(value=self.settings.get('observe_only', False))
+        ttk.Checkbutton(server_frame, text="Follow a dashboard server",
+                       variable=self.observe_only_var).pack(anchor='w')
+        ttk.Label(server_frame,
+                  text="Reads game and device state from the server instead of "
+                       "the network, so both can run at once",
+                  foreground='gray', font=('TkDefaultFont', 8),
+                  wraplength=320, justify='left').pack(anchor='w')
+
+        ttk.Label(server_frame, text="Server address:").pack(anchor='w', pady=(6, 0))
+        self.server_url_var = tk.StringVar(value=self.settings.get('server_url', ''))
+        ttk.Entry(server_frame, textvariable=self.server_url_var, width=40).pack(fill='x', pady=(2, 0))
+        ttk.Label(server_frame, text="e.g. http://192.168.1.50:8321",
+                  foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
+
+        ttk.Label(server_frame, text="Access token:").pack(anchor='w', pady=(6, 0))
+        self.server_token_var = tk.StringVar(value=self.settings.get('server_token', ''))
+        ttk.Entry(server_frame, textvariable=self.server_token_var, width=40,
+                  show='*').pack(fill='x', pady=(2, 0))
+        ttk.Label(server_frame, text="Leave empty if the server has no token set",
+                  foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w')
+        # The desktop begins listening at launch and has no start control, so
+        # switching between following and standalone needs a restart.
+        ttk.Label(server_frame, text="Takes effect next time the dashboard starts",
+                  foreground='gray', font=('TkDefaultFont', 8)).pack(anchor='w',
+                                                                     pady=(4, 0))
+
         # Display Settings
         display_frame = ttk.LabelFrame(right_col, text="Display", padding=10)
         display_frame.pack(fill='x', pady=5)
@@ -362,6 +393,9 @@ class SettingsViewMixin:
             'cookie_browser': self._get_cookie_browser_value(),
             'database_path': self.settings.get('database_path', ''),
             'ha_webhook_url': self.ha_webhook_url_var.get().strip(),
+            'observe_only': self.observe_only_var.get(),
+            'server_url': self.server_url_var.get().strip(),
+            'server_token': self.server_token_var.get().strip(),
             'blank_screen_on_song': self.blank_screen_var.get()
         })
         return settings

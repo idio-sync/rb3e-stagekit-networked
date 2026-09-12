@@ -255,6 +255,9 @@ class DashboardSettingsTests(unittest.TestCase):
             "delay_var": 0.5,
             "cookie_browser_var": "Firefox",
             "ha_webhook_url_var": "https://example.invalid/hook",
+            "observe_only_var": True,
+            "server_url_var": " http://unraid:8321 ",
+            "server_token_var": " secret ",
             "blank_screen_var": False,
         }
         for name, value in values.items():
@@ -262,6 +265,9 @@ class DashboardSettingsTests(unittest.TestCase):
         app.get_selected_monitor_index = lambda: 1
 
         collected = app.get_current_settings()
+        self.assertTrue(collected["observe_only"])
+        self.assertEqual(collected["server_url"], "http://unraid:8321")
+        self.assertEqual(collected["server_token"], "secret")
 
         self.assertEqual(collected["future_setting"], {"nested": "value"})
         self.assertEqual(collected["youtube_api_key"], "youtube")
@@ -295,6 +301,52 @@ class DashboardSettingsTests(unittest.TestCase):
             backups = list(path.parent.glob("settings.json.invalid-*.bak"))
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_bytes(), original_bytes)
+
+
+class ObserveModeSettingsTests(unittest.TestCase):
+    """New keys must not disturb a settings file written before they existed."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "settings.json"
+
+    def test_defaults_keep_the_desktop_standalone(self):
+        loaded = SettingsStore(self.path).load()
+
+        self.assertFalse(loaded["observe_only"])
+        self.assertEqual(loaded["server_url"], "")
+        self.assertEqual(loaded["server_token"], "")
+
+    def test_an_older_file_gains_the_defaults_and_keeps_its_values(self):
+        self.path.write_text(json.dumps({
+            "ha_webhook_url": "http://ha.example/hook",
+            "scrobble_enabled": True,
+        }), encoding="utf-8")
+
+        loaded = SettingsStore(self.path).load()
+
+        self.assertEqual(loaded["ha_webhook_url"], "http://ha.example/hook")
+        self.assertTrue(loaded["scrobble_enabled"])
+        self.assertFalse(loaded["observe_only"])
+
+    def test_values_round_trip(self):
+        store = SettingsStore(self.path)
+        settings = store.load()
+        settings.update({"observe_only": True, "server_url": "http://unraid:8321",
+                         "server_token": "secret"})
+        store.save(settings)
+
+        reloaded = SettingsStore(self.path).load()
+        self.assertTrue(reloaded["observe_only"])
+        self.assertEqual(reloaded["server_url"], "http://unraid:8321")
+        self.assertEqual(reloaded["server_token"], "secret")
+
+    def test_a_wrongly_typed_value_falls_back_to_the_default(self):
+        self.path.write_text(json.dumps({"observe_only": "yes please"}),
+                             encoding="utf-8")
+
+        self.assertFalse(SettingsStore(self.path).load()["observe_only"])
 
 
 if __name__ == "__main__":

@@ -35,6 +35,11 @@ DEFAULT_SETTINGS = {
     "database_path": "",
     "ha_webhook_url": "",
     "blank_screen_on_song": False,
+    # Following a headless server instead of the wire. Defaults keep the
+    # desktop standalone, exactly as it behaved before these keys existed.
+    "observe_only": False,
+    "server_url": "",
+    "server_token": "",
 }
 
 _STRING_FIELDS = {
@@ -46,6 +51,8 @@ _STRING_FIELDS = {
     "cookie_browser",
     "database_path",
     "ha_webhook_url",
+    "server_url",
+    "server_token",
 }
 _BOOLEAN_FIELDS = {
     "scrobble_enabled",
@@ -60,6 +67,7 @@ _BOOLEAN_FIELDS = {
     "sync_video_to_song",
     "auto_quit_on_menu",
     "blank_screen_on_song",
+    "observe_only",
 }
 
 
