@@ -533,13 +533,63 @@ class CommandTests(ServerTestCase):
     def test_commands_are_refused_when_the_transport_is_not_running(self):
         application = self.started()
 
-        self.assertFalse(application.send_stagekit_command(0x20, 0xFF))
+        ok, reason = application.send_stagekit_command(0x20, 0xFF)
+        self.assertFalse(ok)
+        self.assertIn("not enabled", reason)
 
     def test_commands_are_forwarded_to_the_transport(self):
         application = self.started(stagekit_enabled=True)
 
-        self.assertTrue(application.send_stagekit_command(0x20, 0xFF, "192.0.2.7"))
+        ok, reason = application.send_stagekit_command(0x20, 0xFF, "192.0.2.7")
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
         self.assertEqual(self.transports[0].commands, [(0x20, 0xFF, "192.0.2.7")])
+
+    def test_flooding_commands_is_refused(self):
+        application = self.started(stagekit_enabled=True, command_rate=1,
+                                   command_burst=1)
+
+        self.assertTrue(application.send_stagekit_command(0, 0xFF)[0])
+        ok, reason = application.send_stagekit_command(0, 0xFF)
+
+        self.assertFalse(ok)
+        self.assertEqual(reason, "rate-limited")
+        self.assertEqual(len(self.transports[0].commands), 1)
+
+
+class GameplayPathTests(ServerTestCase):
+    """The console addresses the Picos directly; the server is never a relay."""
+
+    def test_no_console_event_produces_an_outbound_lighting_command(self):
+        application = self.started(stagekit_enabled=True)
+        listener = self.listeners[0]
+
+        for name, args in (
+            ("gui_callback", ("Listening",)),
+            ("ip_detected_callback", ("192.0.2.10",)),
+            ("song_update_callback", ("Roundabout", "Yes")),
+            ("song_started_callback", ("Yes", "Roundabout", "round")),
+            ("song_ended_callback", ("Yes", "Roundabout", "round", 210)),
+            ("game_info_callback", ("venue", "The Orpheum")),
+            ("game_info_callback", ("screen", "gameplay")),
+            ("game_info_callback",
+             ("score", {"total": 1, "members": [0, 0, 0, 0], "stars": 1})),
+        ):
+            if name in listener.callbacks:
+                listener.emit(name, *args)
+        self.drain(application)
+        application.tick()
+        self.drain(application)
+
+        self.assertEqual(self.transports[0].commands, [])
+
+    def test_a_scene_is_cancelled_before_the_transport_closes(self):
+        application = self.started(stagekit_enabled=True)
+        application.start_scene("chase")
+
+        application.stop()
+
+        self.assertFalse(application._scenes.is_running())
 
 
 if __name__ == "__main__":

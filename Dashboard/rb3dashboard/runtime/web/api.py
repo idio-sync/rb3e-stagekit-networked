@@ -40,6 +40,7 @@ MAX_BODY_BYTES = 64 * 1024
 # missing endpoint, and the difference tells a client which mistake it made.
 READ_ONLY_ROUTES = frozenset({
     "/api/health", "/api/state", "/api/devices", "/api/songs", "/api/events",
+    "/api/stagekit/scenes",
 })
 
 
@@ -128,6 +129,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                                     "devices": snapshot["devices"]})
         if route == "/api/songs":
             return self._json(200, self._songs())
+        if route == "/api/stagekit/scenes":
+            return self._json(200, {"scenes": self.application.scenes()})
         if route == "/api/events":
             return self._stream(query)
         return self._error(404, "Unknown endpoint: %s" % parsed.path)
@@ -151,6 +154,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._refresh_songs()
         if route == "/api/songs/jump":
             return self._jump_to_song()
+        if route == "/api/stagekit/command":
+            return self._stagekit_command()
+        if route == "/api/stagekit/scene":
+            return self._stagekit_scene()
+        if route == "/api/stagekit/stop":
+            return self._stagekit_stop()
         if route in READ_ONLY_ROUTES:
             return self._error(405, "This endpoint is read-only")
         return self._error(404, "Unknown endpoint: %s" % parsed.path)
@@ -224,6 +233,65 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._json(200, {"shortname": shortname})
         return self._console_error(reason)
 
+    # -- lighting --------------------------------------------------------
+
+    def _stagekit_command(self):
+        document = self._read_json_body()
+        if document is None:
+            return None
+        try:
+            left = _as_byte(document.get("left"), "left")
+            right = _as_byte(document.get("right"), "right")
+        except ValueError as error:
+            return self._error(400, str(error))
+        target = document.get("target")
+        if target is not None and not isinstance(target, str):
+            return self._error(400, "target must be an address")
+
+        ok, reason = self.application.send_stagekit_command(left, right, target)
+        if ok:
+            return self._json(200, {"left": left, "right": right,
+                                    "target": target})
+        return self._command_error(reason)
+
+    def _stagekit_scene(self):
+        document = self._read_json_body()
+        if document is None:
+            return None
+        name = document.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return self._error(400, "A scene name is required")
+        target = document.get("target")
+        if target is not None and not isinstance(target, str):
+            return self._error(400, "target must be an address")
+
+        ok, reason = self.application.start_scene(name.strip(), target)
+        if ok:
+            return self._json(202, {"scene": name.strip(), "target": target})
+        if reason == "unknown-scene":
+            return self._error(404, "Unknown scene: %s" % name)
+        return self._command_error(reason)
+
+    def _stagekit_stop(self):
+        self.application.stop_scene()
+        return self._json(200, {"stopped": True})
+
+    def _command_error(self, reason):
+        if reason == "rate-limited":
+            retry = self.application.command_retry_after()
+            payload = json.dumps(
+                {"error": "Too many lighting commands"}).encode("utf-8")
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Retry-After", "%d" % max(1, int(retry + 0.999)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return None
+        # Stage Kit support being off is a configuration state, not a failure.
+        return self._error(409, reason or "The command could not be sent")
+
     def _console_error(self, reason):
         """Separate 'nothing to talk to yet' from 'the console misbehaved'."""
         reason = reason or "The console request failed"
@@ -280,6 +348,22 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _send_raw(self, text):
         self.wfile.write(text.encode("utf-8"))
         self.wfile.flush()
+
+
+def _as_byte(value, name):
+    """Accept an integer 0-255, or the same written as hex text like 0x20."""
+    if isinstance(value, bool) or value is None:
+        raise ValueError("%s must be a number between 0 and 255" % name)
+    if isinstance(value, str):
+        try:
+            value = int(value, 0)
+        except ValueError:
+            raise ValueError("%s must be a number between 0 and 255" % name)
+    if not isinstance(value, int):
+        raise ValueError("%s must be a number between 0 and 255" % name)
+    if not 0 <= value <= 255:
+        raise ValueError("%s must be a number between 0 and 255" % name)
+    return value
 
 
 def _first_int(values, default=None):

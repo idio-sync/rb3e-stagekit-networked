@@ -23,6 +23,8 @@ from ..listener import UnifiedRB3EListener
 from ..song_browser import SongBrowser
 from ..stagekit import StageKitTransport
 from .dispatch import HeadlessDispatcher
+from .ratelimit import RateLimiter
+from .scenes import SceneRunner, scene_listing
 from .state import ApplicationState
 from .supervisor import ServiceSupervisor
 from .web.service import WebService
@@ -144,6 +146,8 @@ class ServerApplication:
                  web_service_factory=None,
                  song_browser_factory=SongBrowser,
                  console_address="",
+                 command_rate=10.0,
+                 command_burst=20.0,
                  webhook_url="",
                  device_offline_after=10.0,
                  device_forget_after=30.0,
@@ -166,6 +170,11 @@ class ServerApplication:
         # One console conversation at a time: the browser holds parsed state
         # that two concurrent refreshes would interleave.
         self._console_lock = threading.Lock()
+        self._command_limiter = RateLimiter(rate=command_rate, burst=command_burst)
+        self._scenes = SceneRunner(
+            self._send_command_unlimited,
+            on_error=lambda error: self.dispatcher.post(
+                self._record_log, "Scene failed: %s" % error, "error"))
 
         self.state = ApplicationState(clock=clock) if state is None else state
         self.dispatcher = HeadlessDispatcher(
@@ -228,6 +237,9 @@ class ServerApplication:
             supervisor.add("stagekit", self.transport.start, self.transport.stop)
         supervisor.add("listener", self._listener_service.start,
                        self._listener_service.stop)
+        # Registered after the transport so a playing scene is cancelled before
+        # the socket it writes to is closed.
+        supervisor.add("scenes", lambda: None, self._scenes.stop)
         supervisor.add("maintenance", self._maintenance.start,
                        self._maintenance.stop)
         if self.web is not None:
@@ -284,12 +296,48 @@ class ServerApplication:
     # -- commands -------------------------------------------------------
 
     def send_stagekit_command(self, left, right, target_ip=None):
-        """Send a manual Stage Kit command; refuse when no transport is running."""
+        """Send one manual command. Returns (ok, reason).
+
+        Gameplay lighting never reaches here: the console addresses the Picos
+        directly, and no console event is wired to this method.
+        """
+        if self.transport is None:
+            return False, "Stage Kit support is not enabled on this server"
+        if not self._command_limiter.allow():
+            return False, "rate-limited"
+        if not self._send_command_unlimited(left, right, target_ip):
+            return False, "The command could not be sent"
+        return True, None
+
+    def _send_command_unlimited(self, left, right, target_ip=None):
         transport = self.transport
         if transport is None:
-            self._record_log("Stage Kit transport is not enabled", level="warning")
             return False
         return bool(transport.send_command(left, right, target_ip))
+
+    def command_retry_after(self):
+        return self._command_limiter.retry_after()
+
+    # -- scenes ----------------------------------------------------------
+
+    def scenes(self):
+        return scene_listing()
+
+    def start_scene(self, name, target_ip=None):
+        """Play a named scene. Returns (ok, reason)."""
+        if self.transport is None:
+            return False, "Stage Kit support is not enabled on this server"
+        if not self._command_limiter.allow():
+            return False, "rate-limited"
+        try:
+            self._scenes.start(name, target_ip)
+        except KeyError:
+            return False, "unknown-scene"
+        return True, None
+
+    def stop_scene(self):
+        self._scenes.stop()
+        return True, None
 
     # -- periodic work --------------------------------------------------
 

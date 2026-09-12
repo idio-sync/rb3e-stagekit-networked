@@ -110,6 +110,8 @@ _FIELDS = {
     "console_timeout": (_as_float, 30.0),
     "maintenance_interval": (_as_float, 1.0),
     "queue_capacity": (_as_int, 1000),
+    "command_rate": (_as_float, 10.0),
+    "command_burst": (_as_float, 20.0),
     "log_capacity": (_as_int, 200),
 }
 
@@ -205,7 +207,7 @@ class ServerConfig:
                     "%s must be between 1 and 65535, not %d" % (name, values[name]))
         for name in ("device_offline_after", "device_forget_after",
                      "console_timeout", "maintenance_interval",
-                     "discovery_interval"):
+                     "discovery_interval", "command_rate", "command_burst"):
             if values[name] <= 0:
                 raise ConfigError("%s must be greater than zero, not %s"
                                   % (name, values[name]))
@@ -246,6 +248,8 @@ class ServerConfig:
             "web_port": self.web_port,
             "auth_token": self.auth_token,
             "console_address": self.console_address,
+            "command_rate": self.command_rate,
+            "command_burst": self.command_burst,
         }
 
     def describe(self):
