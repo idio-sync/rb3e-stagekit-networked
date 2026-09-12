@@ -125,5 +125,59 @@ class SongDataImportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class IntegrationsImportTests(unittest.TestCase):
+    def test_integrations_import_needs_no_ui_or_startup_services(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import sys
+            import threading
+            from unittest.mock import patch
+
+            without_discord = sys.argv[1] == 'True'
+
+            class BlockDesktopImports(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.split('.')[0] in {
+                        'dashboard', 'tkinter', 'PIL', 'googleapiclient',
+                        'yt_dlp', 'screeninfo',
+                    }:
+                        raise AssertionError('Desktop dependency: ' + fullname)
+                    if without_discord and fullname.split('.')[0] == 'pypresence':
+                        raise ImportError('Simulated missing optional pypresence')
+
+            def block_side_effects(event, args):
+                if event in {'socket.__new__', 'subprocess.Popen', 'os.system'}:
+                    raise AssertionError('Startup side effect: ' + event)
+
+            sys.meta_path.insert(0, BlockDesktopImports())
+            sys.addaudithook(block_side_effects)
+            with patch.object(threading.Thread, 'start',
+                              side_effect=AssertionError('Started a thread')):
+                from rb3dashboard.integrations import (
+                    LastFmScrobbler, DiscordPresence, DISCORD_AVAILABLE,
+                )
+                scrobbler = LastFmScrobbler()
+                scrobbler.update_now_playing('Artist', 'Song')
+                scrobbler.scrobble('Artist', 'Song')
+                assert scrobbler.get_auth_token() is None
+                presence = DiscordPresence()
+                presence.update_presence('Artist', 'Song')
+                presence.set_idle()
+                if without_discord:
+                    assert not DISCORD_AVAILABLE
+                    assert presence.connect() is False
+            """)
+        for without_discord in (False, True):
+            with self.subTest(without_discord=without_discord):
+                result = subprocess.run(
+                    [sys.executable, '-c', script, str(without_discord)],
+                    cwd=Path(__file__).resolve().parents[1],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
