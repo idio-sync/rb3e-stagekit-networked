@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 from datetime import datetime
 
 
@@ -37,8 +38,6 @@ class SongDatabase:
     def load_database(self, file_path):
         """Load songs from JSON file with BOM handling"""
         try:
-            self.database_path = file_path
-
             if self.gui_callback:
                 self.gui_callback(f"Loading song database from: {file_path}")
 
@@ -65,29 +64,40 @@ class SongDatabase:
                 text_data = raw_data.decode('utf-8')
                 data = json.loads(text_data)
 
-            self.songs = {}
-            self.loaded_count = 0
+            if not isinstance(data, dict) or not isinstance(data.get('setlist'), list):
+                raise ValueError('Expected an object containing a setlist array')
 
-            if 'setlist' in data:
-                for song in data['setlist']:
-                    shortname = song.get('shortname')
-                    if shortname:
-                        duration_str = song.get('duration', '')
-                        duration_seconds = self.parse_duration(duration_str)
+            songs = {}
+            loaded_count = 0
+            for index, song in enumerate(data['setlist'], 1):
+                if not isinstance(song, dict):
+                    raise ValueError(f'Song {index} must be an object')
+                shortname = song.get('shortname')
+                if shortname is None or shortname == '':
+                    continue  # Entries without an identifier have always been skipped.
+                if not isinstance(shortname, str):
+                    raise ValueError(f'Song {index} shortname must be text')
+                for field in ('name', 'artist', 'album', 'duration'):
+                    if not isinstance(song.get(field, ''), str):
+                        raise ValueError(f'Song {index} {field} must be text')
 
-                        song_data = {
-                            'shortname': shortname,
-                            'name': song.get('name', ''),
-                            'artist': song.get('artist', ''),
-                            'album': song.get('album', ''),
-                            'duration_str': duration_str,
-                            'duration_seconds': duration_seconds,
-                            'year_released': song.get('year_released'),
-                            'genre': song.get('genre', ''),
-                        }
+                duration_str = song.get('duration', '')
+                songs[shortname] = {
+                    'shortname': shortname,
+                    'name': song.get('name', ''),
+                    'artist': song.get('artist', ''),
+                    'album': song.get('album', ''),
+                    'duration_str': duration_str,
+                    'duration_seconds': self.parse_duration(duration_str),
+                    'year_released': song.get('year_released'),
+                    'genre': song.get('genre', ''),
+                }
+                loaded_count += 1
 
-                        self.songs[shortname] = song_data
-                        self.loaded_count += 1
+            # Publish only after the entire file has passed validation.
+            self.songs = songs
+            self.loaded_count = loaded_count
+            self.database_path = file_path
 
             if self.gui_callback:
                 self.gui_callback(f"Loaded {self.loaded_count} songs from database")
@@ -249,13 +259,24 @@ class PlayStatistics:
         return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'play_stats.json')
 
     def load_stats(self) -> dict:
-        """Load stats from file"""
-        if os.path.exists(self.stats_path):
+        """Load validated statistics without overwriting an unreadable file."""
+        self._invalid_stats_data = None
+        self._stats_read_failed = False
+        try:
+            with open(self.stats_path, 'rb') as f:
+                raw_data = f.read()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            self._stats_read_failed = True
+            print(f"Failed to read stats; saving is disabled for this session: {e}")
+        else:
             try:
-                with open(self.stats_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
+                return self._validate_stats(json.loads(raw_data.decode('utf-8')))
+            except (ValueError, TypeError, RecursionError) as e:
+                # Retain the original bytes until a backup succeeds on first save.
+                self._invalid_stats_data = raw_data
+                print(f"Invalid stats in {self.stats_path}; using empty statistics: {e}")
         return {
             'total_plays': 0,
             'total_time_seconds': 0,
@@ -263,9 +284,45 @@ class PlayStatistics:
             'first_tracked': datetime.now().isoformat()
         }
 
+    @staticmethod
+    def _validate_stats(stats):
+        """Check fields used by the dashboard and fill older optional fields."""
+        def require_counter(value, field):
+            if type(value) is not int or value < 0:
+                raise ValueError(f'{field} must be a non-negative integer')
+
+        if not isinstance(stats, dict) or not isinstance(stats.get('songs'), dict):
+            raise ValueError('Expected a statistics object containing a songs object')
+        require_counter(stats.get('total_plays'), 'total_plays')
+        require_counter(stats.get('total_time_seconds', 0), 'total_time_seconds')
+        stats.setdefault('total_time_seconds', 0)
+        stats.setdefault('first_tracked', datetime.now().isoformat())
+        for key, song in stats['songs'].items():
+            if not isinstance(song, dict):
+                raise ValueError(f'Statistics for {key!r} must be an object')
+            for field in ('artist', 'song'):
+                if not isinstance(song.get(field), str):
+                    raise ValueError(f'{key!r} {field} must be text')
+            require_counter(song.get('play_count'), f'{key!r} play_count')
+            require_counter(song.get('total_time_seconds', 0), f'{key!r} total_time_seconds')
+            song.setdefault('total_time_seconds', 0)
+            song.setdefault('first_played', stats['first_tracked'])
+            song.setdefault('last_played', None)
+        return stats
+
     def save_stats(self):
         """Save stats to file"""
+        if self._stats_read_failed:
+            return  # Never replace a file whose contents could not be read.
         try:
+            if self._invalid_stats_data is not None:
+                with tempfile.NamedTemporaryFile(
+                        dir=os.path.dirname(os.path.abspath(self.stats_path)),
+                        prefix=os.path.basename(self.stats_path) + '.invalid-',
+                        suffix='.bak', delete=False) as backup:
+                    backup.write(self._invalid_stats_data)
+                self._invalid_stats_data = None
+                print(f"Original invalid stats backed up to {backup.name}")
             with open(self.stats_path, 'w', encoding='utf-8') as f:
                 json.dump(self.stats, f, indent=2)
         except Exception as e:

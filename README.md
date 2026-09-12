@@ -271,6 +271,16 @@ packets from an already detected console also count toward its connection activi
 * **Flat List Mode:** In Settings → Song Browser, enable "Show flat list" to display all songs without collapsible artist groupings.
 * **History:** Songs are logged automatically. Use "Export" to save your session data to CSV for spreadsheets.
 
+Song database imports are validated before replacing the loaded database. An
+invalid file leaves the current songs, count, and database path intact.
+
+Invalid play-statistics files use empty statistics in memory. Before saving new
+plays, the dashboard preserves the original bytes in a unique
+`play_stats.json.invalid-*.bak` file beside the statistics file. If that backup
+cannot be created, the original is kept. A statistics file that cannot be read
+is left untouched, and statistics saving is disabled for that session. Older
+statistics without time fields retain their play counts and start time totals at zero.
+
 ---
 
 ## 🧩 Troubleshooting
