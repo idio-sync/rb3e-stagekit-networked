@@ -85,6 +85,9 @@ class UnifiedRB3EListener:
         self.pending_video = None
         self._video_timer = None
         self._video_generation = 0
+        self._video_lookup_thread = None
+        self._video_lookup_request = None
+        self._video_lookup_generation = None
 
     def set_video_components(self, youtube_searcher, vlc_player, stream_extractor):
         """Set video player components"""
@@ -104,6 +107,8 @@ class UnifiedRB3EListener:
         """Invalidate lookups and delayed starts. Caller must hold _state_lock."""
         self._video_generation += 1
         self.pending_video = None
+        self._video_lookup_request = None
+        self._video_lookup_generation = None
         if self._video_timer is not None:
             self._video_timer.cancel()
             self._video_timer = None
@@ -355,47 +360,86 @@ class UnifiedRB3EListener:
                 self.prepare_video()
 
     def prepare_video(self):
-        """Search for and prepare video (thread-safe)"""
+        """Queue the latest song without blocking the packet receiver."""
         with self._state_lock:
-            if not self.running or not self.video_enabled or self._video_timer is not None:
+            if (not self.running or not self.video_enabled or self._video_timer is not None
+                    or not self.youtube_searcher or not self.stream_extractor
+                    or self._video_lookup_generation == self._video_generation):
                 return
-            artist = self.current_artist
-            song = self.current_song
-            shortname = self.current_shortname
-            generation = self._video_generation
+            # One active request and one replaceable waiting request keep both
+            # thread count and backlog bounded during rapid song changes.
+            self._video_lookup_request = (
+                self._video_generation, self.current_artist, self.current_song,
+                self.current_shortname, self.youtube_searcher, self.stream_extractor,
+            )
+            self._video_lookup_generation = self._video_generation
+            if self._video_lookup_thread is None:
+                self._video_lookup_thread = threading.Thread(
+                    target=self._run_video_lookups, name='RB3E-video-lookup', daemon=True,
+                )
+                try:
+                    self._video_lookup_thread.start()
+                except Exception:
+                    self._video_lookup_thread = None
+                    self._video_lookup_request = None
+                    self._video_lookup_generation = None
+                    raise
 
-        if not self.youtube_searcher or not self.stream_extractor:
+    def _run_video_lookups(self):
+        """Serialize access to video services, exiting when no work remains."""
+        while True:
+            with self._state_lock:
+                request = self._video_lookup_request
+                if request is None:
+                    self._video_lookup_thread = None
+                    return
+                self._video_lookup_request = None
+
+            generation = request[0]
+            try:
+                self._prepare_video(*request)
+            except Exception as e:
+                if self.gui_callback and self._video_lookup_is_current(generation):
+                    try:
+                        self.gui_callback(f"Error preparing video: {e}")
+                    except Exception:
+                        pass  # A failed log callback must not strand queued work.
+            finally:
+                with self._state_lock:
+                    if self._video_lookup_generation == generation:
+                        self._video_lookup_generation = None
+
+    def _video_lookup_is_current(self, generation):
+        with self._state_lock:
+            return (self.running and self.video_enabled
+                    and generation == self._video_generation)
+
+    def _prepare_video(self, generation, artist, song, shortname, searcher, extractor):
+        """Perform slow service calls on the worker, checking for cancellation."""
+        if not self._video_lookup_is_current(generation):
+            return
+        video_id = searcher.search_video(artist, song)
+        if not video_id or not self._video_lookup_is_current(generation):
             return
 
-        try:
-            # Search is done outside the lock (can be slow)
-            video_id = self.youtube_searcher.search_video(artist, song)
+        video_title = searcher.get_cached_title(video_id)
+        if self.gui_callback:
+            self.gui_callback("Getting video stream...")
+        stream_url = extractor.get_stream_url(video_id)
+        if not stream_url:
+            return
 
-            if video_id:
-                # Get the video title from cache for logging
-                video_title = self.youtube_searcher.get_cached_title(video_id)
+        with self._state_lock:
+            if (generation != self._video_generation or not self.running
+                    or not self.video_enabled or self._video_timer is not None):
+                return
+            self.pending_video = (stream_url, video_id, artist, song, shortname, video_title)
+            current_game_state = self.game_state
 
-                if self.gui_callback:
-                    self.gui_callback("Getting video stream...")
-                stream_url = self.stream_extractor.get_stream_url(video_id)
-
-                if stream_url:
-                    with self._state_lock:
-                        if (generation != self._video_generation or not self.running
-                                or not self.video_enabled or self._video_timer is not None):
-                            return
-                        self.pending_video = (stream_url, video_id, artist, song, shortname, video_title)
-                        current_game_state = self.game_state
-
-                    if self.gui_callback:
-                        self.gui_callback("Video ready - waiting for song to start...")
-
-                    if current_game_state == 1:
-                        self.start_pending_video()
-
-        except Exception as e:
-            if self.gui_callback:
-                self.gui_callback(f"Error preparing video: {e}")
+        if self.gui_callback:
+            self.gui_callback("Video ready - waiting for song to start...")
+        if current_game_state == 1:
+            self.start_pending_video()
 
     def start_pending_video(self):
         """Start the pending video (thread-safe)"""

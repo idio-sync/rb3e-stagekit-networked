@@ -178,6 +178,10 @@ class ListenerPacketTests(unittest.TestCase):
         )
         self.listener.update_video_settings({"muted": True}, enabled=True)
         self.send_song_metadata()
+        worker = self.listener._video_lookup_thread
+        if worker is not None:
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive(), 'Lookup worker did not finish')
         self.assertEqual(searches, [("Artist", "Song")])
         self.assertEqual(extractions, ["video-id"])
         self.assertEqual(plays, [])

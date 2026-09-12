@@ -57,11 +57,24 @@ class VideoLifecycleTests(unittest.TestCase):
         self.timer_patch = patch('rb3dashboard.listener.threading.Timer', side_effect=timer)
         self.timer_patch.start()
         self.addCleanup(self.timer_patch.stop)
+        self.addCleanup(self.stop_listener)
 
-    def select_song(self, song='Song'):
+    def finish_lookup(self):
+        worker = self.listener._video_lookup_thread
+        if worker is not None:
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive(), 'Lookup worker did not finish')
+
+    def stop_listener(self):
+        self.listener.stop()
+        self.finish_lookup()
+
+    def select_song(self, song='Song', wait=True):
         self.listener.process_packet(packet(2, song.encode()))
         self.listener.process_packet(packet(3, b'Artist'))
         self.listener.process_packet(packet(4, song.lower().encode()))
+        if wait:
+            self.finish_lookup()
 
     def start_song(self, song='Song'):
         self.select_song(song)
@@ -189,6 +202,7 @@ class VideoLifecycleTests(unittest.TestCase):
 
         self.listener.stream_extractor.get_stream_url = extract
         self.listener.prepare_video()
+        self.finish_lookup()
         self.assertIsNone(self.listener.pending_video)
         self.assertEqual(len(self.plays), 1)
 
@@ -201,6 +215,7 @@ class VideoLifecycleTests(unittest.TestCase):
 
         self.listener.stream_extractor.get_stream_url = extract
         self.listener.prepare_video()
+        self.finish_lookup()
         self.assertIsNone(self.listener.pending_video)
 
     def test_old_lookup_cannot_overwrite_new_song_result(self):
@@ -209,11 +224,12 @@ class VideoLifecycleTests(unittest.TestCase):
 
         def extract(video_id):
             self.listener.stream_extractor.get_stream_url = initial_extractor
-            self.select_song('Next')
+            self.select_song('Next', wait=False)
             return 'https://video.invalid/stale'
 
         self.listener.stream_extractor.get_stream_url = extract
         self.listener.prepare_video()
+        self.finish_lookup()
         self.listener.process_packet(packet(1, b'\x01'))
         self.timers[-1].deliver()
         self.assertEqual(self.plays[0][3], 'Next')
