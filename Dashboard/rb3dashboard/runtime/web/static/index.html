@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Stage Kit</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23f8323c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<a class="skip" href="#lights">Skip to lighting controls</a>
+
+<header class="bar">
+  <span class="pulse" id="pulse" data-state="connecting"></span>
+  <span class="mark">Stage&nbsp;Kit</span>
+  <span class="bar-status" id="link">Connecting</span>
+</header>
+
+<main>
+  <section class="now" aria-labelledby="now-heading">
+    <h1 class="sr-only" id="now-heading">Now playing</h1>
+    <p class="now-state" id="game-state">Waiting for the console</p>
+    <p class="now-song" id="song">&mdash;</p>
+    <p class="now-artist" id="artist"></p>
+    <dl class="facts" id="facts"></dl>
+  </section>
+
+  <section class="panel lights" id="lights" aria-labelledby="lights-heading">
+    <h2 id="lights-heading"><i class="rule" style="--rule:var(--red)"></i>Lighting</h2>
+    <p class="hint" id="lights-hint">Pick a colour, choose which lamps, then send.</p>
+
+    <div class="colours" role="radiogroup" aria-label="Lamp colour">
+      <button class="swatch" data-colour="128" style="--c:var(--red)" role="radio" aria-checked="true">Red</button>
+      <button class="swatch" data-colour="64" style="--c:var(--green)" role="radio" aria-checked="false">Green</button>
+      <button class="swatch" data-colour="32" style="--c:var(--blue)" role="radio" aria-checked="false">Blue</button>
+      <button class="swatch" data-colour="96" style="--c:var(--yellow)" role="radio" aria-checked="false">Yellow</button>
+    </div>
+
+    <div class="ring" id="ring" role="group" aria-label="Lamps, one button per lamp"></div>
+
+    <div class="patterns">
+      <button class="chip" data-mask="255">All</button>
+      <button class="chip" data-mask="85">Odds</button>
+      <button class="chip" data-mask="170">Evens</button>
+      <button class="chip" data-mask="15">Left half</button>
+      <button class="chip" data-mask="240">Right half</button>
+      <button class="chip" data-mask="0">None</button>
+    </div>
+
+    <div class="send">
+      <button class="go" id="send">Send to lamps</button>
+      <output class="bytes" id="bytes">L 0xFF &middot; R 0x80</output>
+    </div>
+
+    <div class="effects">
+      <button class="chip" data-scene="fog_on">Fog on</button>
+      <button class="chip" data-scene="fog_off">Fog off</button>
+      <button class="chip" data-scene="strobe_off">Strobe off</button>
+      <button class="chip" data-scene="colour_check">Colour check</button>
+      <button class="chip" data-scene="chase">Chase</button>
+      <button class="chip danger" data-scene="all_off">Everything off</button>
+    </div>
+  </section>
+
+  <section class="panel rig" aria-labelledby="rig-heading">
+    <h2 id="rig-heading"><i class="rule" style="--rule:var(--blue)"></i>Rig</h2>
+    <p class="hint" id="rig-hint">No lamps have reported in yet.</p>
+    <ul class="devices" id="devices"></ul>
+  </section>
+
+  <section class="panel feed" aria-labelledby="feed-heading">
+    <h2 id="feed-heading"><i class="rule" style="--rule:var(--yellow)"></i>Activity</h2>
+    <ol class="log" id="log" aria-live="polite" aria-relevant="additions"></ol>
+  </section>
+</main>
+
+<dialog class="gate" id="gate">
+  <form method="dialog" id="gate-form">
+    <h2>This dashboard needs its access token</h2>
+    <p>Paste the token set as <code>RB3E_AUTH_TOKEN</code> on the server.</p>
+    <input type="password" id="token" autocomplete="current-password" required
+           aria-label="Access token" spellcheck="false">
+    <div class="gate-actions">
+      <button value="save" class="go">Unlock</button>
+    </div>
+    <p class="gate-error" id="gate-error" hidden>That token was refused. Check the server configuration and try again.</p>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

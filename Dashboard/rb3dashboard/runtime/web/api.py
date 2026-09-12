@@ -32,6 +32,8 @@ except ImportError:  # pragma: no cover - Python 2 is unsupported
     raise
 
 
+from . import assets
+
 HEARTBEAT_SECONDS = 15.0
 # Request bodies here are small JSON objects; anything larger is a mistake.
 MAX_BODY_BYTES = 64 * 1024
@@ -113,6 +115,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             # Health never requires a token, so a container health check and a
             # reverse proxy can probe it without holding a credential.
             return self._json(200, self._health())
+
+        # The page itself carries no data and is served without a token, so a
+        # browser can load it and then ask for one. Every data route below
+        # still requires the token.
+        asset = assets.lookup(parsed.path if parsed.path else "/")
+        if asset is not None:
+            body, content_type = asset
+            return self._write(200, body, content_type)
 
         if not self._authorised(query):
             self.send_response(401)
