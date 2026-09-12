@@ -1,0 +1,27 @@
+# Keep the build context small. The Dockerfile copies only what the server
+# needs, so this list is about not shipping the rest to the daemon.
+#
+# Deliberately not the exclude-everything-then-re-include form: that requires
+# re-including each parent directory as well, and a missed one fails the build
+# with a confusing missing-file error.
+
+.git/
+.github/
+.vscode/
+.superpowers/
+docs/
+firmware/
+HomeAssistant/
+RB3E WebUI/
+
+Dashboard/tests/
+Dashboard/build/
+Dashboard/dist/
+Dashboard/dashboard.py
+Dashboard/dashboard.spec
+Dashboard/requirements.txt
+
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+appdata/

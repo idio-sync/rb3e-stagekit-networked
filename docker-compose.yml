@@ -1,0 +1,59 @@
+# Headless RB3Enhanced dashboard server.
+#
+#   docker compose up -d
+#
+# Host networking is not a convenience here. The console broadcasts its events,
+# and Pico discovery and telemetry are broadcast too; Docker's bridge network
+# does not carry broadcast traffic between the host LAN and a container, so a
+# bridged server would see no console and no devices. Host networking is Linux
+# only, which covers Unraid but not Docker Desktop on Windows or macOS.
+#
+# None of this has been run on real hardware. See docs/deployment.md.
+
+services:
+  rb3server:
+    build:
+      context: .
+      # Unraid's appdata is owned by nobody:users. Change for other hosts.
+      args:
+        PUID: "99"
+        PGID: "100"
+    image: rb3e-dashboard-server
+    container_name: rb3e-dashboard
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      # Where sessions and play history are kept, inside the container.
+      RB3E_DATA_DIR: /data
+
+      # The dashboard and its API. Not 21070: that port belongs to the
+      # console's own song list, song jump, and web UI.
+      RB3E_WEB_HOST: 0.0.0.0
+      RB3E_WEB_PORT: "8321"
+
+      # Set this. Without it the API is open to anyone who can reach the port.
+      RB3E_AUTH_TOKEN: ""
+
+      # Stage Kit support is off by default. Turning it on makes this server
+      # the owner of Pico discovery: each Pico remembers one dashboard address
+      # and will send its telemetry here instead of to a desktop dashboard.
+      # Set the desktop to follow this server before enabling it.
+      RB3E_STAGEKIT_ENABLED: "false"
+
+      # Where discovery is broadcast, as a comma separated list. Give the
+      # broadcast address of the network the Picos are on, for example
+      # 192.168.1.255. Leaving it empty keeps the old guess from the default
+      # route, which is unreliable on a host with several interfaces.
+      RB3E_DISCOVERY_TARGETS: ""
+
+      # Optional Home Assistant webhook, posted with the same payload the
+      # desktop sends, so existing automations keep matching.
+      RB3E_HA_WEBHOOK_URL: ""
+
+      # Only for consoles configured with BroadcastTarget, which sends events
+      # to a single host. Comma separated peers to pass those events on to.
+      RB3E_RELAY_TARGETS: ""
+
+    volumes:
+      # On Unraid: /mnt/user/appdata/rb3e-dashboard:/data
+      - ./appdata:/data

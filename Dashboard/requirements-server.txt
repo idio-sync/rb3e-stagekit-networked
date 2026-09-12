@@ -1,0 +1,9 @@
+# Headless server dependencies.
+#
+# The server deliberately needs far less than the desktop: no Tk, no Pillow,
+# no VLC, no Discord IPC, no display enumeration, and no YouTube client. Those
+# belong to the desktop application and to the machine a person is sitting at.
+#
+# Everything else the server uses is in the standard library, including its
+# HTTP server and SQLite storage.
+requests>=2.28.0
