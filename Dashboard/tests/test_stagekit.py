@@ -171,6 +171,33 @@ class StageKitTransportTests(unittest.TestCase):
         self.run_datagrams(invalid + [json.dumps(STATUS).encode("utf-8")])
         self.assertEqual(self.received, [("192.168.50.8", STATUS)])
 
+    def test_decoder_recursion_is_ignored_before_next_valid_datagram(self):
+        self.run_datagrams([b'[' * 1024, json.dumps(STATUS).encode('utf-8')])
+        self.assertEqual(self.received, [('192.168.50.8', STATUS)])
+
+    def test_failing_logger_cannot_break_command_result(self):
+        def bad_logger(message):
+            raise RuntimeError('logger unavailable')
+        self.transport.gui_callback = bad_logger
+        try:
+            result = self.transport.send_command(0, 0)
+        except RuntimeError as error:
+            self.fail('Logging broke command result: {}'.format(error))
+        self.assertFalse(result)
+
+    def test_failing_logger_after_consumer_failure_cannot_stop_next_telemetry(self):
+        def bad_logger(message):
+            raise RuntimeError('logger unavailable')
+        self.transport.gui_callback = bad_logger
+        calls = []
+        def callback(ip, status):
+            calls.append(status)
+            if len(calls) == 1:
+                raise ValueError('consumer unavailable')
+        self.transport.telemetry_callback = callback
+        self.run_datagrams([json.dumps(STATUS).encode('utf-8')] * 2)
+        self.assertEqual(calls, [STATUS, STATUS])
+
     def test_continuous_traffic_does_not_starve_five_second_discovery(self):
         self.run_datagrams([json.dumps(STATUS).encode("utf-8")] * 12, 1)
         self.assertEqual(len(self.received), 12)

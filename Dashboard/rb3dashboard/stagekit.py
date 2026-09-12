@@ -17,7 +17,7 @@ def _parse_telemetry(data):
     """Ignore discovery and malformed fields used by the device display."""
     try:
         status = json.loads(data.decode("utf-8"))
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         return None
     if not isinstance(status, dict) or status.get("type") == "discovery":
         return None
@@ -115,7 +115,10 @@ class StageKitTransport:
 
     def _log(self, message):
         if self.gui_callback is not None:
-            self.gui_callback(message)
+            try:
+                self.gui_callback(message)
+            except Exception:
+                pass
 
     def send_command(self, left, right, target_ip=None):
         target_ip = target_ip or "255.255.255.255"

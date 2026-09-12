@@ -257,30 +257,16 @@ class StageKitViewMixin:
         if not self.log_stagekit_var.get():
             return
 
-        # Decode the lighting data for display
-        # Left byte: fog (bit 4), strobe (bits 0-3 = speed)
-        # Right byte: LED colors (bits 0-3), LED state (bits 4-6)
-        fog = "ON" if (left_weight & 0x10) else "OFF"
-        strobe_speed = left_weight & 0x0F
-
-        led_colors = right_weight & 0x0F
-        led_state = (right_weight >> 4) & 0x07
-
-        color_names = []
-        if led_colors & 0x01:
-            color_names.append("Blue")
-        if led_colors & 0x02:
-            color_names.append("Green")
-        if led_colors & 0x04:
-            color_names.append("Yellow")
-        if led_colors & 0x08:
-            color_names.append("Red")
-        colors = ", ".join(color_names) if color_names else "None"
-
-        state_names = {0: "Off", 1: "Slow", 2: "Medium", 3: "Fast", 4: "Fastest"}
-        led_state_name = state_names.get(led_state, f"State {led_state}")
-
-        self.log_message(f"StageKit: Fog={fog} Strobe={strobe_speed} LEDs=[{colors}] Mode={led_state_name} (L=0x{left_weight:02X} R=0x{right_weight:02X})")
+        # Firmware uses left as the LED pattern and right as the command.
+        colors = {0x20: 'Blue', 0x40: 'Green', 0x60: 'Yellow', 0x80: 'Red'}
+        commands = {0x01: 'Fog=ON', 0x02: 'Fog=OFF',
+                    0x03: 'Strobe=1', 0x04: 'Strobe=2', 0x05: 'Strobe=3',
+                    0x06: 'Strobe=4', 0x07: 'Strobe=OFF', 0xFF: 'All OFF'}
+        if right_weight in colors:
+            description = f"{colors[right_weight]} LEDs=0x{left_weight:02X}"
+        else:
+            description = commands.get(right_weight, f"Unknown command=0x{right_weight:02X}")
+        self.log_message(f"StageKit: {description} (L=0x{left_weight:02X} R=0x{right_weight:02X})")
     def _on_stagekit_telemetry(self, transport, ip, status):
         """Deliver only telemetry belonging to the active listening session."""
         if self.is_running and self.stagekit_transport is transport:
