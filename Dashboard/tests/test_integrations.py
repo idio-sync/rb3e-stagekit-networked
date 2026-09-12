@@ -202,6 +202,123 @@ class DiscordPresenceTests(unittest.TestCase):
             details='Browsing Songs', state='In Menus', large_image='guitar',
             large_text='Rock Band 3 Deluxe')
 
+    def test_failed_menu_update_reconnects_with_idle_instead_of_previous_song(self):
+        self.presence.connect()
+        self.presence.update_presence('Artist', 'Song')
+        self.rpc.update.side_effect = OSError('Discord connection lost')
+        replacement = Mock()
+        self.factory.return_value = replacement
+
+        self.presence.set_idle()
+
+        replacement.update.assert_called_once_with(
+            details='Browsing Songs', state='In Menus', large_image='guitar',
+            large_text='Rock Band 3 Deluxe')
+        self.assertIsNone(self.presence.current_artist)
+        self.assertIsNone(self.presence.current_song)
+        self.assertIsNone(self.presence.start_time)
+
+    def test_menu_during_retry_delay_is_restored_after_connection_returns(self):
+        self.presence.connect()
+        self.presence.update_presence('Artist', 'Song')
+        self.presence.connected = False
+        self.presence.last_reconnect_time = 1000
+        self.clock.return_value = 1001
+        replacement = Mock()
+        self.factory.return_value = replacement
+
+        self.presence.set_idle()
+        replacement.connect.assert_not_called()
+        self.clock.return_value = 1005
+        self.assertTrue(self.presence._try_reconnect())
+
+        replacement.update.assert_called_once_with(
+            details='Browsing Songs', state='In Menus', large_image='guitar',
+            large_text='Rock Band 3 Deluxe')
+        self.assertIsNone(self.presence.current_artist)
+        self.assertIsNone(self.presence.current_song)
+        self.assertIsNone(self.presence.start_time)
+
+    def test_menu_while_disconnected_never_briefly_restores_previous_song(self):
+        self.presence.connect()
+        self.presence.update_presence('Artist', 'Song')
+        self.presence.connected = False
+        replacement = Mock()
+        self.factory.return_value = replacement
+
+        self.presence.set_idle()
+
+        self.assertTrue(replacement.update.called)
+        for update in replacement.update.call_args_list:
+            self.assertEqual(update.kwargs, {
+                'details': 'Browsing Songs', 'state': 'In Menus',
+                'large_image': 'guitar', 'large_text': 'Rock Band 3 Deluxe'})
+
+    def test_reconnect_after_successful_menu_update_restores_idle(self):
+        self.presence.connect()
+        self.presence.update_presence('Artist', 'Song')
+        self.presence.set_idle()
+        self.presence.connected = False
+        replacement = Mock()
+        self.factory.return_value = replacement
+
+        self.assertTrue(self.presence._try_reconnect())
+
+        replacement.update.assert_called_once_with(
+            details='Browsing Songs', state='In Menus', large_image='guitar',
+            large_text='Rock Band 3 Deluxe')
+
+    def test_new_song_replaces_idle_state_on_reconnect(self):
+        self.presence.connect()
+        self.presence.update_presence('Artist', 'Old Song')
+        self.presence.set_idle()
+        self.clock.return_value = 1100.5
+        self.presence.update_presence('New Artist', 'New Song')
+        self.presence.connected = False
+        replacement = Mock()
+        self.factory.return_value = replacement
+        self.clock.return_value = 1130
+
+        self.assertTrue(self.presence._try_reconnect())
+
+        replacement.update.assert_called_once_with(
+            details='New Song', state='by New Artist', large_image='guitar',
+            large_text='Rock Band 3 Deluxe', start=1100)
+
+    def test_failed_idle_restore_retains_menu_state_for_next_reconnect(self):
+        self.presence.connect()
+        self.presence.update_presence('Artist', 'Song')
+        self.presence.set_idle()
+        self.presence.connected = False
+        replacement = Mock()
+        replacement.update.side_effect = OSError('Discord connection lost again')
+        self.factory.return_value = replacement
+
+        self.assertFalse(self.presence._try_reconnect())
+        self.assertFalse(self.presence.connected)
+        replacement.close.assert_called_once_with()
+        self.assertEqual(self.presence.reconnect_attempts, 1)
+
+        recovered = Mock()
+        self.factory.return_value = recovered
+        self.clock.return_value = 1030
+        self.assertTrue(self.presence._try_reconnect())
+        recovered.update.assert_called_once_with(
+            details='Browsing Songs', state='In Menus', large_image='guitar',
+            large_text='Rock Band 3 Deluxe')
+
+    def test_cleared_idle_presence_stays_empty_on_reconnect(self):
+        self.presence.connect()
+        self.presence.set_idle()
+        self.presence.connected = False
+        self.presence.clear_presence()
+        replacement = Mock()
+        self.factory.return_value = replacement
+
+        self.assertTrue(self.presence._try_reconnect())
+
+        replacement.update.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

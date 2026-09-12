@@ -188,6 +188,7 @@ class DiscordPresence:
         self.current_song = None
         self.current_artist = None
         self.start_time = None
+        self._is_idle = False
         # Reconnection state
         self.reconnect_attempts = 0
         self.last_reconnect_time = 0
@@ -257,15 +258,20 @@ class DiscordPresence:
             self.rpc = Presence(self.client_id)
             self.rpc.connect()
             self.connected = True
+            # Restore presence before marking the reconnect successful.
+            self._restore_presence()
             self.reconnect_attempts = 0
             self.reconnecting = False
             if self.gui_callback:
                 self.gui_callback("Discord: Reconnected successfully")
-            # Restore presence if we had one
-            self._restore_presence()
             return True
         except Exception as e:
             self.connected = False
+            if self.rpc:
+                try:
+                    self.rpc.close()
+                except Exception:
+                    pass
             self.rpc = None
             self.reconnecting = False
             if self.gui_callback:
@@ -276,7 +282,10 @@ class DiscordPresence:
         """Restore the last known presence after reconnection"""
         if not self.connected or not self.rpc:
             return
-        if self.current_song and self.current_artist:
+        if self._is_idle:
+            # Let the reconnect handler handle a failed idle update.
+            self._send_idle_presence()
+        elif self.current_song and self.current_artist:
             try:
                 details = f"{self.current_song}"[:128]
                 state_text = f"by {self.current_artist}"[:128]
@@ -309,6 +318,7 @@ class DiscordPresence:
             return
 
         # Store the info even if not connected (for restore after reconnect)
+        self._is_idle = False
         self.current_artist = artist
         self.current_song = song
         self.start_time = time.time()
@@ -349,6 +359,7 @@ class DiscordPresence:
     def clear_presence(self):
         """Clear Discord presence (when returning to menu)"""
         # Clear stored state regardless of connection
+        self._is_idle = False
         self.current_song = None
         self.current_artist = None
         self.start_time = None
@@ -367,6 +378,12 @@ class DiscordPresence:
         if not self.enabled:
             return
 
+        # Record the menu transition before reconnecting, even during backoff.
+        self._is_idle = True
+        self.current_song = None
+        self.current_artist = None
+        self.start_time = None
+
         # Try to reconnect if not connected
         if not self.connected or not self.rpc:
             self._try_reconnect()
@@ -374,12 +391,16 @@ class DiscordPresence:
                 return
 
         try:
-            self.rpc.update(
-                details="Browsing Songs",
-                state="In Menus",
-                large_image="guitar",
-                large_text="Rock Band 3 Deluxe"
-            )
+            self._send_idle_presence()
         except Exception:
             self.connected = False
             self._try_reconnect()
+
+    def _send_idle_presence(self):
+        """Publish the same menu display for both updates and reconnects."""
+        self.rpc.update(
+            details="Browsing Songs",
+            state="In Menus",
+            large_image="guitar",
+            large_text="Rock Band 3 Deluxe"
+        )
