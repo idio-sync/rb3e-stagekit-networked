@@ -22,11 +22,21 @@ class FakeListener:
         self.start_calls = 0
         self.stop_calls = 0
         self.webhook_url = None
+        self.webhook_sender = None
         self.start_error = None
         self.stopped_at = None
 
     def set_webhook_url(self, url):
         self.webhook_url = url
+
+    def set_webhook_sender(self, sender):
+        self.webhook_sender = sender
+
+    def trigger_webhook(self, event_type, value):
+        """Mirror the real listener: build the payload, hand it to the sender."""
+        payload = {"type": "state", "status": value} if event_type == "state"             else {"type": "song", "name": value}
+        if self.webhook_sender is not None:
+            self.webhook_sender(payload)
 
     def prepare_start(self):
         return object()
@@ -555,6 +565,95 @@ class CommandTests(ServerTestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "rate-limited")
         self.assertEqual(len(self.transports[0].commands), 1)
+
+
+class OutboundTests(ServerTestCase):
+    def test_no_worker_is_built_without_a_webhook(self):
+        self.assertIsNone(self.make().outbound)
+
+    def test_the_listener_delivers_through_the_worker(self):
+        application = self.make(webhook_url="http://ha.example/hook")
+        sent = []
+        application.outbound._send = lambda payload: sent.append(payload)
+        application.start()
+
+        application.listener.trigger_webhook("state", "playing")
+        application.listener.trigger_webhook("song", "Roundabout")
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(sent) < 2:
+            time.sleep(0.005)
+        self.assertEqual(sent, [{"type": "state", "status": "playing"},
+                                {"type": "song", "name": "Roundabout"}])
+
+    def test_a_hanging_endpoint_cannot_block_the_receive_path(self):
+        """trigger_webhook runs on the UDP receiver; it must return at once."""
+        application = self.make(webhook_url="http://ha.example/hook",
+                                webhook_capacity=2)
+        release = threading.Event()
+        application.outbound._send = lambda payload: release.wait(10)
+        self.addCleanup(release.set)
+        application.start()
+
+        began = time.monotonic()
+        for _ in range(50):
+            application.listener.trigger_webhook("song", "Roundabout")
+        elapsed = time.monotonic() - began
+
+        self.assertLess(elapsed, 1.0)
+        self.assertGreater(application.outbound.counters()["dropped"], 0)
+
+    def test_a_burst_of_drops_is_reported_once_with_a_running_total(self):
+        """One line per dropped event would flush the activity log."""
+        application = self.make(webhook_url="http://ha.example/hook",
+                                webhook_capacity=1)
+        release = threading.Event()
+        application.outbound._send = lambda payload: release.wait(10)
+        self.addCleanup(release.set)
+        application.start()
+
+        for _ in range(30):
+            application.listener.trigger_webhook("song", "Roundabout")
+        self.drain(application)
+
+        warnings = [entry["message"]
+                    for entry in application.state.snapshot()["log"]
+                    if entry["level"] == "warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("dropped so far", warnings[0])
+
+    def test_a_later_burst_is_reported_again(self):
+        application = self.make(webhook_url="http://ha.example/hook",
+                                webhook_capacity=1)
+        release = threading.Event()
+        application.outbound._send = lambda payload: release.wait(10)
+        self.addCleanup(release.set)
+        application.start()
+
+        for _ in range(5):
+            application.listener.trigger_webhook("song", "One")
+        self.clock.advance(31)
+        for _ in range(5):
+            application.listener.trigger_webhook("song", "Two")
+        self.drain(application)
+
+        warnings = [entry["message"]
+                    for entry in application.state.snapshot()["log"]
+                    if entry["level"] == "warning"]
+        self.assertEqual(len(warnings), 2)
+
+    def test_the_report_describes_delivery_health(self):
+        application = self.make(webhook_url="http://ha.example/hook")
+
+        report = application.integration_report()
+
+        self.assertTrue(report["webhook"]["configured"])
+        self.assertIn("dropped", report["webhook"])
+        self.assertIn("accepted", report["queue"])
+
+    def test_the_report_says_when_no_webhook_is_configured(self):
+        self.assertFalse(
+            self.make().integration_report()["webhook"]["configured"])
 
 
 class GameplayPathTests(ServerTestCase):

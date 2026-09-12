@@ -25,6 +25,16 @@ from .protocol import (
 )
 
 
+def _webhook_payload(event_type, value):
+    """Build the Home Assistant payload. Its exact keys are matched by
+    automation templates, so they must not change."""
+    if event_type == "state":
+        return {"type": "state", "status": value}
+    if event_type == "song":
+        return {"type": "song", "name": value}
+    return None
+
+
 class UnifiedRB3EListener:
     """
     Single listener for all RB3Enhanced events.
@@ -77,6 +87,7 @@ class UnifiedRB3EListener:
 
         # Homeassistant connection
         self.webhook_url = None
+        self.webhook_sender = None
 
         # Video player components (set externally)
         self.youtube_searcher = None
@@ -533,18 +544,34 @@ class UnifiedRB3EListener:
         """Set the Home Assistant Webhook URL"""
         self.webhook_url = url
 
+    def set_webhook_sender(self, sender):
+        """Deliver webhook payloads through ``sender`` instead of a new thread.
+
+        The sender receives the same payload dictionary and decides how to
+        deliver it, which lets the server queue and retry. Leaving it unset
+        keeps the original per-event thread, so the desktop is unchanged.
+        """
+        self.webhook_sender = sender
+
     def trigger_webhook(self, event_type, value):
         """Send webhook to Home Assistant in a separate thread"""
+        sender = getattr(self, "webhook_sender", None)
+        if sender is not None:
+            payload = _webhook_payload(event_type, value)
+            if payload is not None:
+                try:
+                    sender(payload)
+                except Exception:
+                    # Delivery is the sender's problem; the receiver keeps going.
+                    pass
+            return
+
         if not self.webhook_url:
             return
 
         def _send():
             try:
-                payload = {}
-                if event_type == "state":
-                    payload = {"type": "state", "status": value}
-                elif event_type == "song":
-                    payload = {"type": "song", "name": value}
+                payload = _webhook_payload(event_type, value) or {}
 
                 # Send POST request
                 requests.post(self.webhook_url, json=payload, timeout=2)

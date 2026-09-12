@@ -42,7 +42,7 @@ MAX_BODY_BYTES = 64 * 1024
 # missing endpoint, and the difference tells a client which mistake it made.
 READ_ONLY_ROUTES = frozenset({
     "/api/health", "/api/state", "/api/devices", "/api/songs", "/api/events",
-    "/api/stagekit/scenes", "/api/history",
+    "/api/stagekit/scenes", "/api/history", "/api/integrations",
 })
 
 
@@ -146,6 +146,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._json(200, {"scenes": self.application.scenes()})
         if route == "/api/history":
             return self._json(200, self._history(query))
+        if route == "/api/integrations":
+            return self._json(200, self.application.integration_report())
         if route == "/api/events":
             return self._stream(query)
         return self._error(404, "Unknown endpoint: %s" % parsed.path)
@@ -156,6 +158,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         route = parsed.path.rstrip("/") or "/"
 
         if not self._authorised(query):
+            # Read the body before refusing. Answering while the client is
+            # still sending can reset the connection, so it never sees why.
+            self._discard_body()
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Bearer realm="rb3dashboard"')
             self.send_header("Content-Length", "0")
@@ -175,6 +180,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._stagekit_scene()
         if route == "/api/stagekit/stop":
             return self._stagekit_stop()
+        self._discard_body()
         if route in READ_ONLY_ROUTES:
             return self._error(405, "This endpoint is read-only")
         return self._error(404, "Unknown endpoint: %s" % parsed.path)
@@ -186,6 +192,23 @@ class ApiHandler(BaseHTTPRequestHandler):
         self._error(405, "This endpoint does not accept DELETE")
 
     # -- request bodies -------------------------------------------------
+
+    def _discard_body(self):
+        """Consume a request body that will not be used, so the client is not
+        left writing into a connection that has already been answered."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return
+        if length > MAX_BODY_BYTES:
+            self.close_connection = True
+            return
+        try:
+            self.rfile.read(length)
+        except OSError:
+            self.close_connection = True
 
     def _read_json_body(self):
         """Return the decoded body, or None after sending an error response."""

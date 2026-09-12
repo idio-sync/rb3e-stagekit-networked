@@ -20,10 +20,14 @@ import os
 import threading
 import time
 
+# How often a continuing burst of dropped webhooks is worth another log line.
+WEBHOOK_DROP_REPORT_SECONDS = 30.0
+
 from ..listener import UnifiedRB3EListener
 from ..song_browser import SongBrowser
 from ..stagekit import StageKitTransport
 from .dispatch import HeadlessDispatcher
+from .outbound import OutboundWorker, WebhookSender
 from .ratelimit import RateLimiter
 from .scenes import SceneRunner, scene_listing
 from .store import SessionStore, StoreError
@@ -152,6 +156,9 @@ class ServerApplication:
                  command_burst=20.0,
                  history_enabled=True,
                  data_dir="",
+                 webhook_capacity=100,
+                 webhook_retries=2,
+                 webhook_timeout=5.0,
                  webhook_url="",
                  device_offline_after=10.0,
                  device_forget_after=30.0,
@@ -175,6 +182,9 @@ class ServerApplication:
         # that two concurrent refreshes would interleave.
         self._console_lock = threading.Lock()
         self._command_limiter = RateLimiter(rate=command_rate, burst=command_burst)
+        self._drop_lock = threading.Lock()
+        self._dropped_webhooks = 0
+        self._dropped_reported_at = None
         self._scenes = SceneRunner(
             self._send_command_unlimited,
             on_error=lambda error: self.dispatcher.post(
@@ -194,8 +204,20 @@ class ServerApplication:
             song_ended_callback=self._post(self._on_song_ended),
             game_info_callback=self._post(self._on_game_info),
         )
-        # Existing webhook behaviour is preserved; Stage 2 replaces its
-        # delivery path in the outbound integration task.
+        # When a webhook is configured, delivery moves onto one bounded worker.
+        # The listener still decides when an event fires and builds the same
+        # payload, so existing Home Assistant automations keep matching.
+        self.outbound = None
+        if webhook_url:
+            self.outbound = OutboundWorker(
+                WebhookSender(webhook_url, timeout=webhook_timeout),
+                capacity=webhook_capacity,
+                retries=webhook_retries,
+                on_drop=lambda payload: self._report_webhook_drop(),
+                on_error=lambda error: self._record_log(
+                    "Home Assistant delivery failed: %s" % error,
+                    level="warning"))
+            self.listener.set_webhook_sender(self.outbound.submit)
         self.listener.set_webhook_url(webhook_url)
 
         self.songs = song_browser_factory(
@@ -245,6 +267,8 @@ class ServerApplication:
         supervisor.add("dispatcher", self.dispatcher.start, self.dispatcher.close)
         if self.history is not None:
             supervisor.add("history", self._open_history, self._close_history)
+        if self.outbound is not None:
+            supervisor.add("outbound", self.outbound.start, self.outbound.close)
         if self.transport is not None:
             supervisor.add("stagekit", self.transport.start, self.transport.stop)
         supervisor.add("listener", self._listener_service.start,
@@ -274,6 +298,15 @@ class ServerApplication:
     def owns_discovery(self):
         """Whether this process claims Pico telemetry by sending discovery."""
         return self._owns_discovery
+
+    def integration_report(self):
+        """Delivery health for outbound integrations, for the API."""
+        report = {"webhook": {"configured": self.outbound is not None}}
+        if self.outbound is not None:
+            report["webhook"].update(self.outbound.counters())
+            report["webhook"]["pending"] = self.outbound.pending()
+        report["queue"] = self.dispatcher.counters()
+        return report
 
     # -- console ---------------------------------------------------------
 
@@ -473,6 +506,23 @@ class ServerApplication:
             self.state.update_game(screen=value)
 
     # -- failure reporting ----------------------------------------------
+
+    def _report_webhook_drop(self):
+        """Report drops as a running total rather than one line each.
+
+        A stalled endpoint drops every event of a song. Logging each one fills
+        the bounded activity log and pushes out everything worth reading.
+        """
+        with self._drop_lock:
+            self._dropped_webhooks += 1
+            now = self._clock()
+            if self._dropped_reported_at is not None and                     now - self._dropped_reported_at < WEBHOOK_DROP_REPORT_SECONDS:
+                return
+            self._dropped_reported_at = now
+            total = self._dropped_webhooks
+        self._record_log(
+            "Home Assistant is not keeping up: %d update%s dropped so far"
+            % (total, "" if total == 1 else "s"), level="warning")
 
     def _on_dropped_work(self, callback, args):
         self.state.append_log(

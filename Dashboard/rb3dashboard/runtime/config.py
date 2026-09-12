@@ -105,6 +105,9 @@ _FIELDS = {
     "ha_webhook_url": (_as_text, ""),
     "console_address": (_as_text, ""),
     "history_enabled": (_as_bool, True),
+    "webhook_capacity": (_as_int, 100),
+    "webhook_retries": (_as_int, 2),
+    "webhook_timeout": (_as_float, 5.0),
     "data_dir": (_as_text, ""),
     "device_offline_after": (_as_float, 10.0),
     "device_forget_after": (_as_float, 30.0),
@@ -212,7 +215,13 @@ class ServerConfig:
             if values[name] <= 0:
                 raise ConfigError("%s must be greater than zero, not %s"
                                   % (name, values[name]))
-        for name in ("queue_capacity", "log_capacity"):
+        if values["webhook_retries"] < 0:
+            raise ConfigError("webhook_retries cannot be negative, not %d"
+                              % values["webhook_retries"])
+        if values["webhook_timeout"] <= 0:
+            raise ConfigError("webhook_timeout must be greater than zero, not %s"
+                              % values["webhook_timeout"])
+        for name in ("queue_capacity", "log_capacity", "webhook_capacity"):
             if values[name] < 1:
                 raise ConfigError("%s must be at least 1, not %d"
                                   % (name, values[name]))
@@ -253,6 +262,9 @@ class ServerConfig:
             "command_burst": self.command_burst,
             "history_enabled": self.history_enabled,
             "data_dir": self.data_dir,
+            "webhook_capacity": self.webhook_capacity,
+            "webhook_retries": self.webhook_retries,
+            "webhook_timeout": self.webhook_timeout,
         }
 
     def describe(self):
