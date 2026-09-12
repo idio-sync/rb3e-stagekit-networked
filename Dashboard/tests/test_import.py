@@ -179,5 +179,43 @@ class IntegrationsImportTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class SongBrowserImportTests(unittest.TestCase):
+    def test_song_browser_import_needs_no_desktop_or_startup_services(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import sys
+            import threading
+            from unittest.mock import patch
+
+            class BlockDesktopImports(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if (fullname == 'dashboard'
+                            or fullname == 'rb3dashboard.video'
+                            or fullname.split('.')[0] in {'tkinter', 'PIL'}):
+                        raise AssertionError('Desktop dependency: ' + fullname)
+
+            def block_side_effects(event, args):
+                if event in {'socket.__new__', 'subprocess.Popen', 'os.system'}:
+                    raise AssertionError('Startup side effect: ' + event)
+
+            sys.meta_path.insert(0, BlockDesktopImports())
+            sys.addaudithook(block_side_effects)
+            with patch.object(threading.Thread, 'start',
+                              side_effect=AssertionError('Started a thread')):
+                from rb3dashboard.song_browser import SongBrowser
+                browser = SongBrowser()
+                assert browser.songs_data == []
+                assert browser.artists_index == {}
+            """)
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
