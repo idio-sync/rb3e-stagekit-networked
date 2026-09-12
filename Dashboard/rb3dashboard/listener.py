@@ -45,7 +45,7 @@ class UnifiedRB3EListener:
     def __init__(self, gui_callback=None, ip_detected_callback=None,
                  song_update_callback=None, stagekit_callback=None,
                  song_started_callback=None, song_ended_callback=None,
-                 game_info_callback=None):
+                 game_info_callback=None, packet_callback=None):
         self.gui_callback = gui_callback
         self.ip_detected_callback = ip_detected_callback
         self.song_update_callback = song_update_callback
@@ -53,6 +53,8 @@ class UnifiedRB3EListener:
         self.song_started_callback = song_started_callback
         self.song_ended_callback = song_ended_callback
         self.game_info_callback = game_info_callback
+        # Receives the untouched datagram of each console packet, for relaying.
+        self.packet_callback = packet_callback
 
         self.sock = None
         self.running = False
@@ -222,6 +224,18 @@ class UnifiedRB3EListener:
                         self.gui_callback(f"RB3Enhanced detected at: {sender_ip}")
                     if self.ip_detected_callback:
                         self.ip_detected_callback(sender_ip)
+
+                # Forward the untouched datagram for anyone relaying it. Only
+                # console traffic is offered: a relayed packet reaches a peer
+                # from the relay's address rather than the console's, so it is
+                # never offered again and cannot loop.
+                if is_console_packet and self.packet_callback is not None:
+                    try:
+                        self.packet_callback(data)
+                    except Exception:
+                        # Relaying is downstream of receiving and must never
+                        # interrupt it.
+                        pass
 
             packet_data = payload.rstrip(b'\x00').decode('utf-8', errors='ignore')
 

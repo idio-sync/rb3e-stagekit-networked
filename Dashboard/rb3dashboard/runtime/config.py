@@ -100,6 +100,7 @@ _FIELDS = {
     "auth_token": (_as_text, ""),
     "stagekit_enabled": (_as_bool, False),
     "discovery_targets": (_as_list, []),
+    "relay_targets": (_as_list, []),
     "discovery_enabled": (_as_bool, True),
     "discovery_interval": (_as_float, 5.0),
     "ha_webhook_url": (_as_text, ""),
@@ -265,6 +266,7 @@ class ServerConfig:
             "webhook_capacity": self.webhook_capacity,
             "webhook_retries": self.webhook_retries,
             "webhook_timeout": self.webhook_timeout,
+            "relay_targets": self.relay_targets,
         }
 
     def describe(self):

@@ -11,6 +11,7 @@ class FakeListener:
     """Stand in for UnifiedRB3EListener without binding a socket."""
 
     def __init__(self, **callbacks):
+        callbacks.setdefault("packet_callback", None)
         self.callbacks = callbacks
         self.running = False
         self.receiving = threading.Event()
@@ -654,6 +655,33 @@ class OutboundTests(ServerTestCase):
     def test_the_report_says_when_no_webhook_is_configured(self):
         self.assertFalse(
             self.make().integration_report()["webhook"]["configured"])
+
+
+class RelayTests(ServerTestCase):
+    def test_no_relay_is_built_without_targets(self):
+        application = self.make()
+
+        self.assertIsNone(application.relay)
+        self.assertIsNone(application.listener.callbacks["packet_callback"])
+
+    def test_configured_targets_are_relayed_to(self):
+        application = self.make(relay_targets=["192.0.2.20", "192.0.2.21:31070"])
+
+        self.assertEqual(application.relay.targets,
+                         (("192.0.2.20", 21070), ("192.0.2.21", 31070)))
+        self.assertIsNotNone(application.listener.callbacks["packet_callback"])
+
+    def test_the_report_describes_the_relay(self):
+        application = self.make(relay_targets=["192.0.2.20"])
+
+        report = application.integration_report()
+
+        self.assertTrue(report["relay"]["configured"])
+        self.assertEqual(report["relay"]["targets"], ["192.0.2.20:21070"])
+
+    def test_the_report_says_when_no_relay_is_configured(self):
+        self.assertFalse(
+            self.make().integration_report()["relay"]["configured"])
 
 
 class GameplayPathTests(ServerTestCase):

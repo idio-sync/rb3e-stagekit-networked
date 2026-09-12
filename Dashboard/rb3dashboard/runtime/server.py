@@ -29,6 +29,7 @@ from ..stagekit import StageKitTransport
 from .dispatch import HeadlessDispatcher
 from .outbound import OutboundWorker, WebhookSender
 from .ratelimit import RateLimiter
+from .relay import EventRelay
 from .scenes import SceneRunner, scene_listing
 from .store import SessionStore, StoreError
 from .state import ApplicationState
@@ -156,6 +157,7 @@ class ServerApplication:
                  command_burst=20.0,
                  history_enabled=True,
                  data_dir="",
+                 relay_targets=None,
                  webhook_capacity=100,
                  webhook_retries=2,
                  webhook_timeout=5.0,
@@ -196,6 +198,16 @@ class ServerApplication:
             on_drop=self._on_dropped_work,
         ) if dispatcher is None else dispatcher
 
+        # Off unless targets are named. RB3Enhanced broadcasts by default, so
+        # a relay is only needed where BroadcastTarget points the console at a
+        # single host.
+        self.relay = None
+        if relay_targets:
+            self.relay = EventRelay(
+                relay_targets,
+                on_error=lambda error: self._record_log(
+                    "Relay send failed: %s" % error, level="warning"))
+
         self.listener = listener_factory(
             gui_callback=self._post(self._record_log),
             ip_detected_callback=self._post(self.state.record_console_activity),
@@ -203,6 +215,10 @@ class ServerApplication:
             song_started_callback=self._post(self._on_song_started),
             song_ended_callback=self._post(self._on_song_ended),
             game_info_callback=self._post(self._on_game_info),
+            # Relaying forwards the untouched datagram on the receive thread.
+            # Queueing it would add latency to gameplay lighting, which is the
+            # traffic a relay exists to carry.
+            packet_callback=None if self.relay is None else self.relay.forward,
         )
         # When a webhook is configured, delivery moves onto one bounded worker.
         # The listener still decides when an event fires and builds the same
@@ -269,6 +285,10 @@ class ServerApplication:
             supervisor.add("history", self._open_history, self._close_history)
         if self.outbound is not None:
             supervisor.add("outbound", self.outbound.start, self.outbound.close)
+        if self.relay is not None:
+            # Before the listener, so the relay socket is open for the first
+            # packet and closed only after reception has stopped.
+            supervisor.add("relay", self.relay.start, self.relay.stop)
         if self.transport is not None:
             supervisor.add("stagekit", self.transport.start, self.transport.stop)
         supervisor.add("listener", self._listener_service.start,
@@ -305,6 +325,11 @@ class ServerApplication:
         if self.outbound is not None:
             report["webhook"].update(self.outbound.counters())
             report["webhook"]["pending"] = self.outbound.pending()
+        report["relay"] = {"configured": self.relay is not None}
+        if self.relay is not None:
+            report["relay"].update(self.relay.counters())
+            report["relay"]["targets"] = ["%s:%d" % target
+                                          for target in self.relay.targets]
         report["queue"] = self.dispatcher.counters()
         return report
 
