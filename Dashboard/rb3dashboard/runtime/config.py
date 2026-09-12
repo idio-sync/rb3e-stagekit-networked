@@ -99,6 +99,8 @@ _FIELDS = {
     "auth_token": (_as_text, ""),
     "stagekit_enabled": (_as_bool, False),
     "discovery_targets": (_as_list, []),
+    "discovery_enabled": (_as_bool, True),
+    "discovery_interval": (_as_float, 5.0),
     "ha_webhook_url": (_as_text, ""),
     "data_dir": (_as_text, ""),
     "device_offline_after": (_as_float, 10.0),
@@ -200,7 +202,8 @@ class ServerConfig:
                 raise ConfigError(
                     "%s must be between 1 and 65535, not %d" % (name, values[name]))
         for name in ("device_offline_after", "device_forget_after",
-                     "console_timeout", "maintenance_interval"):
+                     "console_timeout", "maintenance_interval",
+                     "discovery_interval"):
             if values[name] <= 0:
                 raise ConfigError("%s must be greater than zero, not %s"
                                   % (name, values[name]))
@@ -232,6 +235,10 @@ class ServerConfig:
             "console_timeout": self.console_timeout,
             "maintenance_interval": self.maintenance_interval,
             "queue_capacity": self.queue_capacity,
+            "discovery_targets": self.discovery_targets,
+            "discovery_enabled": self.discovery_enabled,
+            "discovery_interval": self.discovery_interval,
+            "telemetry_address": self.telemetry_address,
         }
 
     def describe(self):

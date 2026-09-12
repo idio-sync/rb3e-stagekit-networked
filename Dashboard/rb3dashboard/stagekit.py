@@ -39,9 +39,22 @@ class StageKitTransport:
     and stop event so a late old receiver cannot affect a restarted session.
     """
 
-    def __init__(self, telemetry_callback=None, gui_callback=None):
+    def __init__(self, telemetry_callback=None, gui_callback=None,
+                 discovery_targets=None, discovery_enabled=True,
+                 discovery_interval=_DISCOVERY_INTERVAL,
+                 bind_address="0.0.0.0"):
+        if discovery_interval <= 0:
+            raise ValueError("Discovery interval must be greater than zero")
+        if discovery_targets is not None:
+            discovery_targets = list(discovery_targets)
+            if any(not str(target).strip() for target in discovery_targets):
+                raise ValueError("Discovery targets must not be blank")
         self.telemetry_callback = telemetry_callback
         self.gui_callback = gui_callback
+        self._discovery_targets = discovery_targets
+        self._discovery_enabled = discovery_enabled
+        self._discovery_interval = discovery_interval
+        self._bind_address = bind_address
         self._lock = threading.RLock()
         self._control = None
         self._telemetry = None
@@ -81,11 +94,11 @@ class StageKitTransport:
                 telemetry = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 telemetry.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 telemetry.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                telemetry.bind(("0.0.0.0", TELEMETRY_PORT))
+                telemetry.bind((self._bind_address, TELEMETRY_PORT))
                 telemetry.settimeout(0.1)
-                subnet = self._subnet_broadcast()
+                targets = self._resolve_targets()
                 thread = threading.Thread(
-                    target=self._listen, args=(telemetry, stop_event, subnet),
+                    target=self._listen, args=(telemetry, stop_event, targets),
                     name="StageKitTelemetry", daemon=True)
                 self._control = control
                 self._telemetry = telemetry
@@ -113,6 +126,32 @@ class StageKitTransport:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
 
+    def owns_discovery(self):
+        """Whether this transport claims Pico telemetry by sending discovery.
+
+        Each Pico remembers a single dashboard address, so only one process on
+        the network should own discovery at a time.
+        """
+        return bool(self._discovery_enabled)
+
+    def is_running(self):
+        with self._lock:
+            return self._stop_event is not None
+
+    def _resolve_targets(self):
+        """Return the discovery destinations for one session.
+
+        Configured targets are used exactly as given, because a server can have
+        several interfaces and a guessed /24 does not survive that. Without
+        configuration the original desktop behaviour is preserved: the global
+        broadcast plus a /24 inferred from the default route.
+        """
+        if not self._discovery_enabled:
+            return ()
+        if self._discovery_targets is not None:
+            return tuple(self._discovery_targets)
+        return ("255.255.255.255", self._subnet_broadcast())
+
     def _log(self, message):
         if self.gui_callback is not None:
             try:
@@ -138,18 +177,18 @@ class StageKitTransport:
         self._log(message)
         return success
 
-    def _listen(self, telemetry, stop_event, subnet):
+    def _listen(self, telemetry, stop_event, targets):
         next_discovery = time.monotonic()
         while not stop_event.is_set():
             now = time.monotonic()
-            if now >= next_discovery:
-                for target in ("255.255.255.255", subnet):
+            if targets and now >= next_discovery:
+                for target in targets:
                     if target is not None:
                         try:
                             telemetry.sendto(_DISCOVERY_PACKET, (target, TELEMETRY_PORT))
                         except OSError:
                             pass
-                next_discovery = now + _DISCOVERY_INTERVAL
+                next_discovery = now + self._discovery_interval
             try:
                 data, address = telemetry.recvfrom(1024)
             except socket.timeout:

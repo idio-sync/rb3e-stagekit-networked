@@ -131,6 +131,10 @@ class ServerApplication:
                  listener_factory=UnifiedRB3EListener,
                  transport_factory=StageKitTransport,
                  stagekit_enabled=False,
+                 discovery_targets=None,
+                 discovery_enabled=True,
+                 discovery_interval=5.0,
+                 telemetry_address="0.0.0.0",
                  webhook_url="",
                  device_offline_after=10.0,
                  device_forget_after=30.0,
@@ -148,6 +152,7 @@ class ServerApplication:
         self._device_forget_after = device_forget_after
         self._console_timeout = console_timeout
         self._stagekit_enabled = stagekit_enabled
+        self._owns_discovery = bool(stagekit_enabled and discovery_enabled)
 
         self.state = ApplicationState(clock=clock) if state is None else state
         self.dispatcher = HeadlessDispatcher(
@@ -172,6 +177,13 @@ class ServerApplication:
             self.transport = transport_factory(
                 telemetry_callback=self._post(self.state.record_device),
                 gui_callback=self._post(self._record_log),
+                # Configured targets replace the desktop's inferred /24, which
+                # cannot pick the right interface on a multi-homed server.
+                discovery_targets=(list(discovery_targets)
+                                   if discovery_targets else None),
+                discovery_enabled=discovery_enabled,
+                discovery_interval=discovery_interval,
+                bind_address=telemetry_address,
             )
 
         self._listener_service = ListenerService(
@@ -209,6 +221,10 @@ class ServerApplication:
     def is_running(self):
         return self._supervisor.is_running()
 
+    def owns_discovery(self):
+        """Whether this process claims Pico telemetry by sending discovery."""
+        return self._owns_discovery
+
     # -- commands -------------------------------------------------------
 
     def send_stagekit_command(self, left, right, target_ip=None):
@@ -235,8 +251,18 @@ class ServerApplication:
         else:
             self.state.expire_console(self._console_timeout)
         self.state.update_game(state=self.listener.game_state)
-        self.state.expire_devices(self._device_offline_after)
+        for address in self.state.expire_devices(self._device_offline_after):
+            self._report_lost_device(address)
         self._forget_silent_devices()
+
+    def _report_lost_device(self, address):
+        message = "Stage Kit device %s stopped reporting" % address
+        if self._owns_discovery:
+            # A Pico keeps one dashboard address. Losing a device while we are
+            # discovering usually means another dashboard claimed it.
+            message += (". If it is still powered on, another dashboard may be "
+                        "sending discovery and now owns its telemetry")
+        self._record_log(message, level="warning")
 
     def _forget_silent_devices(self):
         cutoff = self._clock() - self._device_forget_after

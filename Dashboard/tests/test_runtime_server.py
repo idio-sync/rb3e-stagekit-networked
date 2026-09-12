@@ -57,9 +57,15 @@ class FakeListener:
 
 
 class FakeTransport:
-    def __init__(self, telemetry_callback=None, gui_callback=None):
+    def __init__(self, telemetry_callback=None, gui_callback=None,
+                 discovery_targets=None, discovery_enabled=True,
+                 discovery_interval=5.0, bind_address="0.0.0.0"):
         self.telemetry_callback = telemetry_callback
         self.gui_callback = gui_callback
+        self.discovery_targets = discovery_targets
+        self.discovery_enabled = discovery_enabled
+        self.discovery_interval = discovery_interval
+        self.bind_address = bind_address
         self.started = False
         self.start_calls = 0
         self.stop_calls = 0
@@ -372,6 +378,70 @@ class MaintenanceTests(ServerTestCase):
         application.tick()
 
         self.assertTrue(application.is_running())
+
+
+class DiscoveryOwnershipTests(ServerTestCase):
+    def test_configured_targets_reach_the_transport(self):
+        self.started(stagekit_enabled=True,
+                     discovery_targets=["192.0.2.255"],
+                     discovery_interval=2.5,
+                     telemetry_address="192.0.2.10")
+
+        transport = self.transports[0]
+        self.assertEqual(transport.discovery_targets, ["192.0.2.255"])
+        self.assertEqual(transport.discovery_interval, 2.5)
+        self.assertEqual(transport.bind_address, "192.0.2.10")
+
+    def test_empty_targets_fall_back_to_the_transport_default(self):
+        self.started(stagekit_enabled=True, discovery_targets=[])
+
+        self.assertIsNone(self.transports[0].discovery_targets)
+
+    def test_a_server_without_stage_kit_never_owns_discovery(self):
+        self.assertFalse(self.started().owns_discovery())
+
+    def test_a_passive_server_does_not_own_discovery(self):
+        application = self.started(stagekit_enabled=True,
+                                   discovery_enabled=False)
+
+        self.assertFalse(application.owns_discovery())
+        self.assertFalse(self.transports[0].discovery_enabled)
+
+    def test_an_owning_server_reports_ownership(self):
+        self.assertTrue(
+            self.started(stagekit_enabled=True).owns_discovery())
+
+    def test_losing_a_device_while_owning_discovery_warns_about_competition(self):
+        """A Pico keeps one dashboard address, so a loss has a likely cause."""
+        application = self.make(stagekit_enabled=True, device_offline_after=10)
+        application.start()
+        self.transports[0].telemetry_callback("192.0.2.7", {"name": "Pico"})
+        self.drain(application)
+
+        self.clock.advance(11)
+        application.tick()
+
+        messages = [entry["message"]
+                    for entry in application.state.snapshot()["log"]]
+        warning = [text for text in messages if "192.0.2.7" in text]
+        self.assertEqual(len(warning), 1)
+        self.assertIn("another dashboard", warning[0])
+
+    def test_a_passive_server_does_not_blame_a_competing_dashboard(self):
+        application = self.make(stagekit_enabled=True, discovery_enabled=False,
+                                device_offline_after=10)
+        application.start()
+        self.transports[0].telemetry_callback("192.0.2.7", {"name": "Pico"})
+        self.drain(application)
+
+        self.clock.advance(11)
+        application.tick()
+
+        messages = [entry["message"]
+                    for entry in application.state.snapshot()["log"]]
+        warning = [text for text in messages if "192.0.2.7" in text]
+        self.assertEqual(len(warning), 1)
+        self.assertNotIn("another dashboard", warning[0])
 
 
 class CommandTests(ServerTestCase):
