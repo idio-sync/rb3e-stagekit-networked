@@ -195,11 +195,11 @@ The executable will be created in the `dist/` directory.
 
 ### Development tests
 
-Run the listener tests from the repository root:
+Run the dashboard tests from the repository root:
 
 ```bash
 cd Dashboard
-python -m pip install requests
+python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 

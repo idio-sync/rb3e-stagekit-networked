@@ -1,4 +1,4 @@
-"""The listener must be usable without the desktop application."""
+"""Reusable dashboard modules must not start the desktop application."""
 
 from pathlib import Path
 import subprocess
@@ -42,6 +42,51 @@ class ListenerImportTests(unittest.TestCase):
             timeout=15,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class VideoImportTests(unittest.TestCase):
+    def test_video_import_needs_no_ui_or_startup_services(self):
+        script = textwrap.dedent("""\
+            import importlib.abc
+            import sys
+            import threading
+            from unittest.mock import patch
+
+            without_screeninfo = sys.argv[1] == 'True'
+
+            class BlockUIImports(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.split('.')[0] in {'dashboard', 'tkinter', 'PIL', 'pypresence'}:
+                        raise AssertionError('UI dependency: ' + fullname)
+                    if without_screeninfo and fullname.split('.')[0] == 'screeninfo':
+                        raise ImportError('Simulated missing optional screeninfo')
+
+            def block_side_effects(event, args):
+                if event in {'socket.__new__', 'subprocess.Popen', 'os.system'}:
+                    raise AssertionError('Startup side effect: ' + event)
+
+            sys.meta_path.insert(0, BlockUIImports())
+            sys.addaudithook(block_side_effects)
+            with patch.object(threading.Thread, 'start',
+                              side_effect=AssertionError('Started a thread')):
+                from rb3dashboard.video import (
+                    YouTubeSearcher, StreamExtractor, VLCPlayer, SCREENINFO_AVAILABLE,
+                )
+                assert YouTubeSearcher('').search_video('Artist', 'Song') is None
+                StreamExtractor()
+                if without_screeninfo:
+                    assert not SCREENINFO_AVAILABLE
+            """)
+        for without_screeninfo in (False, True):
+            with self.subTest(without_screeninfo=without_screeninfo):
+                result = subprocess.run(
+                    [sys.executable, '-c', script, str(without_screeninfo)],
+                    cwd=Path(__file__).resolve().parents[1],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
