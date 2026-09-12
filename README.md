@@ -193,6 +193,20 @@ pyinstaller dashboard.spec --clean
 
 The executable will be created in the `dist/` directory.
 
+### Development tests
+
+Run the listener tests from the repository root:
+
+```bash
+cd Dashboard
+python -m pip install requests
+python -m unittest discover -s tests -v
+```
+
+The tests use Python's standard-library test runner and fake network/media
+dependencies. They require no console, lights, desktop display, or API credentials.
+The executable build workflow runs them before packaging on each platform.
+
 ---
 
 ## ⚙️ Configuration

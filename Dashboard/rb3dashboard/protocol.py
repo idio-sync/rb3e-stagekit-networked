@@ -1,0 +1,22 @@
+"""RB3E network ports and wire protocol constants."""
+
+# --- CONFIGURATION ---
+TELEMETRY_PORT = 21071        # Port to listen for Pico telemetry
+RB3E_PORT = 21070             # Port for RB3Enhanced events (game + commands)
+
+# RB3E Protocol Constants
+RB3E_EVENTS_MAGIC = 0x52423345
+RB3E_EVENTS_PROTOCOL = 0
+
+# RB3E Event Types
+RB3E_EVENT_ALIVE = 0
+RB3E_EVENT_STATE = 1
+RB3E_EVENT_SONG_NAME = 2
+RB3E_EVENT_SONG_ARTIST = 3
+RB3E_EVENT_SONG_SHORTNAME = 4
+RB3E_EVENT_SCORE = 5
+RB3E_EVENT_STAGEKIT = 6
+RB3E_EVENT_BAND_INFO = 7
+RB3E_EVENT_VENUE_NAME = 8
+RB3E_EVENT_SCREEN_NAME = 9
+RB3E_EVENT_DX_DATA = 10
