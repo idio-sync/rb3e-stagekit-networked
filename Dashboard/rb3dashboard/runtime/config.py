@@ -174,9 +174,10 @@ def _is_loopback(host):
 class ServerConfig:
     """Validated, fully explicit server settings."""
 
-    def __init__(self, **values):
+    def __init__(self, sources=None, **values):
         for name in _FIELDS:
             setattr(self, name, values[name])
+        self.sources = dict(sources or {name: "default" for name in _FIELDS})
 
     # -- loading --------------------------------------------------------
 
@@ -194,19 +195,23 @@ class ServerConfig:
         values.update(cls._read_environment(environ))
 
         parsed = {}
+        sources = {}
         for name, (parse, _) in _FIELDS.items():
             value = values[name]
             where, raw = value if isinstance(value, _Sourced) else (None, value)
             if where is None:
                 parsed[name] = raw
+                sources[name] = "default"
             else:
                 parsed[name] = parse(raw, where, name)
+                sources[name] = where
 
         if not parsed["data_dir"]:
             parsed["data_dir"] = _default_data_dir(environ)
+            sources["data_dir"] = "default"
 
         cls._validate(parsed)
-        return cls(**parsed)
+        return cls(sources=sources, **parsed)
 
     @staticmethod
     def _resolve_path(path, environ):
@@ -352,6 +357,18 @@ class ServerConfig:
             else:
                 parts.append("%s=%r" % (name, value))
         return " ".join(parts)
+
+    def describe_sources(self):
+        """One line per setting, with the value and where it came from."""
+        lines = []
+        for name, value in self.as_dict().items():
+            if name in _SECRET_FIELDS:
+                shown = "<set>" if value else "<unset>"
+            else:
+                shown = repr(value)
+            lines.append("%s = %s (%s)" % (name, shown,
+                                           self.sources.get(name, "default")))
+        return lines
 
 
 class _Sourced(tuple):

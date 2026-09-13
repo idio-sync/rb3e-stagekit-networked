@@ -213,6 +213,25 @@ class MainTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
 
+    def test_the_banner_reports_settings_and_identity(self):
+        lines = []
+        rb3server.log_startup_banner(self.config(),
+                                     log=lambda level, text: lines.append(text))
+        joined = "\n".join(lines)
+
+        self.assertIn("web_port =", joined)
+        self.assertIn("(default)", joined)
+        self.assertIn("data directory", joined.lower())
+        self.assertRegex(joined, r"uid=\d+|user=")
+
+    def test_the_banner_never_prints_a_secret(self):
+        config = self.config(RB3E_AUTH_TOKEN="hunter2")
+        lines = []
+        rb3server.log_startup_banner(config,
+                                     log=lambda level, text: lines.append(text))
+
+        self.assertNotIn("hunter2", "\n".join(lines))
+
 
 class LogTests(unittest.TestCase):
     def test_log_lines_carry_the_level_and_message(self):

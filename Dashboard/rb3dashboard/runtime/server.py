@@ -333,6 +333,7 @@ class ServerApplication:
 
     def start(self):
         self._supervisor.start()
+        self._log_state_after_start()
 
     def stop(self):
         self._supervisor.stop()
@@ -360,6 +361,23 @@ class ServerApplication:
                                           for target in self.relay.targets]
         report["queue"] = self.dispatcher.counters()
         return report
+
+    def _log_state_after_start(self):
+        """Report what could not be known before the services were up.
+
+        Bound addresses, discovery ownership, and which integrations actually
+        came up are all decided during start, so they cannot travel in the
+        configuration banner the entry point prints beforehand.
+        """
+        report = self.integration_report()
+        self._record_log("owns Pico discovery: %s"
+                         % ("yes" if self.owns_discovery() else "no"))
+        self._record_log(
+            "integrations -- webhook: %s, mqtt: %s, relay: %s, history: %s"
+            % ("on" if report["webhook"]["configured"] else "off",
+               "on" if report["mqtt"]["running"] else "off",
+               "on" if report["relay"]["configured"] else "off",
+               "on" if self.history is not None else "off"))
 
     # -- console ---------------------------------------------------------
 

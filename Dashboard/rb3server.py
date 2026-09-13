@@ -84,6 +84,22 @@ def parse_arguments(argv=None):
     return parser.parse_args(argv)
 
 
+def log_startup_banner(config, log=print_log, identity=None):
+    """Report the resolved configuration and who this process is.
+
+    Everything here is knowable before a socket is bound. The addresses the
+    server actually ends up on are reported separately, by the services that
+    bind them, because they are not known until then.
+    """
+    log("info", "--- rb3server starting ---")
+    log("info", "process: %s" % (identity or describe_identity()))
+    log("info", "data directory: %s (%s)"
+        % (config.data_dir, config.sources.get("data_dir", "default")))
+    for line in config.describe_sources():
+        log("info", "  %s" % line)
+    log("info", "--- end of configuration ---")
+
+
 def build_application(config):
     return ServerApplication(log_sink=print_log, **config.application_kwargs())
 
@@ -99,7 +115,7 @@ def main(argv=None, application_factory=None, runner=run,
             # reason plainly rather than a traceback.
             print_log("error", str(error))
             return 2
-        print_log("info", "Configuration: %s" % config.describe())
+        log_startup_banner(config, log=print_log)
 
         def application_factory():
             return build_application(config)

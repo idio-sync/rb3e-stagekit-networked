@@ -334,5 +334,46 @@ class DiscoveryTargetTests(ConfigTestCase):
             self.enabled(RB3E_DISCOVERY_TARGETS="auto,192.168.1.255")
 
 
+class ProvenanceTests(ConfigTestCase):
+    """Where a setting came from is the question when it seems not to apply."""
+
+    def test_untouched_settings_report_the_default(self):
+        self.assertEqual(self.load().sources["web_port"], "default")
+
+    def test_an_environment_variable_is_named(self):
+        config = self.load(RB3E_WEB_PORT="9000")
+
+        self.assertEqual(config.sources["web_port"],
+                         "environment variable RB3E_WEB_PORT")
+
+    def test_a_file_is_named(self):
+        path = self.write({"web_port": 9000})
+
+        self.assertIn(str(path), self.load(path).sources["web_port"])
+
+    def test_the_environment_wins_and_says_so(self):
+        path = self.write({"web_port": 9000})
+
+        config = self.load(path, RB3E_WEB_PORT="9100")
+
+        self.assertEqual(config.web_port, 9100)
+        self.assertEqual(config.sources["web_port"],
+                         "environment variable RB3E_WEB_PORT")
+
+    def test_every_setting_has_a_source(self):
+        config = self.load()
+
+        self.assertEqual(set(config.sources), set(config.as_dict()))
+
+    def test_the_description_masks_secrets(self):
+        lines = self.load(RB3E_AUTH_TOKEN="hunter2",
+                          RB3E_WEB_HOST="0.0.0.0").describe_sources()
+        joined = "\n".join(lines)
+
+        self.assertNotIn("hunter2", joined)
+        self.assertIn("auth_token = <set>", joined)
+        self.assertIn("environment variable RB3E_AUTH_TOKEN", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

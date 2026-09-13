@@ -192,6 +192,18 @@ class LifecycleTests(ServerTestCase):
         self.assertFalse(application.is_running())
         self.assertEqual(self.listeners[0].stop_calls, 1)
 
+    def test_it_reports_ownership_and_integrations_after_starting(self):
+        messages = []
+        application = self.make(
+            log_sink=lambda level, text: messages.append(text),
+            stagekit_enabled=False, web_enabled=False)
+
+        application.start()
+
+        joined = "\n".join(messages)
+        self.assertIn("owns Pico discovery: no", joined)
+        self.assertIn("integrations --", joined)
+
     def test_stage_kit_discovery_is_off_unless_asked_for(self):
         """A second discovery owner would redirect Pico telemetry."""
         self.started()
