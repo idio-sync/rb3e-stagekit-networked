@@ -31,7 +31,9 @@ class WebTestCase(unittest.TestCase):
         self.application = FakeApplication() if application is None else application
         kwargs.setdefault("auth_token", "")
         kwargs.setdefault("heartbeat", 0.2)
-        service = WebService(self.application, host="127.0.0.1", port=0, **kwargs)
+        service = WebService(self.application,
+                             host=kwargs.pop("host", "127.0.0.1"),
+                             port=0, **kwargs)
         service.start()
         self.addCleanup(service.stop)
         self.service = service
@@ -99,10 +101,19 @@ class AuthTests(WebTestCase):
 
     def test_an_open_api_is_reported_as_a_warning(self):
         logged = []
-        self.serve(auth_token="", log_sink=lambda level, msg: logged.append((level, msg)))
+        self.serve(host="0.0.0.0", auth_token="",
+                   log_sink=lambda level, msg: logged.append((level, msg)))
 
         warnings = [msg for level, msg in logged if level == "warning"]
         self.assertTrue(any("open to anyone" in msg for msg in warnings))
+
+    def test_no_open_api_warning_on_loopback(self):
+        """Section 1 establishes that a loopback bind needs no token."""
+        logged = []
+        self.serve(auth_token="",
+                   log_sink=lambda level, msg: logged.append((level, msg)))
+
+        self.assertFalse([msg for _, msg in logged if "open to anyone" in msg])
 
 
 class ReadTests(WebTestCase):

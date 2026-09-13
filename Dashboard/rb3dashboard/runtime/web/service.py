@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - Python 3.7 and newer provide this
         daemon_threads = True
 
 from .api import ApiHandler
+from ..config import _is_loopback
 
 
 _WINDOWS = os.name == "nt"
@@ -102,7 +103,7 @@ class WebService:
         self._thread.start()
         self._log("Serving the dashboard API on http://%s:%d"
                   % (server.server_address[0], server.server_address[1]))
-        if not self._auth_token:
+        if not self._auth_token and not _is_loopback(self._host):
             self._log("No auth token is set, so the API is open to anyone who "
                       "can reach it on this network", level="warning")
 

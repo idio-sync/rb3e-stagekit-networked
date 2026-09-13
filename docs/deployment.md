@@ -50,6 +50,7 @@ Or directly:
 ```bash
 docker build -t rb3e-dashboard-server .
 docker run -d --name rb3e-dashboard --network host \
+  -e RB3E_WEB_HOST=0.0.0.0 \
   -e RB3E_AUTH_TOKEN=choose-something \
   -v /mnt/user/appdata/rb3e-dashboard:/data \
   rb3e-dashboard-server
@@ -77,8 +78,8 @@ that had no effect.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `RB3E_AUTH_TOKEN` | empty | Token for the API and dashboard. **Set this.** Without one, anything that can reach the port can drive your lights. |
-| `RB3E_WEB_HOST` / `RB3E_WEB_PORT` | `0.0.0.0` / `8321` | Where the dashboard is served. |
+| `RB3E_AUTH_TOKEN` | empty | Token for the API and dashboard. **Required** for any bind other than loopback. |
+| `RB3E_WEB_HOST` / `RB3E_WEB_PORT` | `127.0.0.1` / `8321` | Where the dashboard is served. |
 | `RB3E_DATA_DIR` | `/data` in the image | Where session and play history are kept. |
 | `RB3E_STAGEKIT_ENABLED` | `false` | Whether to talk to Picos at all. See below. |
 | `RB3E_DISCOVERY_TARGETS` | empty | Broadcast addresses for discovery, comma separated, for example `192.168.1.255`. |
@@ -91,6 +92,7 @@ that had no effect.
 | `RB3E_MQTT_DISCOVERY_PREFIX` | `homeassistant` | Must match Home Assistant's discovery prefix. |
 | `RB3E_CONSOLE_ADDRESS` | empty | Skip console detection and use this address. |
 | `RB3E_RELAY_TARGETS` | empty | Only for consoles configured with `BroadcastTarget`. See below. |
+| `RB3E_ALLOW_OPEN_API` | `false` | Permit a tokenless API on a network bind. Off, and refusing to start, by default. |
 
 `RB3E_DISCOVERY_TARGETS` matters more than it looks. Without it, discovery
 falls back to guessing a /24 from the default route, which is how the desktop
@@ -198,3 +200,10 @@ audit trail. Anyone with the token can drive your lights.
 Do not expose the port to the internet. If you want it reachable from outside
 your network, put it behind something that does authentication properly, and
 keep in mind that `/api/health` answers without a token so health checks work.
+
+The server will run without a token if you insist: set `RB3E_ALLOW_OPEN_API=true`
+and it will serve an open API on whatever address you bind. The compose file in
+this repository will not do it, because it requires a token before Compose
+starts anything; to go that route, remove the `${RB3E_AUTH_TOKEN:?...}`
+interpolation from your own copy. Do this only on a network you trust
+completely, and never on one reachable from the internet.

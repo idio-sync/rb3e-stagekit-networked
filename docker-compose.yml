@@ -37,6 +37,11 @@ services:
       # unauthenticated lighting API on every interface. Put it in .env beside
       # this file, or export it before running compose. Note this applies to
       # every compose subcommand, `down` and `logs` included, not just `up`.
+      #
+      # There is deliberately no RB3E_ALLOW_OPEN_API here. The server supports
+      # running without a token; this file does not, because the interpolation
+      # above refuses an empty value first. To run an open API, drop the
+      # interpolation yourself -- see "Access control" in docs/deployment.md.
       RB3E_AUTH_TOKEN: ${RB3E_AUTH_TOKEN:?set a token, for example in a .env file next to docker-compose.yml}
 
       # Stage Kit support is off by default. Turning it on makes this server

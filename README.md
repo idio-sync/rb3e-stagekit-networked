@@ -386,7 +386,7 @@ statistics without time fields retain their play counts and start time totals at
 * Check `[Events] BroadcastTarget` in `rb3.ini`. If it names one host, only that host receives anything, including your Picos.
 
 **The browser dashboard asks for a token you did not set?**
-* It asks when the server refuses a request. If you did not set `RB3E_AUTH_TOKEN`, the API is open and the page should not prompt; if it does, something else is answering on that port.
+* It asks when the server refuses a request. A server bound to the network requires a token — it refuses to start without one — so the page will prompt. On a loopback bind with no token the page should not prompt; if it does, something else is answering on that port.
 
 **Last.fm Art is missing?**
 * Ensure the API Key is entered.

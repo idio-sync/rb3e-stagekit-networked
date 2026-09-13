@@ -101,6 +101,11 @@ _FIELDS = {
     "web_port": (_as_int, 8321),
     "web_enabled": (_as_bool, True),
     "auth_token": (_as_text, ""),
+    # Deliberately serving a tokenless API on a trusted network is allowed, but
+    # only when it is said out loud. A real field rather than an ad-hoc
+    # environment variable: _read_environment only reads names in _FIELDS,
+    # _read_file rejects unknown keys, and _validate sees parsed values only.
+    "allow_open_api": (_as_bool, False),
     "stagekit_enabled": (_as_bool, False),
     "discovery_targets": (_as_list, []),
     "relay_targets": (_as_list, []),
@@ -140,6 +145,24 @@ def _default_data_dir(environ):
     if appdata:
         return str(Path(appdata) / "RB3Dashboard" / "server")
     return str(Path.home() / ".rb3dashboard" / "server")
+
+
+_LOOPBACK_NAMES = {"localhost", "::1", "0:0:0:0:0:0:0:1"}
+
+
+def _is_loopback(host):
+    """Whether a bind address is reachable only from this machine.
+
+    Accepts the whole 127.0.0.0/8 block, not just 127.0.0.1, because a
+    container or a test may pick another address in it.
+    """
+    host = (host or "").strip().strip("[]").lower()
+    if host in _LOOPBACK_NAMES:
+        return True
+    parts = host.split(".")
+    if len(parts) == 4 and parts[0] == "127":
+        return all(part.isdigit() and 0 <= int(part) <= 255 for part in parts)
+    return False
 
 
 class ServerConfig:
@@ -246,6 +269,16 @@ class ServerConfig:
                 "device_forget_after (%s) must not be less than "
                 "device_offline_after (%s)"
                 % (values["device_forget_after"], values["device_offline_after"]))
+        if (values["web_enabled"] and not values["auth_token"]
+                and not _is_loopback(values["web_host"])
+                and not values["allow_open_api"]):
+            raise ConfigError(
+                "web_host is %r, which is reachable from the network, but "
+                "auth_token is empty. Anything that can reach the port could "
+                "drive your lights. Set auth_token (RB3E_AUTH_TOKEN), or bind "
+                "127.0.0.1, or set allow_open_api if you really mean to serve "
+                "an open API on a trusted network."
+                % values["web_host"])
 
     # -- use ------------------------------------------------------------
 

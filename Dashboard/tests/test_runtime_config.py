@@ -240,5 +240,49 @@ class DescribeTests(ConfigTestCase):
         self.assertIn("auth_token=<unset>", self.load().describe())
 
 
+class OpenApiTests(ConfigTestCase):
+    """A tokenless API must not be reachable from the network by accident."""
+
+    def test_a_network_bind_without_a_token_is_refused(self):
+        with self.assertRaises(ConfigError) as caught:
+            self.load(RB3E_WEB_HOST="0.0.0.0")
+
+        message = str(caught.exception)
+        self.assertIn("auth_token", message)
+        self.assertIn("allow_open_api", message)
+
+    def test_loopback_without_a_token_is_allowed(self):
+        for host in ("127.0.0.1", "127.0.0.5", "localhost", "::1"):
+            with self.subTest(host=host):
+                config = self.load(RB3E_WEB_HOST=host)
+
+                self.assertEqual(config.auth_token, "")
+
+    def test_a_token_permits_a_network_bind(self):
+        config = self.load(RB3E_WEB_HOST="0.0.0.0", RB3E_AUTH_TOKEN="secret")
+
+        self.assertEqual(config.web_host, "0.0.0.0")
+
+    def test_the_escape_hatch_permits_an_open_api(self):
+        config = self.load(RB3E_WEB_HOST="0.0.0.0", RB3E_ALLOW_OPEN_API="true")
+
+        self.assertTrue(config.allow_open_api)
+        self.assertEqual(config.auth_token, "")
+
+    def test_a_disabled_web_server_needs_no_token(self):
+        """No socket, no exposure."""
+        config = self.load(RB3E_WEB_HOST="0.0.0.0", RB3E_WEB_ENABLED="false")
+
+        self.assertFalse(config.web_enabled)
+
+    def test_the_escape_hatch_can_be_set_in_a_file(self):
+        path = self.write({"web_host": "0.0.0.0", "allow_open_api": True})
+
+        self.assertTrue(self.load(path).allow_open_api)
+
+    def test_the_escape_hatch_is_off_by_default(self):
+        self.assertFalse(self.load().allow_open_api)
+
+
 if __name__ == "__main__":
     unittest.main()
