@@ -4,9 +4,13 @@ Stage 2 built a headless server, packaged it, and tested it thoroughly against
 fakes. Stage 3 finds out whether it actually runs.
 
 The distinction matters more than it sounds. Every network, console, broker,
-device and browser in Stage 2's 607 tests is a fake, and the container has never
-been built. The goal here is not more features; it is evidence, and honest
-records of where evidence is still missing.
+device and browser in the suite is a fake, and the container has never been
+built. The goal here is not more features; it is evidence, and honest records of
+where evidence is still missing.
+
+The suite is 607 tests at `199d4a7`. Stage 2's own documents say 605, which was
+true at `d7a36eb`; the documentation commit added two. Both numbers are correct
+for their commit and neither needs changing.
 
 ## What Stage 2 left unproven
 
@@ -54,13 +58,31 @@ the server actually bound.
 **`VOLUME ["/data"]` hides a lost-data footgun.** A `docker run` without `-v`
 writes history into an anonymous volume rather than failing.
 
-**The event stream has no concurrency bound and no write deadline.**
-`ApiHandler._stream` writes with a blocking `wfile.write`. The handler's
-`timeout = 30.0` governs reads, not writes. On a thread-per-connection
-`ThreadingHTTPServer`, a browser that stops reading pins its thread once the
-kernel buffer fills, and nothing caps how many such connections are accepted.
-This is a reading of the code, not a measurement, and Section 3 measures it
-before changing anything.
+**The event stream has no concurrency bound, and its write deadline is
+accidental.** `ApiHandler._stream` writes with a blocking `wfile.write`, and
+nothing caps how many streams a thread-per-connection `ThreadingHTTPServer`
+accepts.
+
+An earlier draft of this document claimed a stalled browser pins its handler
+thread forever. That is wrong, and the correction matters because it changes the
+fix. `BaseHTTPRequestHandler.wbufsize` is 0, so `wfile` is a
+`socketserver._SocketWriter` calling `sendall` on a connection that
+`StreamRequestHandler.setup` has already put into timeout mode with
+`settimeout(self.timeout)`. CPython enforces that timeout across the whole
+`sendall`. Measured on this workstation with a reader that never reads:
+
+```
+wbufsize = 0
+wfile type: <class 'socketserver._SocketWriter'>
+EXC after 2.02s: TimeoutError('timed out')  isOSError=True
+```
+
+`TimeoutError` subclasses `OSError`, which `_stream` already catches, so a
+stalled browser is dropped after about 30 seconds. A write deadline therefore
+already exists. What is wrong with it is that it is incidental — the keep-alive
+*read* timeout doing double duty — unlogged, and never chosen deliberately. The
+real gaps are the missing concurrency cap and the accidental deadline, not an
+absent one.
 
 ## Boundaries this stage preserves
 
@@ -84,13 +106,27 @@ comes from.
 | Environment | Available | Proves |
 | --- | --- | --- |
 | This Windows workstation | Now | Configuration, preflight, unit and loopback behaviour. No Docker, no WSL. |
-| GitHub Actions `ubuntu-latest` | On push to `main` | Image build, host networking, real bind-mount ownership, a real Mosquitto broker, restart and persistence, SIGTERM. |
+| GitHub Actions `ubuntu-latest` | On authorized push to `main`, or `workflow_dispatch` | Image build, `--network host` binding and receiving on the host stack, real bind-mount ownership, the container's runtime uid and gid, a real Mosquitto broker, restart and persistence, SIGTERM. |
 | Unraid pilot | On authorization | Appdata under the share layer, multi-homed interfaces, discovery ownership, container replacement. |
 | Console and Picos | On explicit authorization only | Real protocol traffic and real lighting. |
 
 CI runs on pushes to `main` and `workflow_dispatch`, not on pull requests: the
 existing workflow already builds three desktop executables and two firmware
 targets per PR. `build.yml` is not modified.
+
+**A push to `main` is not free, and no push happens without the owner asking for
+it.** `build.yml`'s `latest-release` job is gated on exactly that event, and it
+deletes and recreates the public `latest` release with fresh executables and
+firmware. Pushing solely to collect container evidence therefore republishes
+public release artifacts on a public repository. `workflow_dispatch` on a
+non-`main` branch is the low-side-effect way to get a run, and is the preferred
+route while Stage 3 is still gathering evidence. Note also that a push to `main`
+costs strictly more CI than a pull request would; the trigger choice is about
+side effects and noise, not about saving runner minutes.
+
+Nothing in this stage proves that a real console's LAN broadcast reaches a
+container. A runner proves the host-network flag works and that the sockets bind
+and receive on the host stack. The broadcast path itself is pilot evidence.
 
 ## Section 1: Deployment configuration
 
@@ -99,33 +135,92 @@ fix, not succeed into a subtly broken deployment.
 
 **Refuse an open API on a non-loopback bind.** With `web_enabled` true, a
 non-loopback `web_host`, and an empty `auth_token`, `ServerConfig.load` raises
-`ConfigError` and the process exits 2. `RB3E_ALLOW_OPEN_API=true` is an explicit
-opt-out for a deliberately open dashboard on a trusted network. A loopback bind
-needs no token. The compose file ships a value that fails loudly rather than an
-empty string. This turns a mistyped token variable, which today silently
-disables authentication, into a startup error.
+`ConfigError` and the process exits 2. A loopback bind needs no token. This
+turns a mistyped token variable, which today silently disables authentication,
+into a startup error.
+
+That rule cannot land in one commit, because today's defaults are
+`web_host="0.0.0.0"`, `web_enabled=True`, `auth_token=""` — the default
+configuration would become unloadable. `ServerConfig.load(environ={})` is called
+by the `load()` helper behind 30 assertions in `test_runtime_config.py` and, more
+awkwardly, by `known_variables()` in `test_packaging.py`, which every
+environment-variable audit test depends on. A bare `python Dashboard/rb3server.py`
+is also a documented workflow in `README.md`. So it lands in three commits:
+
+1. **The compose file stops shipping the hole.** One line: an empty
+   `RB3E_AUTH_TOKEN` becomes a value that fails loudly. This closes the shipped
+   vulnerability first, at no risk to anything else.
+2. **The `web_host` default becomes `127.0.0.1`.** Compose and the documented
+   `docker run` both set `0.0.0.0` explicitly, so deployments are unaffected,
+   while a bare local run stays working and needs no token. Secure by default,
+   and it keeps the default configuration loadable.
+3. **The fatal rule and its escape hatch.** `allow_open_api` is a real entry in
+   `_FIELDS`, a boolean defaulting false — not an ad-hoc environment variable.
+   `_read_environment` only reads names in `_FIELDS`, `_read_file` rejects
+   unknown keys, `_validate` is a static method over parsed values with no
+   access to the environment, and `test_packaging.py` asserts that every
+   `RB3E_*` name mentioned in the compose file or Dockerfile is a real setting.
+   A real field satisfies all four, works in both file and environment, and
+   appears in `describe()` and the startup banner.
+
+`README.md` is reconciled along with the rest: it currently states that without
+`RB3E_AUTH_TOKEN` the API is open and the page will not prompt.
+
+The unconditional "API is open" warning in `runtime/web/service.py` is silenced
+for loopback binds in the same commit, since Section 1 establishes that loopback
+needs no token.
 
 **Require explicit discovery targets when Stage Kit is on.** With
 `stagekit_enabled` and `discovery_enabled` both true and no
 `discovery_targets`, refuse to start and name the setting to add.
-`RB3E_DISCOVERY_TARGETS=auto` opts back into the route guess for anyone who
-wants Stage 1's behaviour. `StageKitTransport`'s own default stays `None`, so
-the desktop is unaffected. config.py's docstring, the compose comments, and
-`docs/deployment.md` are reconciled with what the code does.
+
+The escape hatch is `allow_inferred_discovery`, a boolean field mirroring
+`allow_open_api` — deliberately **not** a `RB3E_DISCOVERY_TARGETS=auto`
+sentinel. `_as_list("auto")` parses to `["auto"]`, a perfectly valid non-blank
+list, which stays truthy through `application_kwargs` and `runtime/server.py`
+and ends up as a `sendto` to a host named `auto`. It would also leave
+`auto,192.168.1.255` undefined. A boolean keeps `_as_list` meaning one thing.
+
+`StageKitTransport`'s own default stays `None`, so the desktop keeps its
+inferred /24 and is unaffected. config.py's docstring, the compose comments,
+`README.md`, and `docs/deployment.md` are reconciled with what the code does.
 
 **Check the data directory before starting.** A preflight creates the directory
 if absent, writes and removes a probe file, and on failure reports the path, the
 effective uid and gid, and the directory's owner and mode. Exit 2. This runs
 before any service starts, so a permissions problem never half-starts a server.
 
-**Log a startup diagnostic banner.** One block, in the first lines of the log:
-each setting with the source that supplied it, effective uid and gid, resolved
-data directory, the addresses and ports actually bound, whether this process
-owns discovery, and which integrations are enabled. Secrets keep the existing
-`<set>` / `<unset>` treatment from `ServerConfig.describe`.
+The same preflight warns when the data directory is not a mount point, read from
+`/proc/self/mountinfo` where it exists. That is the fix for the anonymous-volume
+footgun, together with **deleting the `VOLUME ["/data"]` line** from the
+Dockerfile. `VOLUME` buys this image nothing — compose and the Unraid template
+both bind-mount — while it silently turns a forgotten `-v` into history that
+disappears with the container. Removing it and warning converts silent data loss
+into a visible log line.
+
+**Log a startup diagnostic banner.** This is two things, not one, because they
+are not knowable at the same moment:
+
+- **Before start:** each setting with the source that supplied it, effective uid
+  and gid, and the resolved data directory. Per-setting provenance needs new
+  plumbing — `_Sourced` is discarded during parsing in `load()` — so carrying it
+  through to the banner is part of the task, not a free read.
+- **After bind:** the addresses and ports actually bound, whether this process
+  owns discovery, and which integrations are enabled. `WebService.start` is the
+  only place the bound address is known.
+
+Secrets keep the existing `<set>` / `<unset>` treatment from
+`ServerConfig.describe`.
 
 **Let the health check follow the configured port.** `tools/healthcheck.py`
 resolves its target the same way the server does, honouring `RB3E_CONFIG`.
+
+It must not become fragile in the process. Importing `ServerConfig` means a
+configuration that trips one of the new fatal rules would make the *health
+check* raise rather than report unhealthy, and it costs the script its current
+total independence from the application. So it catches `ConfigError` and falls
+back to the environment-only path. `test_packaging.py`'s health-check
+assertions are updated with it.
 
 ## Section 2: Reproducible Linux and container verification
 
@@ -150,15 +245,25 @@ It exercises, against a real socket every time:
 - Shutdown on SIGTERM with a clean exit code, restart, and history that survives
   both.
 
-Fixtures are small, deterministic, byte-level event samples. Every run uses an
-isolated data directory and contacts nothing outside the host.
+Fixtures are small, deterministic, byte-level event samples. Isolation of the
+data directory is asserted by the harness itself, not left to convention, and a
+run contacts nothing outside the host. The harness is not copied into the image:
+the Dockerfile takes only `tools/healthcheck.py`, and that stays true.
 
 **A container workflow.** `.github/workflows/server-container.yml` builds the
 image with `INSTALL_MQTT=false` and `true`, runs the harness against the
-container on `--network host`, adds a Mosquitto sidecar for the MQTT variant,
-mounts a host directory owned by a different uid to prove the preflight message
-is legible, and asserts restart and persistence. No image is published. A GHCR
-publish job is deliberately out of scope until the pilot asks for one.
+container on `--network host`, mounts a host directory owned by a different uid
+to prove the preflight message is legible, asserts the running process is
+actually uid 99 / gid 100 rather than merely that `useradd` succeeded, and
+asserts restart and persistence.
+
+The MQTT variant runs against a real Mosquitto. A workflow `services:` container
+sits on a bridge network while the server runs with `--network host`, so the
+server reaches the broker on `localhost` at its published port; the two
+networking modes have to be reconciled deliberately rather than assumed.
+
+No image is published. A GHCR publish job is deliberately out of scope until the
+pilot asks for one.
 
 ## Section 3: Operational reliability
 
@@ -167,10 +272,12 @@ measurement contradicts the reading of the code above, the measurement wins and
 the fix changes.
 
 - **Slow and abandoned event stream clients.** A reader that stops reading, and
-  one that vanishes without closing. Expected outcome: a bound on concurrent
-  streams, refusing beyond it with 503 rather than accepting a connection it
-  cannot serve, and a send deadline so a stalled client is dropped instead of
-  pinning a thread.
+  one that vanishes without closing. The measured baseline is above: a stalled
+  reader is already dropped after about 30 seconds by the handler's socket
+  timeout. So the expected work is a bound on concurrent streams, refusing
+  beyond it with 503 rather than accepting a connection it cannot serve, and
+  making the existing deadline deliberate — named, chosen, and logged when it
+  fires — rather than adding a second one.
 - **Reconnect storms.** Repeated connect and disconnect cycles leave thread
   count and memory flat.
 - **Queue saturation.** The bounded queues in `runtime/dispatch.py` and
@@ -182,6 +289,16 @@ the fix changes.
 - **Device expiry and recovery.** Offline, forgotten, and returning devices.
 - **Process termination.** SIGTERM, SIGINT, and an unclean kill, each with the
   data directory checked afterwards.
+- **Credential handling.** Parts of this are already sound and only need
+  asserting: `_constant_time_equals` for comparison, request lines kept out of
+  the log, `<set>` / `<unset>` in `describe()`. Tests assert the token never
+  appears in a log line or an error body. Two open questions get answers rather
+  than silence. The token is accepted as a query parameter because `EventSource`
+  cannot set headers, which puts it in browser history and any intermediary log;
+  that trade is documented in `docs/deployment.md` rather than left implicit.
+  And the compose file carries the token in plaintext, so it gains an `env_file`
+  alternative. Rotation semantics are stated: what a running server does when
+  the token changes.
 
 Resource use is recorded, not merely observed: peak RSS, thread count, and API
 response times under the loads above, written into the Stage 3 outcome notes.
@@ -218,6 +335,11 @@ fixtures are in scope; a replay feature is not. Publishing a container image is
 out of scope until the pilot asks for one.
 
 ## Definition of done
+
+Two artifacts carry the record, and they are named here so they are not invented
+twice: the implementation plan and its outcome notes live in
+`docs/superpowers/plans/2026-09-13-stage-three.md`, and the gap ledger is a
+section of that document.
 
 Stage 3 is complete when:
 
