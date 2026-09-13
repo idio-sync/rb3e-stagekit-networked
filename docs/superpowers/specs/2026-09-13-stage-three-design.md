@@ -154,6 +154,14 @@ is also a documented workflow in `README.md`. So it lands in three commits:
    `docker run` both set `0.0.0.0` explicitly, so deployments are unaffected,
    while a bare local run stays working and needs no token. Secure by default,
    and it keeps the default configuration loadable.
+
+   The cost is real and gets documented rather than hidden: a bare
+   `python Dashboard/rb3server.py` is no longer reachable from another device
+   on the LAN. `README.md` gains the one line that restores it —
+   `RB3E_WEB_HOST=0.0.0.0` together with a token — stated next to the change so
+   the reader meets the requirement and its remedy in the same place. This is
+   the one behavioural change in Stage 3 that affects a working local workflow,
+   so it lands in its own commit with its own note.
 3. **The fatal rule and its escape hatch.** `allow_open_api` is a real entry in
    `_FIELDS`, a boolean defaulting false — not an ad-hoc environment variable.
    `_read_environment` only reads names in `_FIELDS`, `_read_file` rejects
