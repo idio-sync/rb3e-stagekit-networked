@@ -175,7 +175,7 @@ Add to `DefaultTests` in `Dashboard/tests/test_runtime_config.py`:
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".DefaultTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -k DefaultTests -v`
 Expected: FAIL with `AssertionError: '0.0.0.0' != '127.0.0.1'`.
 
 - [ ] **Step 3: Change the default**
@@ -297,7 +297,7 @@ class OpenApiTests(ConfigTestCase):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".OpenApiTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -k OpenApiTests -v`
 Expected: FAIL. `test_a_network_bind_without_a_token_is_refused` fails because no exception is raised; the `allow_open_api` tests fail with `AttributeError` or a `ConfigError` about an unknown setting.
 
 - [ ] **Step 3: Add the field and the loopback helper**
@@ -531,7 +531,7 @@ class DiscoveryTargetTests(ConfigTestCase):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".DiscoveryTargetTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -k DiscoveryTargetTests -v`
 Expected: FAIL — no exception raised, and `AttributeError` on `allow_inferred_discovery`.
 
 - [ ] **Step 3: Add the field**
@@ -1289,7 +1289,7 @@ class ProvenanceTests(ConfigTestCase):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".ProvenanceTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -k ProvenanceTests -v`
 Expected: FAIL with `AttributeError: 'ServerConfig' object has no attribute 'sources'`.
 
 - [ ] **Step 3: Keep provenance through parsing**
