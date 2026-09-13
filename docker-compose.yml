@@ -33,8 +33,11 @@ services:
       RB3E_WEB_HOST: 0.0.0.0
       RB3E_WEB_PORT: "8321"
 
-      # Set this. Without it the API is open to anyone who can reach the port.
-      RB3E_AUTH_TOKEN: ""
+      # Required. Compose refuses to run without it, rather than serving an
+      # unauthenticated lighting API on every interface. Put it in .env beside
+      # this file, or export it before running compose. Note this applies to
+      # every compose subcommand, `down` and `logs` included, not just `up`.
+      RB3E_AUTH_TOKEN: ${RB3E_AUTH_TOKEN:?set a token, for example in a .env file next to docker-compose.yml}
 
       # Stage Kit support is off by default. Turning it on makes this server
       # the owner of Pico discovery: each Pico remembers one dashboard address

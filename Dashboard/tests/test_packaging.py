@@ -103,6 +103,23 @@ class ComposeTests(unittest.TestCase):
         """Enabling it takes Pico telemetry away from a desktop dashboard."""
         self.assertIn('RB3E_STAGEKIT_ENABLED: "false"', self.text)
 
+    def test_the_compose_file_demands_a_token(self):
+        """A copied compose file must not start an unauthenticated API.
+
+        Compose's ${VAR:?message} form aborts `docker compose up` when the
+        variable is unset or empty, which is a refusal the operator sees before
+        a container exists.
+        """
+        text = read(REPO / "docker-compose.yml")
+
+        self.assertNotIn('RB3E_AUTH_TOKEN: ""', text)
+        self.assertRegex(text, r"RB3E_AUTH_TOKEN:\s*\$\{RB3E_AUTH_TOKEN:\?[^}]+\}")
+
+    def test_an_example_environment_file_names_the_token(self):
+        example = read(REPO / ".env.example")
+
+        self.assertIn("RB3E_AUTH_TOKEN=", example)
+
 
 class EnvironmentNameTests(unittest.TestCase):
     """A typo here is silent: the setting simply never applies."""

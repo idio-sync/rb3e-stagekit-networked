@@ -34,3 +34,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Compose reads this for RB3E_AUTH_TOKEN. The example is tracked; this is not.
+.env
