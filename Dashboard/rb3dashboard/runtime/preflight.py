@@ -137,16 +137,20 @@ def check_data_directory(path, is_mount=_default_is_mount, _open=None):
     # would truncate and then delete whatever happened to be there already,
     # which is an unacceptable thing for a read-only-ish check to do.
     probe = path / ("%s-%s" % (PROBE_NAME, uuid.uuid4().hex))
+    # One template, interpolated once at each raise site. Building it with a
+    # first % pass would leave a "%s" template carrying whatever literal % came
+    # from the path -- an unexpanded %APPDATA% in a template field, say -- and
+    # the second pass would read it as a format spec and raise ValueError,
+    # which main() does not catch.
     unwritable = (
-        "The data directory %s is not writable (%%s). This process is %s; the "
+        "The data directory %s is not writable (%s). This process is %s; the "
         "directory is %s. On Unraid, appdata is owned by nobody:users "
         "(99:100); on another host, build the image with --build-arg "
-        "PUID=... --build-arg PGID=... to match."
-        % (path, identity, _owner(path)))
+        "PUID=... --build-arg PGID=... to match.")
     try:
         handle = opener(str(probe), "x")
     except OSError as error:
-        raise PreflightError(unwritable % error)
+        raise PreflightError(unwritable % (path, error, identity, _owner(path)))
     closed = False
     try:
         # A full or over-quota share fails at one of these three, and every
@@ -159,7 +163,7 @@ def check_data_directory(path, is_mount=_default_is_mount, _open=None):
         handle.close()
         closed = True
     except OSError as error:
-        raise PreflightError(unwritable % error)
+        raise PreflightError(unwritable % (path, error, identity, _owner(path)))
     finally:
         if not closed:
             try:

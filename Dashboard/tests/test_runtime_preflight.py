@@ -56,6 +56,20 @@ class DataDirectoryTests(unittest.TestCase):
         self.assertIn("uid", message)
         self.assertIn("Permission denied", message)
 
+    def test_a_percent_in_the_path_does_not_break_the_diagnostic(self):
+        """An unexpanded %APPDATA% in a template field must not crash the check."""
+        def refuse(path, mode="x"):
+            raise PermissionError(13, "Permission denied")
+
+        awkward = self.directory / "100%backup"
+        awkward.mkdir()
+
+        with self.assertRaises(PreflightError) as caught:
+            check_data_directory(awkward, is_mount=unmounted, _open=refuse)
+
+        self.assertIn("100%backup", str(caught.exception))
+        self.assertIn("Permission denied", str(caught.exception))
+
     def test_a_full_disk_is_reported_not_raised_raw(self):
         """A write that fails after opening must still be a PreflightError."""
         class Full:
