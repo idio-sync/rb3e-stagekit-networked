@@ -64,7 +64,7 @@ The mechanism is Compose's required-variable interpolation, `${VAR:?message}`, w
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `Dashboard/tests/test_packaging.py`, inside the class that already reads `docker-compose.yml` (the one holding `test_compose_names_only_real_settings`):
+Add to `Dashboard/tests/test_packaging.py`, inside `ComposeTests` (line 85), which already reads the file. Note `test_compose_names_only_real_settings` lives in a different class, `EnvironmentNameTests` (line 119); the proposed tests call `read()` themselves so they belong with the compose tests:
 
 ```python
     def test_the_compose_file_demands_a_token(self):
@@ -95,9 +95,10 @@ Expected: FAIL. `test_the_compose_file_demands_a_token` fails on the `assertNotI
 Replace line 37 of `docker-compose.yml`:
 
 ```yaml
-      # Required. Compose refuses to start without it, rather than serving an
+      # Required. Compose refuses to run without it, rather than serving an
       # unauthenticated lighting API on every interface. Put it in .env beside
-      # this file, or export it before `docker compose up`.
+      # this file, or export it before running compose. Note this applies to
+      # every compose subcommand, `down` and `logs` included, not just `up`.
       RB3E_AUTH_TOKEN: ${RB3E_AUTH_TOKEN:?set a token, for example in a .env file next to docker-compose.yml}
 ```
 
@@ -149,8 +150,8 @@ git commit -m "fix: refuse to start compose without an API token"
 `_FIELDS["web_host"]` defaults to `"0.0.0.0"`. Combined with an empty `auth_token` default, that means the out-of-the-box configuration serves an open API on every interface — and it is what makes Task 3's rule impossible to add without breaking the default config. Loopback is the safe default; every real deployment sets the bind explicitly anyway.
 
 **Files:**
-- Modify: `Dashboard/rb3dashboard/runtime/config.py:94`
-- Modify: `README.md:225`, `README.md:228-231`
+- Modify: `Dashboard/rb3dashboard/runtime/config.py:95`
+- Modify: `README.md:225`, `README.md:227-231`
 - Test: `Dashboard/tests/test_runtime_config.py`
 
 **Interfaces:**
@@ -213,15 +214,19 @@ RB3E_WEB_HOST=0.0.0.0 RB3E_AUTH_TOKEN=choose-something python Dashboard/rb3serve
 
 Delete the now-duplicated `RB3E_AUTH_TOKEN=choose-something python Dashboard/rb3server.py` example at `README.md:230` and the "**Set a token**, or anything that can reach the port can drive your lights:" sentence introducing it, since the replacement above covers both.
 
-- [ ] **Step 6: Run the full suite**
+- [ ] **Step 6: Note the two constructor defaults that now disagree**
+
+`ServerApplication.__init__` (`runtime/server.py:152`) and `WebService.__init__` (`runtime/web/service.py:57`) both still default `web_host="0.0.0.0"`. Nothing breaks — `application_kwargs()` always passes the value explicitly — but the codebase now states two different defaults for one setting. Change both to `"127.0.0.1"` so the answer is the same wherever a reader looks. No test asserts either default; `test_runtime_web.py`'s `serve` passes `host` explicitly and `test_runtime_server.py:497` passes `web_host="127.0.0.1"` already.
+
+- [ ] **Step 7: Run the full suite**
 
 Run: `cd Dashboard && python -m unittest discover -s tests`
 Expected: OK. One test added; nothing may fail. `test_packaging.py` still passes because `known_variables()` calls `ServerConfig.load(environ={})`, which is still loadable — a loopback bind with no token is legal.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add Dashboard/rb3dashboard/runtime/config.py Dashboard/tests/test_runtime_config.py README.md
+git add Dashboard/rb3dashboard/runtime/config.py Dashboard/rb3dashboard/runtime/server.py Dashboard/rb3dashboard/runtime/web/service.py Dashboard/tests/test_runtime_config.py README.md
 git commit -m "fix: default the dashboard bind to loopback"
 ```
 
@@ -368,6 +373,8 @@ and replace the warning block in `start()`:
 
 - [ ] **Step 7: Fix the existing test that this change contradicts**
 
+This step follows the implementation rather than preceding it, because it is a fix-up of a test the previous step invalidated, not a new TDD cycle. The new `test_no_open_api_warning_on_loopback` below is the red-green pair: comment out the `not _is_loopback(self._host)` clause from Step 6 to watch it fail, then restore it.
+
 `Dashboard/tests/test_runtime_web.py:100-105` asserts the warning *is* emitted, and `WebTestCase.serve` at line 34 hardcodes `host="127.0.0.1"`, so that test now describes behaviour this task removes. It has to bind off loopback to still mean what it says.
 
 First let `serve` take a host — replace line 34:
@@ -417,7 +424,13 @@ In `README.md:387`, replace the bullet, which is now false:
 * It asks when the server refuses a request. A server bound to the network requires a token — it refuses to start without one — so the page will prompt. On a loopback bind with no token the page should not prompt; if it does, something else is answering on that port.
 ```
 
-In `docs/deployment.md`, in the settings table, change the `RB3E_AUTH_TOKEN` row's description to `Token for the API and dashboard. **Required** for any bind other than loopback.`, change the `RB3E_WEB_HOST` / `RB3E_WEB_PORT` default cell from `` `0.0.0.0` / `8321` `` to `` `127.0.0.1` / `8321` ``, and add a row:
+In `docs/deployment.md`, the `docker run` example at lines 48-56 passes only `-e RB3E_AUTH_TOKEN=...`, so after Task 2 it binds host loopback and line 58's "Then open `http://your-server:8321`" becomes false for every other machine. Add the bind to that block:
+
+```bash
+docker run -d --name rb3e-dashboard --network host   -e RB3E_WEB_HOST=0.0.0.0   -e RB3E_AUTH_TOKEN=choose-something   -v /mnt/user/appdata/rb3e-dashboard:/data   rb3e-dashboard-server
+```
+
+Then, in the settings table, change the `RB3E_AUTH_TOKEN` row's description to `Token for the API and dashboard. **Required** for any bind other than loopback.`, change the `RB3E_WEB_HOST` / `RB3E_WEB_PORT` default cell from `` `0.0.0.0` / `8321` `` to `` `127.0.0.1` / `8321` ``, and add a row:
 
 ```markdown
 | `RB3E_ALLOW_OPEN_API` | `false` | Permit a tokenless API on a network bind. Off, and refusing to start, by default. |
@@ -542,7 +555,45 @@ Append to `ServerConfig._validate`:
 Run: `cd Dashboard && python -m unittest tests.test_runtime_config -v`
 Expected: PASS.
 
-- [ ] **Step 6: Correct the module docstring, which currently overstates**
+- [ ] **Step 6: Update the two existing tests this rule now rejects**
+
+Both enable Stage Kit with the default empty `discovery_targets`, which is exactly what Step 4 refuses, so both raise `ConfigError` and Step 5's suite run is not the whole story. Neither test is about discovery; each just needed a boolean to toggle.
+
+`Dashboard/tests/test_runtime_config.py:106-110` — add explicit targets so the loop still tests boolean spellings:
+
+```python
+    def test_booleans_accept_common_spellings(self):
+        for value in ("1", "true", "TRUE", "yes", "on"):
+            self.assertTrue(self.load(RB3E_STAGEKIT_ENABLED=value,
+                                      RB3E_DISCOVERY_TARGETS="192.0.2.255"
+                                      ).stagekit_enabled)
+        for value in ("0", "false", "no", "off"):
+            self.assertFalse(self.load(RB3E_STAGEKIT_ENABLED=value).stagekit_enabled)
+```
+
+The falsy half needs no targets: Stage Kit is off, so the rule does not apply.
+
+`Dashboard/tests/test_runtime_config.py:206-215` — same addition:
+
+```python
+    def test_kwargs_carry_configured_values(self):
+        config = self.load(RB3E_STAGEKIT_ENABLED="true",
+                           RB3E_DISCOVERY_TARGETS="192.0.2.255",
+                           RB3E_QUEUE_CAPACITY="7",
+                           RB3E_HA_WEBHOOK_URL="http://ha.example/hook")
+```
+
+Leave the rest of that test as it is. `192.0.2.0/24` is the RFC 5737 documentation range, so the address is unmistakably an example.
+
+Before moving on, grep for any call site this list missed:
+
+```bash
+cd Dashboard && grep -rn "STAGEKIT_ENABLED" tests/
+```
+
+Every hit that passes a truthy value must also pass `RB3E_DISCOVERY_TARGETS`, `RB3E_DISCOVERY_ENABLED="false"`, or `RB3E_ALLOW_INFERRED_DISCOVERY="true"`.
+
+- [ ] **Step 7: Correct the module docstring, which currently overstates**
 
 In `Dashboard/rb3dashboard/runtime/config.py`, replace the third paragraph of the module docstring:
 
@@ -555,7 +606,7 @@ restores the desktop's guess for anyone who wants it, and the server refuses to
 start rather than guessing silently.
 ```
 
-- [ ] **Step 7: Reconcile the documents**
+- [ ] **Step 8: Reconcile the documents**
 
 In `docker-compose.yml`, replace the `RB3E_DISCOVERY_TARGETS` comment block's last sentence — `Leaving it empty keeps the old guess from the default route, which is unreliable on a host with several interfaces.` — with:
 
@@ -589,12 +640,12 @@ Add a row to the settings table:
 | `RB3E_ALLOW_INFERRED_DISCOVERY` | `false` | Guess a /24 from the default route instead of naming targets. |
 ```
 
-- [ ] **Step 8: Run the full suite**
+- [ ] **Step 9: Run the full suite**
 
 Run: `cd Dashboard && python -m unittest discover -s tests`
-Expected: OK. Six tests added; nothing may fail. `test_stagekit_discovery.py` must still pass untouched. `test_stagekit_discovery.py` must still pass untouched — the desktop's `StageKitTransport(discovery_targets=None)` default is unchanged.
+Expected: OK. Six tests added and two existing tests updated; nothing may fail. `test_stagekit_discovery.py` must still pass untouched — the desktop transport is not affected by a server rule. `test_stagekit_discovery.py` must still pass untouched — the desktop's `StageKitTransport(discovery_targets=None)` default is unchanged.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add Dashboard/rb3dashboard/runtime/config.py Dashboard/tests/test_runtime_config.py docker-compose.yml docs/deployment.md
@@ -621,21 +672,30 @@ The same preflight warns when the data directory is not a mount point, and `VOLU
 - Produces, all in `runtime/preflight.py`:
   - `PreflightError(Exception)`
   - `check_data_directory(path, is_mount=_default_is_mount, _open=None) -> list[str]` — returns warning strings, raises `PreflightError` on a fatal problem. `is_mount` and `_open` exist so tests can force each branch without root or a real mount.
-  - `describe_identity() -> str` — e.g. `"uid=99, gid=100"` on Linux, `"user=Virtual"` on Windows. Task 6 uses this.
+  - `describe_identity() -> str` — `"euid=99, egid=100"` on Linux (the names come from `os.geteuid`/`os.getegid` with the `get` prefix stripped), `"user=<name>"` on Windows. Task 6 uses this.
 
 - [ ] **Step 1: Write the failing tests**
 
 Create `Dashboard/tests/test_runtime_preflight.py`:
 
+Two conventions matter here and both are load-bearing:
+
+- **Every test that does not care about mount detection injects `is_mount`.** The default probes the real filesystem, and a temp directory is not a mount point on Linux or macOS — so a test asserting an empty warning list would pass on Windows and fail on the two POSIX runners in `build.yml`.
+- **`_open` takes the same two arguments the real `open` is called with.** The implementation calls `opener(str(probe), "w")`; a one-parameter fake raises `TypeError`, which is not an `OSError` and would escape the assertion entirely.
+
 ```python
 """Filesystem checks that run before any service starts."""
 
-import os
 from pathlib import Path
 import tempfile
 import unittest
 
 from rb3dashboard.runtime.preflight import PreflightError, check_data_directory
+
+
+def unmounted(path):
+    """Say nothing about mount points; the mount tests cover that branch."""
+    return None
 
 
 class DataDirectoryTests(unittest.TestCase):
@@ -645,17 +705,18 @@ class DataDirectoryTests(unittest.TestCase):
         self.directory = Path(directory.name)
 
     def test_a_writable_directory_passes(self):
-        self.assertEqual(check_data_directory(self.directory / "data"), [])
+        self.assertEqual(
+            check_data_directory(self.directory / "data", is_mount=unmounted), [])
 
     def test_it_creates_a_missing_directory(self):
         target = self.directory / "made" / "here"
 
-        check_data_directory(target)
+        check_data_directory(target, is_mount=unmounted)
 
         self.assertTrue(target.is_dir())
 
     def test_it_leaves_no_probe_file_behind(self):
-        check_data_directory(self.directory)
+        check_data_directory(self.directory, is_mount=unmounted)
 
         self.assertEqual(list(self.directory.iterdir()), [])
 
@@ -664,21 +725,36 @@ class DataDirectoryTests(unittest.TestCase):
         target.write_text("not a directory", encoding="utf-8")
 
         with self.assertRaises(PreflightError) as caught:
-            check_data_directory(target)
+            check_data_directory(target, is_mount=unmounted)
 
         self.assertIn(str(target), str(caught.exception))
 
     def test_an_unwritable_directory_reports_who_we_are(self):
-        def refuse(path):
+        def refuse(path, mode="w"):
             raise PermissionError(13, "Permission denied")
 
         with self.assertRaises(PreflightError) as caught:
-            check_data_directory(self.directory, _open=refuse)
+            check_data_directory(self.directory, is_mount=unmounted, _open=refuse)
 
         message = str(caught.exception)
         self.assertIn(str(self.directory), message)
         self.assertIn("uid", message)
         self.assertIn("Permission denied", message)
+
+    def test_a_full_disk_is_reported_not_raised_raw(self):
+        """A write that fails after opening must still be a PreflightError."""
+        class Full:
+            def write(self, text):
+                raise OSError(28, "No space left on device")
+
+            def close(self):
+                pass
+
+        with self.assertRaises(PreflightError) as caught:
+            check_data_directory(self.directory, is_mount=unmounted,
+                                 _open=lambda path, mode="w": Full())
+
+        self.assertIn("No space left on device", str(caught.exception))
 
     def test_it_warns_when_the_directory_is_not_a_mount_point(self):
         warnings = check_data_directory(self.directory, is_mount=lambda path: False)
@@ -793,27 +869,35 @@ def check_data_directory(path, is_mount=_default_is_mount, _open=None):
             % (path, error, identity, _owner(path.parent)))
 
     probe = path / PROBE_NAME
+    unwritable = (
+        "The data directory %s is not writable (%%s). This process is %s; the "
+        "directory is %s. On Unraid, appdata is owned by nobody:users "
+        "(99:100); on another host, build the image with --build-arg "
+        "PUID=... --build-arg PGID=... to match."
+        % (path, identity, _owner(path)))
     try:
         handle = opener(str(probe), "w")
     except OSError as error:
-        raise PreflightError(
-            "The data directory %s is not writable (%s). This process is %s; "
-            "the directory is %s. On Unraid, appdata is owned by nobody:users "
-            "(99:100); on another host, build the image with --build-arg "
-            "PUID=... --build-arg PGID=... to match."
-            % (path, error, identity, _owner(path)))
+        raise PreflightError(unwritable % error)
     try:
+        # A full or over-quota share fails here rather than at open, and it
+        # must still be a PreflightError: main catches nothing else, so a raw
+        # OSError would become the traceback this check exists to prevent.
         handle.write("ok")
+    except OSError as error:
+        raise PreflightError(unwritable % error)
     finally:
         try:
             handle.close()
         except Exception:
             pass
-    try:
-        probe.unlink()
-    except OSError:
-        # Written but not removable is odd, and not a reason to refuse to run.
-        pass
+        try:
+            probe.unlink()
+        except OSError:
+            # Written but not removable is odd, and not a reason to refuse to
+            # run. Cleaning up in finally means a failed write leaves nothing
+            # behind either.
+            pass
 
     warnings = []
     mounted = is_mount(path)
@@ -835,7 +919,17 @@ Expected: PASS, 7 tests.
 
 Add to `Dashboard/tests/test_rb3server_entry.py`:
 
-First give the test case a helper that builds a real configuration, since several tasks need one. Add to the test case class, together with a `setUp` creating `self.directory` from `tempfile.TemporaryDirectory()` with `self.addCleanup` if it has none:
+First give the test case a helper that builds a real configuration, since several tasks need one.
+
+`MainTests` **already has** a `setUp` at lines 117-121 that patches `print_log` — extend it, do not add a second one, or the patch is silently lost. Add `import tempfile` and `from pathlib import Path` at the top of the file if they are absent, and append to the existing `setUp`:
+
+```python
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+```
+
+Then the helper:
 
 ```python
     def config(self, **environ):
@@ -844,6 +938,8 @@ First give the test case a helper that builds a real configuration, since severa
 ```
 
 Import `ServerConfig` at the top of the file if it is not already imported.
+
+Two existing tests need the same treatment, because the preflight added in Step 7 acts on a real path. `test_rb3server_entry.py:153-161` and `:163-174` build a configuration with no `RB3E_DATA_DIR`, so `check_data_directory` would create and write into the real `%APPDATA%\RB3Dashboard\server` (or `~/.rb3dashboard/server` on CI). They still pass, but a unit test must not touch the user's own data directory — `test_runtime_config.py:186` exists precisely to assert that loading creates nothing. Point both at the temp directory by routing them through `self.config()`, or by adding `RB3E_DATA_DIR=str(self.directory)` to the environment they load from.
 
 Then the test. It passes `config_loader` and `runner` but **not** `application_factory`: supplying a factory is how a caller skips configuration loading entirely, and the preflight lives on the loading path.
 
@@ -885,8 +981,11 @@ Expected: FAIL with `TypeError: main() got an unexpected keyword argument 'prefl
 In `Dashboard/rb3server.py`, add the import:
 
 ```python
-from rb3dashboard.runtime.preflight import PreflightError, check_data_directory
+from rb3dashboard.runtime.preflight import (
+    PreflightError, check_data_directory, describe_identity)
 ```
+
+`describe_identity` is imported here, not in Task 6, so the banner in Task 6 Step 8 can call it without a second import.
 
 Change `main`'s signature to accept the injection point and run the check between loading the configuration and building the application:
 
@@ -1159,23 +1258,22 @@ Expected: PASS.
 
 The spec asks for the addresses actually bound, whether this process owns discovery, and which integrations are enabled. None of that is knowable before start. `WebService` already logs its own bound address; the rest belongs to the application once its supervisor is up.
 
-Add to `Dashboard/tests/test_runtime_server.py`, in the class that builds a `ServerApplication` with a log sink:
+Add to `Dashboard/tests/test_runtime_server.py`, in the test case that owns `make` (line 144). `make` already registers `self.addCleanup(application.stop)` at line 163, so do not register it again:
 
 ```python
     def test_it_reports_ownership_and_integrations_after_starting(self):
         messages = []
-        application = self.build(log_sink=lambda level, text: messages.append(text),
-                                 stagekit_enabled=False, web_enabled=False)
+        application = self.make(
+            log_sink=lambda level, text: messages.append(text),
+            stagekit_enabled=False, web_enabled=False)
+
         application.start()
-        self.addCleanup(application.stop)
+
         joined = "
 ".join(messages)
-
         self.assertIn("owns Pico discovery: no", joined)
-        self.assertIn("history:", joined)
+        self.assertIn("integrations --", joined)
 ```
-
-Use whatever the file's existing helper for constructing an application is named; if it constructs `ServerApplication(...)` inline in each test, do the same here and pass `log_sink`.
 
 - [ ] **Step 12: Run it to verify it fails**
 
@@ -1211,7 +1309,7 @@ and add the method next to `integration_report`:
                "on" if self.history is not None else "off"))
 ```
 
-If `_record_log` is not the method this class uses to emit a log line, use the one the surrounding code uses — grep the file for `log_sink` to find it.
+`_record_log` is the method this class already uses to emit a log line; see `runtime/server.py:484`.
 
 - [ ] **Step 14: Run it to verify it passes**
 
@@ -1293,7 +1391,15 @@ Add to the health-check class in `Dashboard/tests/test_packaging.py` (the one th
         self.assertIn(":8321/", url)
 ```
 
-Give that test class a `setUp` that creates a `tempfile.TemporaryDirectory()` as `self.directory` with `self.addCleanup`, matching the pattern in `test_runtime_config.py`, if it does not already have one.
+That class has a `setUp` that imports the module; extend it rather than replacing it, and add `import tempfile` at the top of `test_packaging.py` — the file does not currently import it. The addition:
+
+```python
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = directory.name
+```
+
+`Path` is already imported in that file.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -1359,9 +1465,10 @@ Expected: PASS. `test_the_health_check_names_only_real_settings` still passes: `
 `resolve` imports `rb3dashboard.runtime.config`, which works in the image because `WORKDIR` is `/app` and both `/app/healthcheck.py` and `/app/rb3dashboard/` exist. Record that where it can be broken. Above the `HEALTHCHECK` line in `Dockerfile`:
 
 ```dockerfile
-# The check imports rb3dashboard.runtime.config when RB3E_CONFIG is set, which
-# works because WORKDIR is /app and the package sits beside the script. Keep
-# both under the same directory if this ever moves.
+# The check imports rb3dashboard.runtime.config when RB3E_CONFIG is set. That
+# resolves because Python puts the script's own directory on sys.path, and the
+# package sits beside it in /app. Keep the two together if either ever moves;
+# changing WORKDIR alone does not break it.
 ```
 
 - [ ] **Step 7: Document it**
@@ -1399,11 +1506,14 @@ Section 1 is done when all of the following hold, verified by running the comman
 4. `RB3E_STAGEKIT_ENABLED=true python Dashboard/rb3server.py` exits 2 and prints a message naming `discovery_targets` and a worked example address.
 5. `RB3E_DATA_DIR` pointed at an unwritable path exits 2 and prints the path, this process's identity, and the directory's owner.
 6. The startup log's first block names every setting with its source and contains no token.
-7. `docker-compose.yml` contains no empty `RB3E_AUTH_TOKEN`, and `grep -c VOLUME Dockerfile` returns 0.
-8. `git status` is clean and no commit has been pushed.
+7. `docker-compose.yml` contains no empty `RB3E_AUTH_TOKEN`, and `grep -c '^VOLUME' Dockerfile` returns 0 (the explanatory comment added in Task 5 Step 9 contains the word, so an unanchored grep returns 1).
+8. The `docker run` example in `docs/deployment.md`, copied verbatim, names a bind reachable from another machine.
+9. `git status` is clean and no commit has been pushed.
 
 These are all executable on the Windows workstation. Nothing in Section 1 requires Docker.
 
 ## What Section 1 does not prove
+
+One deliberate deviation from the spec: it names `/proc/self/mountinfo` for mount detection, and Task 5 uses `os.path.ismount` instead — same answer, standard library, and it degrades to silence off Linux rather than reading a file that is not there.
 
 Recorded now so it is not forgotten at the end: none of the above is container evidence. The image is still unbuilt, the preflight's uid and gid reporting has never run as uid 99, the mount-point warning has never seen a real bind mount, and `resolve()` has never imported `rb3dashboard` from `/app`. Those belong to the Section 2 plan and to the gap ledger until a real run closes them.
