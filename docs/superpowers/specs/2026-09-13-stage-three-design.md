@@ -217,22 +217,50 @@ resolves its target the same way the server does, honouring `RB3E_CONFIG`.
 
 It must not become fragile in the process. Importing `ServerConfig` means a
 configuration that trips one of the new fatal rules would make the *health
-check* raise rather than report unhealthy, and it costs the script its current
-total independence from the application. So it catches `ConfigError` and falls
-back to the environment-only path. `test_packaging.py`'s health-check
-assertions are updated with it.
+check* raise a traceback rather than report anything useful. So it catches
+`ConfigError` — and **reports unhealthy, carrying the error as its diagnostic.
+It does not fall back to the environment-only path.**
+
+An earlier draft had it fall back. That was wrong in a way worth recording,
+because the failure is silent. A `ConfigError` means the server itself exits 2
+and never serves, so healthy is never the correct answer; a fallback can only
+ever produce a false positive. Under host networking the fallback is actively
+dangerous: it probes `127.0.0.1:8321` on the *host's* network stack, where
+anything else answering that port with a plausible body would mark a server
+healthy that never started, and Docker would stop restarting it. A health check
+that cannot determine what to probe must say so, not guess — which is the same
+principle Section 1 applies to the discovery fallback.
+
+`test_packaging.py`'s health-check assertions are updated with it.
 
 ## Section 2: Reproducible Linux and container verification
 
-**A tracked harness, not a one-off script.** `Dashboard/tools/servercheck/` is a
-runnable module that drives a server already running somewhere over the network.
-It lives under `tools/` rather than `tests/` for two reasons: `unittest discover
--s tests` would otherwise sweep it into the existing three-OS desktop job and
-run it with no server present, and `.dockerignore` already excludes
-`Dashboard/tests/`. The same command runs in CI, on Windows against loopback,
-and by hand on Unraid during the pilot.
+**A tracked harness, not a one-off script**, living in
+`Dashboard/tools/servercheck/`. It lives under `tools/` rather than `tests/` for
+two reasons: `unittest discover -s tests` would otherwise sweep it into the
+existing three-OS desktop job and run it with no server present, and
+`.dockerignore` already excludes `Dashboard/tests/`.
 
-It exercises, against a real socket every time:
+**It is two components, not one.** An earlier draft described a single network
+client that also had to send SIGTERM, restart the process, and assert the data
+directory was isolated. A remote HTTP and UDP client cannot do any of those
+things, so the promise and the interface contradicted each other. They are split
+by what access each one requires:
+
+- **The probe** speaks only the network protocols — HTTP, SSE, UDP 21070 and
+  21071. It needs a base URL, a token, and network reach, nothing more. This is
+  what runs against a deployed server: in CI against the container, on Windows
+  against loopback, and by hand against Unraid during the pilot.
+- **The controller** owns a server's lifecycle: it starts a local process or a
+  container, points a probe at it, signals it, restarts it, and inspects its
+  data directory on disk. It requires local process or Docker access, so it
+  runs in CI and on a developer machine, and never against the pilot host.
+
+The controller uses the probe; the probe never depends on the controller. Every
+lifecycle guarantee belongs to the controller, and only assertions reachable
+over the network belong to the probe.
+
+**The probe checks**, against a real socket every time:
 
 - Authentication: no token 401, wrong token 401, correct token 200,
   `/api/health` 200 without a token.
@@ -242,13 +270,17 @@ It exercises, against a real socket every time:
 - UDP 21071 telemetry, producing a device in `/api/devices`.
 - Lighting commands, with the emitted bytes captured by a fake Pico socket and
   compared to the desktop's format.
-- Shutdown on SIGTERM with a clean exit code, restart, and history that survives
-  both.
 
-Fixtures are small, deterministic, byte-level event samples. Isolation of the
-data directory is asserted by the harness itself, not left to convention, and a
-run contacts nothing outside the host. The harness is not copied into the image:
-the Dockerfile takes only `tools/healthcheck.py`, and that stays true.
+**The controller checks:**
+
+- Shutdown on SIGTERM with a clean exit code, and within a stated deadline.
+- Restart, with history that survives it.
+- That the data directory it was given is the one actually written, is empty
+  before the run, and is the only path the server touched.
+
+Fixtures are small, deterministic, byte-level event samples, and a run contacts
+nothing outside the host. Neither component is copied into the image: the
+Dockerfile takes only `tools/healthcheck.py`, and that stays true.
 
 **A container workflow.** `.github/workflows/server-container.yml` builds the
 image with `INSTALL_MQTT=false` and `true`, runs the harness against the
@@ -345,8 +377,21 @@ Stage 3 is complete when:
 
 1. Every Section 1 misconfiguration fails at startup with a message naming the
    fix, covered by tests, and the committed compose file is safe to copy.
-2. The harness exists, and has run to completion against a real container on
-   Linux, with the run recorded.
+2. A single `server-container.yml` run has completed green on Linux, with its
+   run URL recorded, and that run covered **every** mandatory case in Section 2,
+   not merely one harness invocation:
+   - the image built with `INSTALL_MQTT=false` **and** with `INSTALL_MQTT=true`;
+   - the probe passing against the container on `--network host`, for both
+     variants;
+   - the controller's shutdown, restart, and persistence checks;
+   - the running process confirmed as uid 99 / gid 100;
+   - the bind-mount permission case, with the preflight message captured in the
+     log and read for legibility;
+   - the MQTT variant verified against a real Mosquitto, including a broker
+     restart.
+
+   A partial run is not item 2. If a case cannot be made to pass, it is recorded
+   in the gap ledger as unverified rather than quietly dropped from the list.
 3. Every Section 3 scenario has been executed, with measurements recorded and
    each demonstrated defect fixed and regression-tested.
 4. The pilot checklist has been executed on the Unraid host, with results
