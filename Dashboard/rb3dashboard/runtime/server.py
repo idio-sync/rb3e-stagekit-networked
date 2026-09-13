@@ -368,16 +368,25 @@ class ServerApplication:
         Bound addresses, discovery ownership, and which integrations actually
         came up are all decided during start, so they cannot travel in the
         configuration banner the entry point prints beforehand.
+
+        Nothing here may escape. The supervisor has already started every
+        service by the time this runs, so an exception raised while *reporting*
+        a successful start would be caught by the caller as a failed start, and
+        a healthy server would be torn down by a diagnostic.
         """
-        report = self.integration_report()
-        self._record_log("owns Pico discovery: %s"
-                         % ("yes" if self.owns_discovery() else "no"))
-        self._record_log(
-            "integrations -- webhook: %s, mqtt: %s, relay: %s, history: %s"
-            % ("on" if report["webhook"]["configured"] else "off",
-               "on" if report["mqtt"]["running"] else "off",
-               "on" if report["relay"]["configured"] else "off",
-               "on" if self.history is not None else "off"))
+        try:
+            report = self.integration_report()
+            self._record_log("owns Pico discovery: %s"
+                             % ("yes" if self.owns_discovery() else "no"))
+            self._record_log(
+                "integrations -- webhook: %s, mqtt: %s, relay: %s, history: %s"
+                % ("on" if report["webhook"]["configured"] else "off",
+                   "on" if report["mqtt"]["running"] else "off",
+                   "on" if report["relay"]["configured"] else "off",
+                   "on" if self.history is not None else "off"))
+        except Exception as error:
+            self._record_log("Could not report the post-start state: %s" % error,
+                             level="warning")
 
     # -- console ---------------------------------------------------------
 

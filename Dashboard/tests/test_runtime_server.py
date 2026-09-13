@@ -204,6 +204,15 @@ class LifecycleTests(ServerTestCase):
         self.assertIn("owns Pico discovery: no", joined)
         self.assertIn("integrations --", joined)
 
+    def test_a_failing_post_start_report_does_not_stop_the_server(self):
+        """A diagnostic must never take down the server it is diagnosing."""
+        application = self.make(stagekit_enabled=False, web_enabled=False)
+        application.integration_report = lambda: 1 / 0
+
+        application.start()
+
+        self.assertTrue(application.is_running())
+
     def test_stage_kit_discovery_is_off_unless_asked_for(self):
         """A second discovery owner would redirect Pico telemetry."""
         self.started()
