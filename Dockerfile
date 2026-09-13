@@ -55,6 +55,10 @@ EXPOSE 8321/tcp
 EXPOSE 21070/udp
 EXPOSE 21071/udp
 
+# The check imports rb3dashboard.runtime.config when RB3E_CONFIG is set. That
+# resolves because Python puts the script's own directory on sys.path, and the
+# package sits beside it in /app. Keep the two together if either ever moves;
+# changing WORKDIR alone does not break it.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD ["python", "/app/healthcheck.py"]
 

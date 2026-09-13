@@ -27,6 +27,34 @@ def target(environ=None):
     return "http://%s:%s/api/health" % (host, port)
 
 
+def resolve(environ=None):
+    """Return (url, error). Exactly one is None.
+
+    When RB3E_CONFIG names a file, the target comes from the same loader the
+    server uses, so a configured port is followed. A configuration that will
+    not load is reported as the error: the server exits 2 on the same input and
+    never serves, so there is no healthy answer, and guessing a default port
+    under host networking could probe a different program entirely.
+    """
+    environ = os.environ if environ is None else environ
+    if not (environ.get("RB3E_CONFIG") or "").strip():
+        return target(environ), None
+    try:
+        from rb3dashboard.runtime.config import ConfigError, ServerConfig
+    except ImportError as error:
+        return None, "could not load the configuration module: %s" % error
+    try:
+        config = ServerConfig.load(environ=environ)
+    except ConfigError as error:
+        return None, str(error)
+    except OSError as error:
+        return None, str(error)
+    host = config.web_host
+    if host in ("", "0.0.0.0", "::", "*"):
+        host = "127.0.0.1"
+    return "http://%s:%d/api/health" % (host, config.web_port), None
+
+
 def check(url, timeout=4.0, opener=None):
     """Return (ok, detail). Health needs no token, by design."""
     opener = urllib.request.urlopen if opener is None else opener
@@ -52,7 +80,10 @@ def check(url, timeout=4.0, opener=None):
 
 
 def main(environ=None):
-    url = target(environ)
+    url, error = resolve(environ)
+    if error is not None:
+        sys.stderr.write("configuration could not be read: %s\n" % error)
+        return 1
     ok, detail = check(url)
     if not ok:
         sys.stderr.write(detail + "\n")

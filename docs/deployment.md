@@ -67,6 +67,9 @@ Then open `http://your-server:8321` and paste the token when the page asks.
   appdata directory is writable without changing anything. On another host,
   build with `--build-arg PUID=... --build-arg PGID=...`.
 - The health check asks the server's own `/api/health`, which needs no token.
+  It follows `RB3E_CONFIG` when you use a configuration file, and reports the
+  container unhealthy — rather than probing a default port that might belong to
+  something else — if that file cannot be read.
 
 ## Settings
 

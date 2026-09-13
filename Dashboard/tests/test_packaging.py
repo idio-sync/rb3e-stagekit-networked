@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 
@@ -161,6 +162,10 @@ class HealthCheckTests(unittest.TestCase):
         import healthcheck
         self.healthcheck = healthcheck
 
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = directory.name
+
     def test_a_wildcard_bind_is_probed_on_loopback(self):
         """The check runs inside the container and never leaves it."""
         for host in ("0.0.0.0", "", "::", "*"):
@@ -237,6 +242,47 @@ class HealthCheckTests(unittest.TestCase):
                                        opener=lambda url, timeout=None: Response())
 
         self.assertFalse(ok)
+
+    def test_it_follows_a_configuration_file(self):
+        path = Path(self.directory) / "server.json"
+        path.write_text('{"web_port": 9100}', encoding="utf-8")
+
+        url, error = self.healthcheck.resolve({"RB3E_CONFIG": str(path)})
+
+        self.assertIsNone(error)
+        self.assertIn(":9100/", url)
+
+    def test_the_environment_still_wins_over_the_file(self):
+        path = Path(self.directory) / "server.json"
+        path.write_text('{"web_port": 9100}', encoding="utf-8")
+
+        url, error = self.healthcheck.resolve({"RB3E_CONFIG": str(path),
+                                               "RB3E_WEB_PORT": "9200"})
+
+        self.assertIsNone(error)
+        self.assertIn(":9200/", url)
+
+    def test_an_unreadable_configuration_is_unhealthy_not_a_guess(self):
+        """A server that cannot load its config never serves. Never guess."""
+        path = Path(self.directory) / "server.json"
+        path.write_text("{not json", encoding="utf-8")
+
+        url, error = self.healthcheck.resolve({"RB3E_CONFIG": str(path)})
+
+        self.assertIsNone(url)
+        self.assertIn(str(path), error)
+
+    def test_an_unreadable_configuration_exits_nonzero(self):
+        path = Path(self.directory) / "server.json"
+        path.write_text("{not json", encoding="utf-8")
+
+        self.assertEqual(self.healthcheck.main({"RB3E_CONFIG": str(path)}), 1)
+
+    def test_no_configuration_file_uses_the_environment(self):
+        url, error = self.healthcheck.resolve({"RB3E_WEB_PORT": "8321"})
+
+        self.assertIsNone(error)
+        self.assertIn(":8321/", url)
 
 
 class DocumentationTests(unittest.TestCase):
