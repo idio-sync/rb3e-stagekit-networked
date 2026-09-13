@@ -87,7 +87,7 @@ Add to `Dashboard/tests/test_packaging.py`, inside `ComposeTests` (line 85), whi
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd Dashboard && python -m unittest tests.test_packaging -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_packaging.py" -v`
 Expected: FAIL. `test_the_compose_file_demands_a_token` fails on the `assertNotIn`; `test_an_example_environment_file_names_the_token` fails with `FileNotFoundError`.
 
 - [ ] **Step 3: Change the compose file**
@@ -128,7 +128,7 @@ Append to `.gitignore`:
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `cd Dashboard && python -m unittest tests.test_packaging -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_packaging.py" -v`
 Expected: PASS, including the pre-existing `test_compose_names_only_real_settings` (the interpolation still spells `RB3E_AUTH_TOKEN`, which is a real setting).
 
 - [ ] **Step 7: Run the full suite**
@@ -175,7 +175,7 @@ Add to `DefaultTests` in `Dashboard/tests/test_runtime_config.py`:
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config.DefaultTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".DefaultTests -v`
 Expected: FAIL with `AssertionError: '0.0.0.0' != '127.0.0.1'`.
 
 - [ ] **Step 3: Change the default**
@@ -193,7 +193,7 @@ Leave `listen_address` and `telemetry_address` at `"0.0.0.0"` — those receive 
 
 - [ ] **Step 4: Run it to verify it passes**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -v`
 Expected: PASS.
 
 - [ ] **Step 5: Fix the README, which now says something false**
@@ -297,7 +297,7 @@ class OpenApiTests(ConfigTestCase):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config.OpenApiTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".OpenApiTests -v`
 Expected: FAIL. `test_a_network_bind_without_a_token_is_refused` fails because no exception is raised; the `allow_open_api` tests fail with `AttributeError` or a `ConfigError` about an unknown setting.
 
 - [ ] **Step 3: Add the field and the loopback helper**
@@ -352,7 +352,7 @@ Append to `ServerConfig._validate`, after the existing bind-address check:
 
 - [ ] **Step 5: Run them to verify they pass**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -v`
 Expected: PASS.
 
 - [ ] **Step 6: Silence the warning that now only makes sense off loopback**
@@ -531,7 +531,7 @@ class DiscoveryTargetTests(ConfigTestCase):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config.DiscoveryTargetTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".DiscoveryTargetTests -v`
 Expected: FAIL — no exception raised, and `AttributeError` on `allow_inferred_discovery`.
 
 - [ ] **Step 3: Add the field**
@@ -570,7 +570,7 @@ Append to `ServerConfig._validate`:
 
 - [ ] **Step 5: Run them to verify they pass**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -v`
 Expected: PASS.
 
 - [ ] **Step 6: Update the two existing tests this rule now rejects**
@@ -878,7 +878,7 @@ class ContainingMountTests(unittest.TestCase):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_preflight -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_preflight.py" -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'rb3dashboard.runtime.preflight'`.
 
 - [ ] **Step 3: Write the preflight module**
@@ -1075,7 +1075,7 @@ def check_data_directory(path, is_mount=_default_is_mount, _open=None):
 
 - [ ] **Step 4: Run them to verify they pass**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_preflight -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_preflight.py" -v`
 Expected: PASS, 16 tests — 11 in `DataDirectoryTests` and 5 in `ContainingMountTests`.
 
 - [ ] **Step 5: Write the failing test for the entry point calling it**
@@ -1136,7 +1136,7 @@ Then the test. It passes `config_loader` and `runner` but **not** `application_f
 
 - [ ] **Step 6: Run it to verify it fails**
 
-Run: `cd Dashboard && python -m unittest tests.test_rb3server_entry -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_rb3server_entry.py" -v`
 Expected: FAIL with `TypeError: main() got an unexpected keyword argument 'preflight'`.
 
 - [ ] **Step 7: Wire the preflight into the entry point**
@@ -1186,7 +1186,7 @@ Re-exporting `PreflightError` through this import is what makes the test's `rb3s
 
 - [ ] **Step 8: Run it to verify it passes**
 
-Run: `cd Dashboard && python -m unittest tests.test_rb3server_entry -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_rb3server_entry.py" -v`
 Expected: PASS.
 
 - [ ] **Step 9: Remove `VOLUME` from the Dockerfile**
@@ -1289,7 +1289,7 @@ class ProvenanceTests(ConfigTestCase):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config.ProvenanceTests -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py".ProvenanceTests -v`
 Expected: FAIL with `AttributeError: 'ServerConfig' object has no attribute 'sources'`.
 
 - [ ] **Step 3: Keep provenance through parsing**
@@ -1346,7 +1346,7 @@ Add to `ServerConfig`, next to `describe`:
 
 - [ ] **Step 5: Run them to verify they pass**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_config -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_config.py" -v`
 Expected: PASS.
 
 - [ ] **Step 6: Write the failing test for the banner**
@@ -1378,7 +1378,7 @@ Task 5 Step 5 already defined `self.config(**environ)` with this signature, so n
 
 - [ ] **Step 7: Run it to verify it fails**
 
-Run: `cd Dashboard && python -m unittest tests.test_rb3server_entry -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_rb3server_entry.py" -v`
 Expected: FAIL with `AttributeError: module 'rb3server' has no attribute 'log_startup_banner'`.
 
 - [ ] **Step 8: Write the banner**
@@ -1414,7 +1414,7 @@ In `main`, replace `print_log("info", "Configuration: %s" % config.describe())` 
 
 - [ ] **Step 10: Run it to verify it passes**
 
-Run: `cd Dashboard && python -m unittest tests.test_rb3server_entry -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_rb3server_entry.py" -v`
 Expected: PASS.
 
 - [ ] **Step 11: Write the failing test for the post-bind half**
@@ -1439,7 +1439,7 @@ Add to `Dashboard/tests/test_runtime_server.py`, in the test case that owns `mak
 
 - [ ] **Step 12: Run it to verify it fails**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_server -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_server.py" -v`
 Expected: FAIL — neither string appears in the log.
 
 - [ ] **Step 13: Report what is only knowable after start**
@@ -1475,7 +1475,7 @@ and add the method next to `integration_report`:
 
 - [ ] **Step 14: Run it to verify it passes**
 
-Run: `cd Dashboard && python -m unittest tests.test_runtime_server -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_runtime_server.py" -v`
 Expected: PASS.
 
 - [ ] **Step 15: Run the full suite**
@@ -1565,7 +1565,7 @@ That class has a `setUp` that imports the module; extend it rather than replacin
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest tests.test_packaging -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_packaging.py" -v`
 Expected: FAIL with `AttributeError: module 'healthcheck' has no attribute 'resolve'`.
 
 - [ ] **Step 3: Add resolution that reports rather than guesses**
@@ -1619,7 +1619,7 @@ def main(environ=None):
 
 - [ ] **Step 5: Run them to verify they pass**
 
-Run: `cd Dashboard && python -m unittest tests.test_packaging -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_packaging.py" -v`
 Expected: PASS. `test_the_health_check_names_only_real_settings` still passes: `RB3E_CONFIG` is in `known_variables()` already.
 
 - [ ] **Step 6: Note the import path in the Dockerfile comment**
