@@ -149,7 +149,7 @@ class ServerApplication:
                  discovery_interval=5.0,
                  telemetry_address="0.0.0.0",
                  web_enabled=True,
-                 web_host="0.0.0.0",
+                 web_host="127.0.0.1",
                  web_port=8321,
                  auth_token="",
                  web_service_factory=None,

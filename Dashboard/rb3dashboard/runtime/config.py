@@ -92,7 +92,10 @@ def _as_list(value, where, name):
 _FIELDS = {
     "listen_address": (_as_text, "0.0.0.0"),
     "telemetry_address": (_as_text, "0.0.0.0"),
-    "web_host": (_as_text, "0.0.0.0"),
+    # Loopback by default: the API drives physical lights and the token
+    # defaults to empty, so an unconfigured server must not be reachable from
+    # the network. Deployments set this explicitly; see docs/deployment.md.
+    "web_host": (_as_text, "127.0.0.1"),
     # TCP 21070 belongs to the console's own song list, song jump, and web UI,
     # so the dashboard server never claims that number by default.
     "web_port": (_as_int, 8321),

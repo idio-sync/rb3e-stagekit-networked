@@ -54,7 +54,7 @@ class _DashboardHTTPServer(ThreadingHTTPServer):
 class WebService:
     """Serve the read-only API on a configured address."""
 
-    def __init__(self, application, host="0.0.0.0", port=8321, auth_token="",
+    def __init__(self, application, host="127.0.0.1", port=8321, auth_token="",
                  log_sink=None, handler_class=ApiHandler, heartbeat=15.0,
                  join_timeout=5.0, connection_timeout=30.0):
         self._application = application

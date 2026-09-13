@@ -222,12 +222,14 @@ python -m pip install -r Dashboard/requirements-server.txt
 python Dashboard/rb3server.py
 ```
 
-Then open `http://<the-server>:8321`.
+Then open `http://127.0.0.1:8321` on that same machine.
 
-Settings come from defaults, then an optional JSON file, then `RB3E_` environment variables. **Set a token**, or anything that can reach the port can drive your lights:
+The server binds loopback by default, so nothing else on the network can reach
+it until you say so. To reach it from a phone or another PC, bind every
+interface — and set a token, which the server now requires when you do:
 
 ```bash
-RB3E_AUTH_TOKEN=choose-something python Dashboard/rb3server.py
+RB3E_WEB_HOST=0.0.0.0 RB3E_AUTH_TOKEN=choose-something python Dashboard/rb3server.py
 ```
 
 Stage Kit support is off until you turn it on, because enabling it makes this server the owner of Pico discovery and takes telemetry away from a desktop dashboard. [Deployment](docs/deployment.md) covers every setting, the container, Unraid, and Home Assistant.

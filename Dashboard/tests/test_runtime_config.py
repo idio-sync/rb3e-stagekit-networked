@@ -46,6 +46,15 @@ class DefaultTests(ConfigTestCase):
 
         self.assertEqual(config.web_port, 8321)
 
+    def test_the_dashboard_defaults_to_loopback(self):
+        """An unconfigured server is not reachable from the network.
+
+        The API drives physical lights and the token defaults to empty, so the
+        safe default is a bind nothing else can reach. Every deployment sets
+        web_host explicitly.
+        """
+        self.assertEqual(self.load().web_host, "127.0.0.1")
+
 
 class FileTests(ConfigTestCase):
     def test_values_are_read_from_a_json_file(self):
