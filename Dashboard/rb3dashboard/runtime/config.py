@@ -7,7 +7,9 @@ variable is the field name in upper case with an ``RB3E_`` prefix.
 Nothing here is inferred from the host. Bind addresses, broadcast targets, and
 ports are stated explicitly, because the Stage 1 desktop guessed a /24 broadcast
 from its default route and that guess does not survive a server with several
-interfaces.
+interfaces. The one inference that remains is opt-in: allow_inferred_discovery
+restores the desktop's guess for anyone who wants it, and the server refuses to
+start rather than guessing silently.
 
 Unknown keys are rejected rather than ignored. A silently dropped typo behaves
 exactly like a setting that had no effect, which is painful to diagnose after a
@@ -108,6 +110,10 @@ _FIELDS = {
     "allow_open_api": (_as_bool, False),
     "stagekit_enabled": (_as_bool, False),
     "discovery_targets": (_as_list, []),
+    # Opt back into the desktop's default-route /24 guess. Off by default: on a
+    # server with bridges and several interfaces the guess picks the wrong one,
+    # and a Pico that never hears discovery looks exactly like a broken Pico.
+    "allow_inferred_discovery": (_as_bool, False),
     "relay_targets": (_as_list, []),
     "discovery_enabled": (_as_bool, True),
     "discovery_interval": (_as_float, 5.0),
@@ -279,6 +285,22 @@ class ServerConfig:
                 "127.0.0.1, or set allow_open_api if you really mean to serve "
                 "an open API on a trusted network."
                 % values["web_host"])
+        if values["discovery_targets"] == ["auto"]:
+            raise ConfigError(
+                "discovery_targets must be broadcast addresses, not 'auto'. "
+                "To use the inferred /24 from the default route, set "
+                "allow_inferred_discovery instead.")
+        if (values["stagekit_enabled"] and values["discovery_enabled"]
+                and not values["discovery_targets"]
+                and not values["allow_inferred_discovery"]):
+            raise ConfigError(
+                "stagekit_enabled is on, so this process owns Pico discovery, "
+                "but discovery_targets is empty. Name the broadcast address of "
+                "the network your Picos are on, for example "
+                "RB3E_DISCOVERY_TARGETS=192.168.1.255. Set "
+                "allow_inferred_discovery to guess a /24 from the default "
+                "route instead, which is unreliable on a host with several "
+                "interfaces.")
 
     # -- use ------------------------------------------------------------
 

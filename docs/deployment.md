@@ -93,11 +93,14 @@ that had no effect.
 | `RB3E_CONSOLE_ADDRESS` | empty | Skip console detection and use this address. |
 | `RB3E_RELAY_TARGETS` | empty | Only for consoles configured with `BroadcastTarget`. See below. |
 | `RB3E_ALLOW_OPEN_API` | `false` | Permit a tokenless API on a network bind. Off, and refusing to start, by default. |
+| `RB3E_ALLOW_INFERRED_DISCOVERY` | `false` | Guess a /24 from the default route instead of naming targets. |
 
-`RB3E_DISCOVERY_TARGETS` matters more than it looks. Without it, discovery
-falls back to guessing a /24 from the default route, which is how the desktop
-has always done it and which is unreliable on a server with several interfaces
-and bridges. Name the broadcast address of the network your Picos are on.
+`RB3E_DISCOVERY_TARGETS` is required once `RB3E_STAGEKIT_ENABLED` is on. The
+server refuses to start without it rather than guessing, because the guess is a
+/24 inferred from the default route — how the desktop has always done it, and
+unreliable on a server with several interfaces and bridges. Name the broadcast
+address of the network your Picos are on. `RB3E_ALLOW_INFERRED_DISCOVERY=true`
+restores the guess if you want it.
 
 ## Two dashboards, one set of Picos
 

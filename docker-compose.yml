@@ -52,9 +52,14 @@ services:
 
       # Where discovery is broadcast, as a comma separated list. Give the
       # broadcast address of the network the Picos are on, for example
-      # 192.168.1.255. Leaving it empty keeps the old guess from the default
-      # route, which is unreliable on a host with several interfaces.
+      # 192.168.1.255.
+      # Required when RB3E_STAGEKIT_ENABLED is true: the server refuses to start
+      # without it rather than guessing an interface.
       RB3E_DISCOVERY_TARGETS: ""
+
+      # Set to "true" to guess a /24 from the default route instead of naming
+      # targets. Unreliable on a host with several interfaces.
+      RB3E_ALLOW_INFERRED_DISCOVERY: "false"
 
       # Optional Home Assistant webhook, posted with the same payload the
       # desktop sends, so existing automations keep matching.

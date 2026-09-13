@@ -59,6 +59,7 @@ class DefaultTests(ConfigTestCase):
 class FileTests(ConfigTestCase):
     def test_values_are_read_from_a_json_file(self):
         path = self.write({"web_port": 9000, "stagekit_enabled": True,
+                           "discovery_targets": ["192.0.2.255"],
                            "auth_token": "secret"})
 
         config = self.load(path=path)
@@ -114,7 +115,9 @@ class EnvironmentTests(ConfigTestCase):
 
     def test_booleans_accept_common_spellings(self):
         for value in ("1", "true", "TRUE", "yes", "on"):
-            self.assertTrue(self.load(RB3E_STAGEKIT_ENABLED=value).stagekit_enabled)
+            self.assertTrue(self.load(RB3E_STAGEKIT_ENABLED=value,
+                                      RB3E_DISCOVERY_TARGETS="192.0.2.255"
+                                      ).stagekit_enabled)
         for value in ("0", "false", "no", "off"):
             self.assertFalse(self.load(RB3E_STAGEKIT_ENABLED=value).stagekit_enabled)
 
@@ -214,6 +217,7 @@ class ApplicationKwargsTests(ConfigTestCase):
 
     def test_kwargs_carry_configured_values(self):
         config = self.load(RB3E_STAGEKIT_ENABLED="true",
+                           RB3E_DISCOVERY_TARGETS="192.0.2.255",
                            RB3E_QUEUE_CAPACITY="7",
                            RB3E_HA_WEBHOOK_URL="http://ha.example/hook")
 
@@ -282,6 +286,47 @@ class OpenApiTests(ConfigTestCase):
 
     def test_the_escape_hatch_is_off_by_default(self):
         self.assertFalse(self.load().allow_open_api)
+
+
+class DiscoveryTargetTests(ConfigTestCase):
+    """Discovery must not guess an interface on a multi-homed server."""
+
+    def enabled(self, **environ):
+        environ.setdefault("RB3E_STAGEKIT_ENABLED", "true")
+        return self.load(**environ)
+
+    def test_stagekit_without_targets_is_refused(self):
+        with self.assertRaises(ConfigError) as caught:
+            self.enabled()
+
+        message = str(caught.exception)
+        self.assertIn("discovery_targets", message)
+        self.assertIn("allow_inferred_discovery", message)
+
+    def test_explicit_targets_are_accepted(self):
+        config = self.enabled(RB3E_DISCOVERY_TARGETS="192.168.1.255")
+
+        self.assertEqual(config.discovery_targets, ["192.168.1.255"])
+
+    def test_the_escape_hatch_permits_the_route_guess(self):
+        config = self.enabled(RB3E_ALLOW_INFERRED_DISCOVERY="true")
+
+        self.assertEqual(config.discovery_targets, [])
+        self.assertTrue(config.allow_inferred_discovery)
+
+    def test_discovery_switched_off_needs_no_targets(self):
+        """Telemetry without claiming devices sends no discovery at all."""
+        config = self.enabled(RB3E_DISCOVERY_ENABLED="false")
+
+        self.assertFalse(config.discovery_enabled)
+
+    def test_stagekit_off_needs_no_targets(self):
+        self.assertFalse(self.load().stagekit_enabled)
+
+    def test_auto_is_not_a_magic_target(self):
+        """'auto' is an address, not a mode. The boolean field is the hatch."""
+        with self.assertRaises(ConfigError):
+            self.enabled(RB3E_DISCOVERY_TARGETS="auto")
 
 
 if __name__ == "__main__":
