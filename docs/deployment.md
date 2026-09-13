@@ -63,6 +63,10 @@ Then open `http://your-server:8321` and paste the token when the page asks.
 - Map `/data` to `/mnt/user/appdata/rb3e-dashboard`. Unraid documents
   [network modes and persistent appdata](https://docs.unraid.net/unraid-os/using-unraid-to/run-docker-containers/managing-and-customizing-containers/).
 - Set the network type to **Host**.
+- Set `RB3E_WEB_HOST` to `0.0.0.0` and `RB3E_AUTH_TOKEN` to a token of your own.
+  The server binds loopback by default and refuses to start on a network bind
+  without a token, so the two go together. Without the bind the container starts,
+  reports healthy, and is reachable from nowhere but the server itself.
 - The image runs as uid 99, gid 100, which is Unraid's `nobody:users`, so the
   appdata directory is writable without changing anything. On another host,
   build with `--build-arg PUID=... --build-arg PGID=...`.

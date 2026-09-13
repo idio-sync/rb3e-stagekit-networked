@@ -284,6 +284,15 @@ class HealthCheckTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertIn(":8321/", url)
 
+    def test_a_file_that_is_not_utf8_is_unhealthy_not_a_traceback(self):
+        path = Path(self.directory) / "server.json"
+        path.write_bytes(b"\xff\xfe{\x00}\x00")
+
+        url, error = self.healthcheck.resolve({"RB3E_CONFIG": str(path)})
+
+        self.assertIsNone(url)
+        self.assertIn(str(path), error)
+
 
 class DocumentationTests(unittest.TestCase):
     """Documentation ships with the project, so it has to be readable."""

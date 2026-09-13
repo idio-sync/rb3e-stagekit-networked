@@ -98,6 +98,16 @@ class FileTests(ConfigTestCase):
 
         self.assertIn("web_prot", str(caught.exception))
 
+    def test_a_file_that_is_not_utf8_names_the_file(self):
+        """Notepad's "Save As" with the wrong encoding must not be a traceback."""
+        path = self.directory / "server.json"
+        path.write_bytes(b"\xff\xfe{\x00}\x00")
+
+        with self.assertRaises(ConfigError) as caught:
+            self.load(path)
+
+        self.assertIn(str(path), str(caught.exception))
+
 
 class EnvironmentTests(ConfigTestCase):
     def test_environment_values_are_applied(self):

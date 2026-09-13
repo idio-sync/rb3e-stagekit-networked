@@ -225,7 +225,7 @@ class ServerConfig:
         where = "configuration file %s" % path
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError as error:
+        except (OSError, ValueError) as error:
             raise ConfigError("%s could not be read: %s" % (where, error))
         try:
             document = json.loads(text)
