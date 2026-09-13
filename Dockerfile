@@ -42,8 +42,11 @@ RUN groupadd --gid "$PGID" --non-unique rb3 \
  && mkdir -p /data \
  && chown -R "$PUID:$PGID" /data /app
 
+# No VOLUME declaration on purpose. Compose and the Unraid template both bind
+# a host directory to /data, and an anonymous volume would quietly absorb the
+# history of anyone who forgot -v. The startup preflight warns when /data is
+# not a mount point instead.
 USER rb3
-VOLUME ["/data"]
 
 # Declared for documentation. With host networking these are the host's ports:
 # UDP 21070 receives console events, UDP 21071 carries Pico discovery and

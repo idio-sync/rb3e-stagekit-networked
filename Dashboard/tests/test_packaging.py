@@ -69,6 +69,10 @@ class DockerfileTests(unittest.TestCase):
     def test_it_does_not_run_as_root(self):
         self.assertIn("USER rb3", self.text)
 
+    def test_the_image_declares_no_anonymous_volume(self):
+        """An anonymous volume hides a forgotten -v until the data is gone."""
+        self.assertNotRegex(self.text, r"(?m)^\s*VOLUME")
+
     def test_it_health_checks_with_the_tracked_script(self):
         self.assertIn("HEALTHCHECK", self.text)
         self.assertIn("/app/healthcheck.py", self.text)

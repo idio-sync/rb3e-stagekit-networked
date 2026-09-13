@@ -5,12 +5,14 @@ import io
 import signal
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import unittest
 from unittest import mock
 
 import rb3server
+from rb3dashboard.runtime.config import ServerConfig
 
 
 class FakeApplication:
@@ -119,6 +121,13 @@ class MainTests(unittest.TestCase):
         patcher = mock.patch.object(rb3server, "print_log")
         self.logged = patcher.start()
         self.addCleanup(patcher.stop)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+
+    def config(self, **environ):
+        environ.setdefault("RB3E_DATA_DIR", str(self.directory))
+        return ServerConfig.load(environ=environ)
 
     def test_main_returns_zero_when_the_server_runs_and_stops(self):
         application = FakeApplication()
@@ -151,27 +160,50 @@ class MainTests(unittest.TestCase):
                       " ".join(str(call) for call in self.logged.call_args_list))
 
     def test_the_effective_configuration_is_logged_at_startup(self):
-        from rb3dashboard.runtime.config import ServerConfig
-
         rb3server.main(argv=[],
-                       config_loader=lambda path=None: ServerConfig.load(environ={}),
+                       config_loader=lambda path=None: self.config(),
                        runner=lambda app: 0)
 
         logged = " ".join(str(call) for call in self.logged.call_args_list)
         self.assertIn("web_port", logged)
 
     def test_the_config_path_argument_is_passed_to_the_loader(self):
-        from rb3dashboard.runtime.config import ServerConfig
         seen = []
 
         def loader(path=None):
             seen.append(path)
-            return ServerConfig.load(environ={})
+            return self.config()
 
         rb3server.main(argv=["--config", "server.json"], config_loader=loader,
                        runner=lambda app: 0)
 
         self.assertEqual(seen, ["server.json"])
+
+    def test_a_failing_preflight_stops_the_server(self):
+        """A permissions problem must not half-start a server."""
+        def refuse(path):
+            raise rb3server.PreflightError("no writing here")
+
+        started = []
+        status = rb3server.main(
+            argv=[],
+            runner=lambda application: started.append(application) or 0,
+            config_loader=lambda path=None: self.config(),
+            preflight=refuse)
+
+        self.assertEqual(status, 2)
+        self.assertEqual(started, [])
+
+    def test_a_preflight_warning_is_logged_and_does_not_stop_the_server(self):
+        started = []
+        status = rb3server.main(
+            argv=[],
+            runner=lambda application: started.append(application) or 0,
+            config_loader=lambda path=None: self.config(),
+            preflight=lambda path: ["not a mount point"])
+
+        self.assertEqual(status, 0)
+        self.assertEqual(len(started), 1)
 
     def test_a_start_failure_reports_a_nonzero_exit_code(self):
         def explode(application):

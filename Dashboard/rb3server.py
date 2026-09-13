@@ -23,6 +23,8 @@ import threading
 import time
 
 from rb3dashboard.runtime.config import ConfigError, ServerConfig
+from rb3dashboard.runtime.preflight import (
+    PreflightError, check_data_directory, describe_identity)
 from rb3dashboard.runtime.server import ServerApplication
 
 
@@ -87,7 +89,7 @@ def build_application(config):
 
 
 def main(argv=None, application_factory=None, runner=run,
-         config_loader=ServerConfig.load):
+         config_loader=ServerConfig.load, preflight=check_data_directory):
     arguments = parse_arguments(argv)
     if application_factory is None:
         try:
@@ -101,6 +103,17 @@ def main(argv=None, application_factory=None, runner=run,
 
         def application_factory():
             return build_application(config)
+    else:
+        config = None
+
+    if config is not None:
+        try:
+            for warning in preflight(config.data_dir):
+                print_log("warning", warning)
+        except PreflightError as error:
+            print_log("error", str(error))
+            return 2
+
     try:
         application = application_factory()
     except Exception as error:
