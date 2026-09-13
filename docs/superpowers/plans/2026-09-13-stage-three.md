@@ -409,13 +409,20 @@ Then change the existing test to bind a network address, and add its counterpart
 
 - [ ] **Step 8: Reconcile the documents**
 
-In `docker-compose.yml`, under the `RB3E_AUTH_TOKEN` block from Task 1, add:
+In `docker-compose.yml`, **do not add `RB3E_ALLOW_OPEN_API`.** Advertising it there would be advertising something that cannot work: Task 1's `${RB3E_AUTH_TOKEN:?…}` rejects an empty token before Compose ever starts a container, so the operator who sets `RB3E_ALLOW_OPEN_API=true` and clears the token gets Compose's refusal, not an open API. A setting that is listed but inert is worse than one that is absent.
+
+The compose file is the artifact that must be safe to copy, so it deliberately offers only the safe path. Extend the Task 1 comment to say so:
 
 ```yaml
-      # The server refuses to start with a network bind and no token. Set this
-      # to "true" only if you deliberately want an open API on a trusted
-      # network.
-      RB3E_ALLOW_OPEN_API: "false"
+      # Required. Compose refuses to run without it, rather than serving an
+      # unauthenticated lighting API on every interface. Put it in .env beside
+      # this file, or export it before running compose. Note this applies to
+      # every compose subcommand, `down` and `logs` included, not just `up`.
+      #
+      # There is deliberately no RB3E_ALLOW_OPEN_API here. The server supports
+      # running without a token; this file does not, because the interpolation
+      # above refuses an empty value first. To run an open API, drop the
+      # interpolation yourself -- see "Access control" in docs/deployment.md.
 ```
 
 In `README.md:387`, replace the bullet, which is now false:
@@ -434,6 +441,17 @@ Then, in the settings table, change the `RB3E_AUTH_TOKEN` row's description to `
 
 ```markdown
 | `RB3E_ALLOW_OPEN_API` | `false` | Permit a tokenless API on a network bind. Off, and refusing to start, by default. |
+```
+
+And in the "Access control" section, add the paragraph the compose comment points at:
+
+```markdown
+The server will run without a token if you insist: set `RB3E_ALLOW_OPEN_API=true`
+and it will serve an open API on whatever address you bind. The compose file in
+this repository will not do it, because it requires a token before Compose
+starts anything; to go that route, remove the `${RB3E_AUTH_TOKEN:?...}`
+interpolation from your own copy. Do this only on a network you trust
+completely, and never on one reachable from the internet.
 ```
 
 - [ ] **Step 9: Run the full suite**
@@ -681,7 +699,7 @@ Create `Dashboard/tests/test_runtime_preflight.py`:
 Two conventions matter here and both are load-bearing:
 
 - **Every test that does not care about mount detection injects `is_mount`.** The default probes the real filesystem, and a temp directory is not a mount point on Linux or macOS — so a test asserting an empty warning list would pass on Windows and fail on the two POSIX runners in `build.yml`.
-- **`_open` takes the same two arguments the real `open` is called with.** The implementation calls `opener(str(probe), "w")`; a one-parameter fake raises `TypeError`, which is not an `OSError` and would escape the assertion entirely.
+- **`_open` takes the same two arguments the real `open` is called with.** The implementation calls `opener(str(probe), "x")` — exclusive creation, on a name carrying a fresh UUID, so the probe can never truncate or delete a file that was already there. A one-parameter fake raises `TypeError`, which is not an `OSError` and would escape the assertion entirely.
 
 ```python
 """Filesystem checks that run before any service starts."""
@@ -690,7 +708,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from rb3dashboard.runtime.preflight import PreflightError, check_data_directory
+from rb3dashboard.runtime.preflight import (
+    PreflightError, check_data_directory, containing_mount)
 
 
 def unmounted(path):
@@ -730,7 +749,7 @@ class DataDirectoryTests(unittest.TestCase):
         self.assertIn(str(target), str(caught.exception))
 
     def test_an_unwritable_directory_reports_who_we_are(self):
-        def refuse(path, mode="w"):
+        def refuse(path, mode="x"):
             raise PermissionError(13, "Permission denied")
 
         with self.assertRaises(PreflightError) as caught:
@@ -752,9 +771,100 @@ class DataDirectoryTests(unittest.TestCase):
 
         with self.assertRaises(PreflightError) as caught:
             check_data_directory(self.directory, is_mount=unmounted,
-                                 _open=lambda path, mode="w": Full())
+                                 _open=lambda path, mode="x": Full())
 
         self.assertIn("No space left on device", str(caught.exception))
+
+    def test_a_failure_on_close_is_not_swallowed(self):
+        """Buffered data is only really delivered at flush time.
+
+        A share that is full often accepts write() into the buffer and fails
+        when the handle is closed. Suppressing that is how a broken directory
+        passes a write check.
+        """
+        class FailsOnClose:
+            def write(self, text):
+                pass
+
+            def close(self):
+                raise OSError(28, "No space left on device")
+
+        with self.assertRaises(PreflightError) as caught:
+            check_data_directory(self.directory, is_mount=unmounted,
+                                 _open=lambda path, mode="x": FailsOnClose())
+
+        self.assertIn("No space left on device", str(caught.exception))
+
+    def test_it_never_touches_a_file_that_was_already_there(self):
+        """The probe is exclusively created, so it cannot clobber anything."""
+        bystander = self.directory / "history.sqlite3"
+        bystander.write_text("precious", encoding="utf-8")
+
+        check_data_directory(self.directory, is_mount=unmounted)
+
+        self.assertEqual(bystander.read_text(encoding="utf-8"), "precious")
+
+    def test_it_leaves_no_probe_behind_after_a_failed_write(self):
+        class Full:
+            def write(self, text):
+                raise OSError(28, "No space left on device")
+
+            def close(self):
+                pass
+
+        real = []
+
+        def record(path, mode="x"):
+            real.append(Path(path))
+            return Full()
+
+        with self.assertRaises(PreflightError):
+            check_data_directory(self.directory, is_mount=unmounted, _open=record)
+
+        self.assertEqual(list(self.directory.iterdir()), [])
+
+
+class ContainingMountTests(unittest.TestCase):
+    """The mount table answers the question os.path.ismount cannot."""
+
+    SAMPLE = (
+        "23 28 0:21 / /proc rw,relatime shared:12 - proc proc rw
+"
+        "31 28 0:24 / / rw,relatime shared:1 - overlay overlay rw
+"
+        "44 31 8:1 /appdata/rb3e /data rw,relatime shared:2 - ext4 /dev/sda1 rw
+"
+    )
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.mountinfo = Path(directory.name) / "mountinfo"
+        self.mountinfo.write_text(self.SAMPLE, encoding="utf-8")
+
+    def resolve(self, path):
+        # realpath is stubbed so these cases mean the same thing on Windows,
+        # where os.path.realpath("/data") would become "C:\data".
+        return containing_mount(path, mountinfo=str(self.mountinfo),
+                                realpath=lambda value: value)
+
+    def test_a_bind_mounted_directory_reports_its_own_mount(self):
+        self.assertEqual(self.resolve("/data"), "/data")
+
+    def test_a_subdirectory_of_a_mount_reports_that_mount(self):
+        """os.path.ismount gets this one wrong, and the warning would lie."""
+        self.assertEqual(self.resolve("/data/sessions"), "/data")
+
+    def test_a_path_on_the_container_root_reports_the_root(self):
+        self.assertEqual(self.resolve("/var/lib/whatever"), "/")
+
+    def test_a_nested_pseudo_filesystem_wins_over_the_root(self):
+        """The longest matching mount point is the containing one."""
+        self.assertEqual(self.resolve("/proc/1"), "/proc")
+
+    def test_an_unreadable_mount_table_says_nothing(self):
+        self.assertIsNone(containing_mount("/data", mountinfo="/nonexistent",
+                                           realpath=lambda value: value))
 
     def test_it_warns_when_the_directory_is_not_a_mount_point(self):
         warnings = check_data_directory(self.directory, is_mount=lambda path: False)
@@ -791,6 +901,8 @@ game for whoever is reading the container log.
 
 import os
 from pathlib import Path
+import posixpath
+import uuid
 
 
 PROBE_NAME = ".rb3e-write-probe"
@@ -827,18 +939,59 @@ def _owner(path):
     return ", ".join(parts)
 
 
-def _default_is_mount(path):
-    """Whether the path is a mount point, or None when we cannot tell.
+MOUNTINFO = "/proc/self/mountinfo"
 
-    Only meaningful on Linux, which is where the container runs. Everywhere
-    else this returns None and the caller says nothing rather than guessing.
+
+def containing_mount(path, mountinfo=MOUNTINFO, realpath=None):
+    """The mount point that contains path, or None when it cannot be read.
+
+    Reads the kernel's mount table rather than using os.path.ismount, which
+    compares a directory's device against its parent's. That test answers a
+    different question and gets this one wrong twice: a bind mount within the
+    same filesystem shares its parent's device and reads as "not a mount", and
+    any subdirectory of a real mount reads the same way. Both would make the
+    caller announce that history is about to be lost when it is not.
     """
-    if not hasattr(os.path, "ismount") or os.name == "nt":
-        return None
+    resolve = os.path.realpath if realpath is None else realpath
     try:
-        return os.path.ismount(str(path))
+        with open(mountinfo, encoding="utf-8") as handle:
+            entries = handle.readlines()
     except OSError:
         return None
+    try:
+        # Mount points are always POSIX paths. Normalising to them keeps the
+        # comparison meaningful, and letting a test supply realpath keeps this
+        # unit-testable on Windows, where os.path.realpath("/data") is
+        # "C:\data" and would match nothing.
+        target = posixpath.normpath(resolve(str(path)).replace(os.sep, "/"))
+    except OSError:
+        return None
+    best = None
+    for entry in entries:
+        fields = entry.split()
+        # id, parent, major:minor, root, mount point, ...
+        if len(fields) < 5:
+            continue
+        point = fields[4].replace("\\040", " ")
+        if target == point or target.startswith(point.rstrip("/") + "/"):
+            if best is None or len(point) > len(best):
+                best = point
+    return best
+
+
+def _default_is_mount(path, mountinfo=MOUNTINFO):
+    # Production always resolves symlinks; only tests inject realpath.
+    """Whether the data directory sits on a mount, or None when we cannot tell.
+
+    True means something is mounted at or above the directory, so its contents
+    outlive the container. False means it sits on the container's own root
+    filesystem. None means this is not a host that publishes a mount table --
+    Windows and macOS -- and the caller says nothing rather than guessing.
+    """
+    point = containing_mount(path, mountinfo)
+    if point is None:
+        return None
+    return point != "/"
 
 
 def check_data_directory(path, is_mount=_default_is_mount, _open=None):
@@ -868,7 +1021,10 @@ def check_data_directory(path, is_mount=_default_is_mount, _open=None):
             "--build-arg PUID=... --build-arg PGID=... to match."
             % (path, error, identity, _owner(path.parent)))
 
-    probe = path / PROBE_NAME
+    # A unique name opened with "x" (O_CREAT|O_EXCL). A fixed name opened "w"
+    # would truncate and then delete whatever happened to be there already,
+    # which is an unacceptable thing for a read-only-ish check to do.
+    probe = path / ("%s-%s" % (PROBE_NAME, uuid.uuid4().hex))
     unwritable = (
         "The data directory %s is not writable (%%s). This process is %s; the "
         "directory is %s. On Unraid, appdata is owned by nobody:users "
@@ -876,27 +1032,34 @@ def check_data_directory(path, is_mount=_default_is_mount, _open=None):
         "PUID=... --build-arg PGID=... to match."
         % (path, identity, _owner(path)))
     try:
-        handle = opener(str(probe), "w")
+        handle = opener(str(probe), "x")
     except OSError as error:
         raise PreflightError(unwritable % error)
+    closed = False
     try:
-        # A full or over-quota share fails here rather than at open, and it
-        # must still be a PreflightError: main catches nothing else, so a raw
+        # A full or over-quota share fails at one of these three, and every
+        # one must be a PreflightError: main catches nothing else, so a raw
         # OSError would become the traceback this check exists to prevent.
+        # close() is inside the try, not suppressed in finally, because a
+        # buffered write is only really delivered when the handle is flushed,
+        # and swallowing that error is how a full disk passes a write check.
         handle.write("ok")
+        handle.close()
+        closed = True
     except OSError as error:
         raise PreflightError(unwritable % error)
     finally:
-        try:
-            handle.close()
-        except Exception:
-            pass
+        if not closed:
+            try:
+                handle.close()
+            except Exception:
+                pass
         try:
             probe.unlink()
         except OSError:
             # Written but not removable is odd, and not a reason to refuse to
             # run. Cleaning up in finally means a failed write leaves nothing
-            # behind either.
+            # behind either. Only this probe is ever removed.
             pass
 
     warnings = []
@@ -913,7 +1076,7 @@ def check_data_directory(path, is_mount=_default_is_mount, _open=None):
 - [ ] **Step 4: Run them to verify they pass**
 
 Run: `cd Dashboard && python -m unittest tests.test_runtime_preflight -v`
-Expected: PASS, 7 tests.
+Expected: PASS, 16 tests — 11 in `DataDirectoryTests` and 5 in `ContainingMountTests`.
 
 - [ ] **Step 5: Write the failing test for the entry point calling it**
 
@@ -1050,7 +1213,7 @@ Add to `Dashboard/tests/test_packaging.py`, in the class that reads the Dockerfi
 - [ ] **Step 11: Run the full suite**
 
 Run: `cd Dashboard && python -m unittest discover -s tests`
-Expected: OK. Ten tests added (seven preflight, two entry point, one packaging); nothing may fail.
+Expected: OK. Nineteen tests added (sixteen preflight, two entry point, one packaging); nothing may fail.
 
 - [ ] **Step 12: Commit**
 
@@ -1269,8 +1432,7 @@ Add to `Dashboard/tests/test_runtime_server.py`, in the test case that owns `mak
 
         application.start()
 
-        joined = "
-".join(messages)
+        joined = "\n".join(messages)
         self.assertIn("owns Pico discovery: no", joined)
         self.assertIn("integrations --", joined)
 ```
@@ -1500,7 +1662,7 @@ git commit -m "fix: let the health check resolve its own target"
 
 Section 1 is done when all of the following hold, verified by running the commands:
 
-1. `cd Dashboard && python -m unittest discover -s tests` reports OK, with about 40 tests more than the 607 baseline at `31a395e` and no failures or errors.
+1. `cd Dashboard && python -m unittest discover -s tests` reports OK, with about 45 tests more than the 607 baseline at `31a395e` and no failures or errors.
 2. `python Dashboard/rb3server.py` with an empty environment starts, binds `127.0.0.1:8321`, and needs no token.
 3. `RB3E_WEB_HOST=0.0.0.0 python Dashboard/rb3server.py` exits 2 and prints a message naming `auth_token` and `allow_open_api`.
 4. `RB3E_STAGEKIT_ENABLED=true python Dashboard/rb3server.py` exits 2 and prints a message naming `discovery_targets` and a worked example address.
@@ -1513,7 +1675,5 @@ Section 1 is done when all of the following hold, verified by running the comman
 These are all executable on the Windows workstation. Nothing in Section 1 requires Docker.
 
 ## What Section 1 does not prove
-
-One deliberate deviation from the spec: it names `/proc/self/mountinfo` for mount detection, and Task 5 uses `os.path.ismount` instead — same answer, standard library, and it degrades to silence off Linux rather than reading a file that is not there.
 
 Recorded now so it is not forgotten at the end: none of the above is container evidence. The image is still unbuilt, the preflight's uid and gid reporting has never run as uid 99, the mount-point warning has never seen a real bind mount, and `resolve()` has never imported `rb3dashboard` from `/app`. Those belong to the Section 2 plan and to the gap ledger until a real run closes them.
