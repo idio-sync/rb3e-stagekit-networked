@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from rb3dashboard.runtime.preflight import (
-    PreflightError, check_data_directory, containing_mount)
+    PROBE_NAME, PreflightError, check_data_directory, containing_mount)
 
 
 def unmounted(path):
@@ -132,6 +132,18 @@ class DataDirectoryTests(unittest.TestCase):
             check_data_directory(self.directory, is_mount=unmounted, _open=record)
 
         self.assertEqual(list(self.directory.iterdir()), [])
+        self.assertEqual(len(real), 1)
+        self.assertEqual(real[0].parent, self.directory)
+        self.assertIn(PROBE_NAME, real[0].name)
+
+    def test_it_warns_when_the_directory_is_not_a_mount_point(self):
+        warnings = check_data_directory(self.directory, is_mount=lambda path: False)
+
+        self.assertTrue([text for text in warnings if "mount" in text.lower()])
+
+    def test_it_is_quiet_when_the_directory_is_a_mount_point(self):
+        self.assertEqual(check_data_directory(self.directory,
+                                              is_mount=lambda path: True), [])
 
 
 class ContainingMountTests(unittest.TestCase):
@@ -174,11 +186,18 @@ class ContainingMountTests(unittest.TestCase):
         self.assertIsNone(containing_mount("/data", mountinfo="/nonexistent",
                                            realpath=lambda value: value))
 
-    def test_it_warns_when_the_directory_is_not_a_mount_point(self):
-        warnings = check_data_directory(self.directory, is_mount=lambda path: False)
+    def test_a_tab_in_the_mount_point_is_decoded(self):
+        """An undecoded escape falls back to "/" and warns falsely."""
+        mountinfo = self.directory / "mountinfo-tab"
+        mountinfo.write_text(
+            "23 28 0:21 / /proc rw,relatime shared:12 - proc proc rw\n"
+            "31 28 0:24 / / rw,relatime shared:1 - overlay overlay rw\n"
+            "44 31 8:1 /appdata/rb3e /mnt/user/rb3e\\011stage rw,relatime "
+            "shared:2 - ext4 /dev/sda1 rw\n",
+            encoding="utf-8")
 
-        self.assertTrue([text for text in warnings if "mount" in text.lower()])
-
-    def test_it_is_quiet_when_the_directory_is_a_mount_point(self):
-        self.assertEqual(check_data_directory(self.directory,
-                                              is_mount=lambda path: True), [])
+        self.assertEqual(
+            containing_mount("/mnt/user/rb3e\tstage/sessions",
+                             mountinfo=str(mountinfo),
+                             realpath=lambda value: value),
+            "/mnt/user/rb3e\tstage")

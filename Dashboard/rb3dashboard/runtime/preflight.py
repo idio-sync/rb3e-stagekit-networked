@@ -84,7 +84,10 @@ def containing_mount(path, mountinfo=MOUNTINFO, realpath=None):
         # id, parent, major:minor, root, mount point, ...
         if len(fields) < 5:
             continue
-        point = fields[4].replace("\\040", " ")
+        point = (fields[4].replace("\\040", " ")
+                 .replace("\\011", "\t")
+                 .replace("\\012", "\n")
+                 .replace("\\134", "\\"))
         if target == point or target.startswith(point.rstrip("/") + "/"):
             if best is None or len(point) > len(best):
                 best = point

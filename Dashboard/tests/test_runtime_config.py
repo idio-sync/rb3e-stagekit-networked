@@ -331,7 +331,11 @@ class DiscoveryTargetTests(ConfigTestCase):
         self.assertFalse(config.discovery_enabled)
 
     def test_stagekit_off_needs_no_targets(self):
-        self.assertFalse(self.load().stagekit_enabled)
+        """With Stage Kit explicitly off, no discovery targets must not raise."""
+        config = self.load(RB3E_STAGEKIT_ENABLED="false")
+
+        self.assertFalse(config.stagekit_enabled)
+        self.assertEqual(config.discovery_targets, [])
 
     def test_auto_is_not_a_magic_target(self):
         """'auto' is an address, not a mode. The boolean field is the hatch."""
