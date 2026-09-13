@@ -64,7 +64,7 @@ Then open `http://your-server:8321` and paste the token when the page asks.
 - Set the network type to **Host**.
 - The image runs as uid 99, gid 100, which is Unraid's `nobody:users`, so the
   appdata directory is writable without changing anything. On another host,
-  build with `--build-arg PUID=… --build-arg PGID=…`.
+  build with `--build-arg PUID=... --build-arg PGID=...`.
 - The health check asks the server's own `/api/health`, which needs no token.
 
 ## Settings
@@ -168,7 +168,7 @@ Then point it at your broker:
 ```yaml
 RB3E_MQTT_HOST: "192.168.1.50"
 RB3E_MQTT_USERNAME: "rb3dashboard"
-RB3E_MQTT_PASSWORD: "�"
+RB3E_MQTT_PASSWORD: "..."
 ```
 
 Entities appear on their own through discovery; there is nothing to add to

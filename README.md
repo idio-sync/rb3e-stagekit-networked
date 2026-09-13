@@ -6,12 +6,17 @@ This repository contains tools for **Rock Band 3 Enhanced (RB3E)**. It bridges t
 
 ## 📂 Project Structure
 
-The project consists of two main components:
+The project consists of three components:
 
-1.  **Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
-2.  **Pico W Firmware:** C firmware for the Raspberry Pi Pico W / Pico 2 W that converts a wired USB Stage Kit device (Santroller/Fatsco) into a wireless, networked UDP device.
+1.  **Desktop Dashboard:** A feature-rich desktop application that acts as a central hub. It handles music video playback synced to gameplay, tracks session history, manages Last.fm scrobbling, sets Discord Rich Presence, and manages Stage Kit devices.
+2.  **Headless Server:** The same reusable services with no window, meant for something like an Unraid box. It serves a browser dashboard you can open from a phone, an HTTP API and live event stream, keeps play history, and talks to Home Assistant. Start it with `python Dashboard/rb3server.py`; see [deployment](docs/deployment.md).
+3.  **Pico W Firmware:** C firmware for the Raspberry Pi Pico W / Pico 2 W that converts a wired USB Stage Kit device (Santroller/Fatsco) into a wireless, networked UDP device.
 
-For module boundaries, runtime ownership, preserved data paths, validation, and the Stage 2 roadmap, see [Dashboard architecture](docs/dashboard-architecture.md).
+You can run the desktop on its own exactly as before, the server on its own, or both together. Running both needs one decision, and it is the important one: only one of them may own Pico discovery, because each Pico remembers a single dashboard address. [Deployment](docs/deployment.md) explains how to choose.
+
+Gameplay lighting always travels from the console straight to the Picos. Neither program sits in that path, so neither can add latency to it or break it by being switched off.
+
+For module boundaries, runtime ownership, data paths, the upstream protocol findings, and an honest account of what has and has not been validated, see [Dashboard architecture](docs/dashboard-architecture.md).
 
 ---
 
@@ -26,6 +31,14 @@ For module boundaries, runtime ownership, preserved data paths, validation, and 
     * **Discord Rich Presence:** Displays your current song, artist, and elapsed time on your Discord profile.
     * **Last.fm:** Real-time "Now Playing" updates and automatic scrobbling (after 50% or 4 minutes of play).
 * **Stage Kit Fleet Management:** Auto-detects all wireless Stage Kit Picos on the network, monitoring their signal strength (RSSI) and USB status. Individual functions are manually triggerable for testing purposes.
+
+### 🖧 Headless Server
+* **Browser Dashboard:** Now playing, rig health, lighting controls and live activity, on any phone or tablet on your network. No build step and no external requests, so it works on a box with no internet.
+* **Live State API:** JSON endpoints and a server-sent event stream, each event carrying a version so a reconnecting client resumes instead of replaying.
+* **Lighting Control:** A Stage Kit command is an eight-bit lamp mask and a colour, so the mask is the interface. Named test scenes too, and a rate limit so a stuck button cannot flood your devices.
+* **Play History:** Sessions and plays in SQLite, kept in the server's own data directory.
+* **Home Assistant:** The existing webhook, or MQTT discovery giving real entities with availability that goes stale honestly when the server stops.
+* **Runs Alongside the Desktop:** The desktop can follow the server instead of competing with it for your Picos.
 
 ### 💡 Wireless Stage Kit (Pico W / Pico 2 W)
 * **Native C Firmware:** High-performance firmware built with Pico SDK for minimal latency.
@@ -198,6 +211,29 @@ python -m PyInstaller --noconfirm dashboard.spec
 
 The executable will be created in the `Dashboard/dist/` directory.
 
+---
+
+## 🖧 Software Setup (Headless Server)
+
+The server runs the same services without a window, so it can live on a NAS and be reached from a phone. It needs Python and `requests`, and nothing else.
+
+```bash
+python -m pip install -r Dashboard/requirements-server.txt
+python Dashboard/rb3server.py
+```
+
+Then open `http://<the-server>:8321`.
+
+Settings come from defaults, then an optional JSON file, then `RB3E_` environment variables. **Set a token**, or anything that can reach the port can drive your lights:
+
+```bash
+RB3E_AUTH_TOKEN=choose-something python Dashboard/rb3server.py
+```
+
+Stage Kit support is off until you turn it on, because enabling it makes this server the owner of Pico discovery and takes telemetry away from a desktop dashboard. [Deployment](docs/deployment.md) covers every setting, the container, Unraid, and Home Assistant.
+
+The desktop stays on your PC either way. Discord Rich Presence talks to a local pipe and VLC needs a screen, so neither works from a NAS.
+
 ### Development tests
 
 Run the dashboard tests from the repository root:
@@ -237,6 +273,11 @@ To fetch album art and scrobble tracks:
 4.  Click **Authorize Last.fm** to link your user account for scrobbling.
 
 ### 3. Home Assistant
+
+Two ways in. The **webhook** works from the desktop or the server, needs no extra dependency, and is a trigger: good for dimming the room when a song starts. **MQTT discovery**, server only, gives Home Assistant real entities instead: song, artist, venue, score and stars, whether a song is playing, and a device per Pico with its signal strength. See [deployment](docs/deployment.md#home-assistant).
+
+To set up the webhook on the desktop:
+
 1.  Navigate to the **Settings** tab.
 2.  Locate the **Home Assistant Integration** section in the right column.
 3.  Enter your Home Assistant Webhook URL.
@@ -245,13 +286,27 @@ To fetch album art and scrobble tracks:
 4.  Click **Save Settings**. The listener handles the update immediately.
 5.  Create automation using the provided YAML in Home Assistant.
 
-### 4. Network Ports
-Ensure your firewall allows the traffic used by your console, dashboard, and Picos:
-* **UDP 21070:** Console game and lighting events; dashboard manual Stage Kit commands.
-* **UDP 21071:** Dashboard discovery and Pico telemetry.
-* **TCP 21070 (HTTP):** Console song-list, song-jump, and existing RB3Enhanced web UI requests from the dashboard.
+### 4. Following a server from the desktop
 
-The console sends gameplay lighting directly to the Picos. The dashboard observes those events and manages discovery, telemetry, and manual controls; it is not a required gameplay proxy.
+If you run the headless server and want the desktop too, point the desktop at it rather than letting both compete for your Picos:
+
+1.  Navigate to the **Settings** tab.
+2.  In **Dashboard Server**, tick **Follow a dashboard server**.
+3.  Enter the server address, for example `http://192.168.1.50:8321`, and its access token.
+4.  Click **Save Settings** and restart the dashboard.
+
+The desktop then binds no ports and sends no discovery. It shows what the server sees, and keeps doing its own video playback, Discord Rich Presence and scrobbling, which need to be on your PC.
+
+### 5. Network Ports
+Ensure your firewall allows the traffic used by your console, dashboards, and Picos:
+* **UDP 21070:** Console game and lighting events; manual Stage Kit commands.
+* **UDP 21071:** Discovery and Pico telemetry.
+* **TCP 21070 (HTTP):** The console's own song list, song jump, and web UI. This belongs to the console.
+* **TCP 8321:** The headless server's browser dashboard and API, if you run it. Configurable, and deliberately not 21070.
+
+The console sends gameplay lighting directly to the Picos. A dashboard observes those events and manages discovery, telemetry, and manual controls; it is not a required gameplay proxy.
+
+On the console side, `[Events] EnableEvents` must be on, and `[Events] SendStagekit` is a **separate** flag: without it the console sends no lighting at all, which looks like dead Picos. Leave `[Events] BroadcastTarget` empty, because it replaces the broadcast with a single destination and silences everything else.
 
 ---
 
@@ -318,6 +373,18 @@ statistics without time fields retain their play counts and start time totals at
 **Captive portal page doesn't open?**
 * Manually navigate to `http://192.168.4.1` in your browser.
 * Try disabling mobile data on your phone while connected to the Pico's network.
+
+**Stage Kit lights do nothing, but everything else works?**
+* `[Events] SendStagekit` in `rb3.ini` is a separate flag from `EnableEvents`. Without it the console sends no lighting events at all.
+
+**Devices keep appearing and disappearing from the device list?**
+* Two dashboards are probably both sending discovery. Each Pico remembers a single dashboard address, so they will pull devices back and forth every few seconds. Pick one owner: see [deployment](docs/deployment.md#two-dashboards-one-set-of-picos).
+
+**Nothing reaches the dashboard at all?**
+* Check `[Events] BroadcastTarget` in `rb3.ini`. If it names one host, only that host receives anything, including your Picos.
+
+**The browser dashboard asks for a token you did not set?**
+* It asks when the server refuses a request. If you did not set `RB3E_AUTH_TOKEN`, the API is open and the page should not prompt; if it does, something else is answering on that port.
 
 **Last.fm Art is missing?**
 * Ensure the API Key is entered.

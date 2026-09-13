@@ -218,6 +218,46 @@ class HealthCheckTests(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class DocumentationTests(unittest.TestCase):
+    """Documentation ships with the project, so it has to be readable."""
+
+    def documents(self):
+        return sorted(list((REPO / "docs").rglob("*.md")) + [REPO / "README.md"])
+
+    def test_every_document_is_valid_utf8(self):
+        """A tool that writes with the platform default silently produces a
+        file that renders as mojibake on GitHub."""
+        for path in self.documents():
+            try:
+                path.read_bytes().decode("utf-8")
+            except UnicodeDecodeError as error:
+                self.fail("%s is not UTF-8: %s" % (path.name, error))
+
+    def test_internal_links_and_anchors_resolve(self):
+        import re
+
+        def anchors(path):
+            found = set()
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("#"):
+                    title = line.lstrip("#").strip()
+                    found.add(re.sub(r"[^a-z0-9 -]", "",
+                                     title.lower()).replace(" ", "-"))
+            return found
+
+        broken = []
+        for source in self.documents():
+            text = source.read_text(encoding="utf-8")
+            for target in re.findall(r"\]\((?!https?:|\.\./\.\./)([^)]+)\)", text):
+                path, _, anchor = target.partition("#")
+                resolved = (source.parent / path) if path else source
+                if path and not resolved.exists():
+                    broken.append("%s -> %s" % (source.name, path))
+                elif anchor and resolved.suffix == ".md"                         and anchor not in anchors(resolved):
+                    broken.append("%s -> %s#%s" % (source.name, path, anchor))
+        self.assertEqual(broken, [])
+
+
 class ReducedDependencyTests(unittest.TestCase):
     def test_the_server_starts_with_only_the_image_dependencies_available(self):
         """The best available stand-in for the image: block everything the
