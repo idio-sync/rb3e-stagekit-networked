@@ -1374,7 +1374,7 @@ Add to `Dashboard/tests/test_rb3server_entry.py`:
         self.assertNotIn("hunter2", "\n".join(lines))
 ```
 
-Extend the `self.config()` helper to accept `**environ` and merge it into the environment it loads from.
+Task 5 Step 5 already defined `self.config(**environ)` with this signature, so no change to the helper is needed here.
 
 - [ ] **Step 7: Run it to verify it fails**
 
