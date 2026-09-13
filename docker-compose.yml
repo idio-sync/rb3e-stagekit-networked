@@ -18,6 +18,8 @@ services:
       args:
         PUID: "99"
         PGID: "100"
+        # Set to "true" to install paho-mqtt for Home Assistant MQTT.
+        INSTALL_MQTT: "false"
     image: rb3e-dashboard-server
     container_name: rb3e-dashboard
     network_mode: host
@@ -49,6 +51,14 @@ services:
       # Optional Home Assistant webhook, posted with the same payload the
       # desktop sends, so existing automations keep matching.
       RB3E_HA_WEBHOOK_URL: ""
+
+      # Home Assistant over MQTT. Leave the host empty to use the webhook
+      # above instead, which needs no extra dependency. Setting a host also
+      # needs the image built with INSTALL_MQTT=true.
+      RB3E_MQTT_HOST: ""
+      RB3E_MQTT_PORT: "1883"
+      RB3E_MQTT_USERNAME: ""
+      RB3E_MQTT_PASSWORD: ""
 
       # Only for consoles configured with BroadcastTarget, which sends events
       # to a single host. Comma separated peers to pass those events on to.

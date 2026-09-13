@@ -20,13 +20,11 @@ import os
 import threading
 import time
 
-# How often a continuing burst of dropped webhooks is worth another log line.
-WEBHOOK_DROP_REPORT_SECONDS = 30.0
-
 from ..listener import UnifiedRB3EListener
 from ..song_browser import SongBrowser
 from ..stagekit import StageKitTransport
 from .dispatch import HeadlessDispatcher
+from .mqtt import MqttPublisher, MqttService, MqttUnavailable
 from .outbound import OutboundWorker, WebhookSender
 from .ratelimit import RateLimiter
 from .relay import EventRelay
@@ -35,6 +33,10 @@ from .store import SessionStore, StoreError
 from .state import ApplicationState
 from .supervisor import ServiceSupervisor
 from .web.service import WebService
+
+
+# How often a continuing burst of dropped webhooks is worth another log line.
+WEBHOOK_DROP_REPORT_SECONDS = 30.0
 
 
 class ListenerService:
@@ -158,6 +160,13 @@ class ServerApplication:
                  history_enabled=True,
                  data_dir="",
                  relay_targets=None,
+                 mqtt_host="",
+                 mqtt_port=1883,
+                 mqtt_username="",
+                 mqtt_password="",
+                 mqtt_base_topic="rb3dashboard",
+                 mqtt_discovery_prefix="homeassistant",
+                 mqtt_client_id="rb3dashboard",
                  webhook_capacity=100,
                  webhook_retries=2,
                  webhook_timeout=5.0,
@@ -265,6 +274,20 @@ class ServerApplication:
             self.web = factory(self, host=web_host, port=web_port,
                                auth_token=auth_token, log_sink=log_sink)
 
+        self.mqtt = None
+        if mqtt_host:
+            self.mqtt = MqttService(
+                MqttPublisher(
+                    mqtt_host, port=mqtt_port, username=mqtt_username,
+                    password=mqtt_password, base_topic=mqtt_base_topic,
+                    discovery_prefix=mqtt_discovery_prefix,
+                    client_id=mqtt_client_id,
+                    on_error=lambda error: self._record_log(
+                        "MQTT publish failed: %s" % error, level="warning")),
+                self.state,
+                on_error=lambda error: self._record_log(
+                    "MQTT publish failed: %s" % error, level="warning"))
+
         self._listener_service = ListenerService(
             self.listener, on_error=self._on_listener_error)
         self._maintenance = MaintenanceService(
@@ -285,6 +308,8 @@ class ServerApplication:
             supervisor.add("history", self._open_history, self._close_history)
         if self.outbound is not None:
             supervisor.add("outbound", self.outbound.start, self.outbound.close)
+        if self.mqtt is not None:
+            supervisor.add("mqtt", self._start_mqtt, self._stop_mqtt)
         if self.relay is not None:
             # Before the listener, so the relay socket is open for the first
             # packet and closed only after reception has stopped.
@@ -325,6 +350,9 @@ class ServerApplication:
         if self.outbound is not None:
             report["webhook"].update(self.outbound.counters())
             report["webhook"]["pending"] = self.outbound.pending()
+        report["mqtt"] = {"configured": self.mqtt is not None,
+                          "running": bool(self.mqtt is not None
+                                          and self.mqtt.is_running())}
         report["relay"] = {"configured": self.relay is not None}
         if self.relay is not None:
             report["relay"].update(self.relay.counters())
@@ -503,6 +531,29 @@ class ServerApplication:
             self.history.end_session()
         finally:
             self.history.close()
+
+    def _start_mqtt(self):
+        """Connect to the broker. A failure disables MQTT, not the server.
+
+        Home Assistant is an integration, not the reason this process exists,
+        and a broker that is down or a package that is missing should not stop
+        the lights working.
+        """
+        try:
+            self.mqtt.start()
+        except MqttUnavailable as error:
+            self._record_log(str(error), level="error")
+            self.mqtt = None
+        except Exception as error:
+            self._record_log("Could not reach the MQTT broker: %s" % error,
+                             level="error")
+            self._record_log("Continuing without Home Assistant MQTT",
+                             level="warning")
+            self.mqtt = None
+
+    def _stop_mqtt(self):
+        if self.mqtt is not None:
+            self.mqtt.stop()
 
     def _remember(self, action):
         """Apply a history write, never letting storage break live handling."""

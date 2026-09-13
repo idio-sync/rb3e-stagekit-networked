@@ -84,6 +84,11 @@ that had no effect.
 | `RB3E_DISCOVERY_TARGETS` | empty | Broadcast addresses for discovery, comma separated, for example `192.168.1.255`. |
 | `RB3E_DISCOVERY_ENABLED` | `true` | Receive telemetry without claiming devices by setting this to `false`. |
 | `RB3E_HA_WEBHOOK_URL` | empty | Home Assistant webhook, same payload the desktop sends. |
+| `RB3E_MQTT_HOST` | empty | Home Assistant over MQTT discovery. Needs `paho-mqtt`. |
+| `RB3E_MQTT_PORT` | `1883` | Broker port. |
+| `RB3E_MQTT_USERNAME` / `RB3E_MQTT_PASSWORD` | empty | Broker credentials, if it needs them. |
+| `RB3E_MQTT_BASE_TOPIC` | `rb3dashboard` | Prefix for state topics. |
+| `RB3E_MQTT_DISCOVERY_PREFIX` | `homeassistant` | Must match Home Assistant's discovery prefix. |
 | `RB3E_CONSOLE_ADDRESS` | empty | Skip console detection and use this address. |
 | `RB3E_RELAY_TARGETS` | empty | Only for consoles configured with `BroadcastTarget`. See below. |
 
@@ -131,6 +136,58 @@ In `rb3.ini` on the console:
 The server reaches exactly two console routes, `/list_songs` and `/jump`. It
 never exposes the console's `/execute`, which runs script on the console when
 `AllowScripts` is enabled, and it never proxies an arbitrary path.
+
+## Home Assistant
+
+There are two ways in, and you can use either or both.
+
+**The webhook** needs no dependency at all. Set `RB3E_HA_WEBHOOK_URL` and the
+server posts the same payloads the desktop has always posted, so the automation
+in `HomeAssistant/rb3e_lighting.yaml` keeps working unchanged. It is a trigger,
+not a state feed: good for dimming the lights when a song starts.
+
+**MQTT discovery** gives Home Assistant real entities instead of a trigger: the
+song, artist, venue, score and stars as sensors, whether a song is playing,
+whether the console is alive, and one device per Pico with its signal strength
+and whether a Stage Kit is plugged in. That is what you want on a dashboard
+card or in a history graph.
+
+MQTT needs `paho-mqtt`, which is **not** installed by default:
+
+```bash
+pip install -r Dashboard/requirements-mqtt.txt
+```
+
+In the container, build with `--build-arg INSTALL_MQTT=true`, or set
+`INSTALL_MQTT: "true"` in the compose file. If you set `RB3E_MQTT_HOST` without
+the package installed, the server says so plainly in its log and carries on
+without MQTT rather than refusing to start.
+
+Then point it at your broker:
+
+```yaml
+RB3E_MQTT_HOST: "192.168.1.50"
+RB3E_MQTT_USERNAME: "rb3dashboard"
+RB3E_MQTT_PASSWORD: "…"
+```
+
+Entities appear on their own through discovery; there is nothing to add to
+`configuration.yaml`.
+
+### What happens when the server goes away
+
+Discovery configuration is retained on the broker, so Home Assistant keeps the
+entities when this server stops and they do not disappear from your dashboards.
+Availability is a retained last will, so those entities show as **unavailable**
+rather than frozen on whatever they last said. A clean shutdown publishes the
+same thing immediately instead of waiting for the broker to notice.
+
+Only changed values are published. Pico telemetry arrives every few seconds and
+almost none of it is news, so a broker log stays readable.
+
+A broker that is down or refusing connections disables MQTT and logs why. It
+does not stop the server: Home Assistant is an integration, not the reason this
+process exists, and the lights should keep working without it.
 
 ## Access control
 

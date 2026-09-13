@@ -657,6 +657,61 @@ class OutboundTests(ServerTestCase):
             self.make().integration_report()["webhook"]["configured"])
 
 
+class MqttWiringTests(ServerTestCase):
+    def test_no_publisher_is_built_without_a_broker(self):
+        """The webhook stays the zero-dependency option."""
+        application = self.make()
+
+        self.assertIsNone(application.mqtt)
+        self.assertFalse(
+            application.integration_report()["mqtt"]["configured"])
+
+    def test_a_broker_address_builds_the_service(self):
+        application = self.make(mqtt_host="broker.local")
+
+        self.assertIsNotNone(application.mqtt)
+        self.assertTrue(
+            application.integration_report()["mqtt"]["configured"])
+
+    def test_a_missing_package_disables_mqtt_rather_than_the_server(self):
+        from rb3dashboard.runtime.mqtt import MqttUnavailable
+
+        application = self.make(mqtt_host="broker.local")
+        application.mqtt.start = lambda: (_ for _ in ()).throw(
+            MqttUnavailable("paho-mqtt is not installed"))
+
+        application.start()
+
+        self.assertTrue(application.is_running())
+        self.assertIsNone(application.mqtt)
+        messages = [entry["message"]
+                    for entry in application.state.snapshot()["log"]]
+        self.assertTrue(any("paho-mqtt" in text for text in messages))
+
+    def test_an_unreachable_broker_disables_mqtt_rather_than_the_server(self):
+        application = self.make(mqtt_host="broker.local")
+        application.mqtt.start = lambda: (_ for _ in ()).throw(
+            OSError("connection refused"))
+
+        application.start()
+
+        self.assertTrue(application.is_running())
+        self.assertIsNone(application.mqtt)
+
+    def test_a_working_broker_publishes_and_stops_cleanly(self):
+        application = self.make(mqtt_host="broker.local")
+        started, stopped = [], []
+        application.mqtt.start = lambda: started.append(True)
+        application.mqtt.stop = lambda: stopped.append(True)
+        application.mqtt.is_running = lambda: True
+
+        application.start()
+        self.assertEqual(started, [True])
+
+        application.stop()
+        self.assertEqual(stopped, [True])
+
+
 class RelayTests(ServerTestCase):
     def test_no_relay_is_built_without_targets(self):
         application = self.make()

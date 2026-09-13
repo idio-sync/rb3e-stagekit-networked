@@ -1,0 +1,10 @@
+# Optional: Home Assistant over MQTT discovery.
+#
+# Install this only if you set mqtt_host. Without it the server runs exactly as
+# before and the Home Assistant webhook, which needs no dependency at all,
+# remains available.
+#
+#   pip install -r Dashboard/requirements-mqtt.txt
+#
+# In the container, build with --build-arg INSTALL_MQTT=true.
+paho-mqtt>=1.6.1

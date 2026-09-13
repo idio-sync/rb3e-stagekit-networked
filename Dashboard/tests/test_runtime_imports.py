@@ -24,6 +24,9 @@ class RuntimeImportBoundaryTests(unittest.TestCase):
             BLOCKED = {
                 'dashboard', 'tkinter', 'PIL', 'googleapiclient',
                 'yt_dlp', 'pypresence', 'screeninfo', 'vlc',
+                # Optional and not installed by default: importing it at module
+                # level would make the whole server depend on it.
+                'paho',
             }
 
             class BlockDesktopImports(importlib.abc.MetaPathFinder):

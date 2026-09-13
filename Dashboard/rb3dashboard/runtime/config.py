@@ -105,6 +105,15 @@ _FIELDS = {
     "discovery_interval": (_as_float, 5.0),
     "ha_webhook_url": (_as_text, ""),
     "console_address": (_as_text, ""),
+    # Home Assistant over MQTT. Empty host leaves it off, and the webhook
+    # stays available with no extra dependency.
+    "mqtt_host": (_as_text, ""),
+    "mqtt_port": (_as_int, 1883),
+    "mqtt_username": (_as_text, ""),
+    "mqtt_password": (_as_text, ""),
+    "mqtt_base_topic": (_as_text, "rb3dashboard"),
+    "mqtt_discovery_prefix": (_as_text, "homeassistant"),
+    "mqtt_client_id": (_as_text, "rb3dashboard"),
     "history_enabled": (_as_bool, True),
     "webhook_capacity": (_as_int, 100),
     "webhook_retries": (_as_int, 2),
@@ -120,7 +129,7 @@ _FIELDS = {
     "log_capacity": (_as_int, 200),
 }
 
-_SECRET_FIELDS = {"auth_token"}
+_SECRET_FIELDS = {"auth_token", "mqtt_password"}
 
 
 def _default_data_dir(environ):
@@ -206,7 +215,7 @@ class ServerConfig:
 
     @staticmethod
     def _validate(values):
-        for name in ("web_port",):
+        for name in ("web_port", "mqtt_port"):
             if not 1 <= values[name] <= 65535:
                 raise ConfigError(
                     "%s must be between 1 and 65535, not %d" % (name, values[name]))
@@ -267,6 +276,13 @@ class ServerConfig:
             "webhook_retries": self.webhook_retries,
             "webhook_timeout": self.webhook_timeout,
             "relay_targets": self.relay_targets,
+            "mqtt_host": self.mqtt_host,
+            "mqtt_port": self.mqtt_port,
+            "mqtt_username": self.mqtt_username,
+            "mqtt_password": self.mqtt_password,
+            "mqtt_base_topic": self.mqtt_base_topic,
+            "mqtt_discovery_prefix": self.mqtt_discovery_prefix,
+            "mqtt_client_id": self.mqtt_client_id,
         }
 
     def describe(self):

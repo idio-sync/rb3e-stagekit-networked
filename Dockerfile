@@ -15,6 +15,10 @@ FROM python:3.11-slim
 ARG PUID=99
 ARG PGID=100
 
+# Home Assistant over MQTT is optional and off by default. The webhook needs
+# no dependency, so the plain image installs nothing extra.
+ARG INSTALL_MQTT=false
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     RB3E_DATA_DIR=/data
@@ -23,7 +27,11 @@ WORKDIR /app
 
 # Dependencies first, so editing the application does not reinstall them.
 COPY Dashboard/requirements-server.txt ./requirements-server.txt
-RUN pip install --no-cache-dir -r requirements-server.txt
+COPY Dashboard/requirements-mqtt.txt ./requirements-mqtt.txt
+RUN pip install --no-cache-dir -r requirements-server.txt \
+ && if [ "$INSTALL_MQTT" = "true" ]; then \
+      pip install --no-cache-dir -r requirements-mqtt.txt; \
+    fi
 
 COPY Dashboard/rb3server.py ./rb3server.py
 COPY Dashboard/rb3dashboard ./rb3dashboard
