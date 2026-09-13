@@ -285,7 +285,7 @@ class ServerConfig:
                 "127.0.0.1, or set allow_open_api if you really mean to serve "
                 "an open API on a trusted network."
                 % values["web_host"])
-        if values["discovery_targets"] == ["auto"]:
+        if "auto" in values["discovery_targets"]:
             raise ConfigError(
                 "discovery_targets must be broadcast addresses, not 'auto'. "
                 "To use the inferred /24 from the default route, set "

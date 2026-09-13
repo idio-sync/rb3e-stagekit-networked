@@ -328,6 +328,11 @@ class DiscoveryTargetTests(ConfigTestCase):
         with self.assertRaises(ConfigError):
             self.enabled(RB3E_DISCOVERY_TARGETS="auto")
 
+    def test_auto_mixed_with_a_real_address_is_also_rejected(self):
+        """A sentinel that survives beside a real address reaches sendto()."""
+        with self.assertRaises(ConfigError):
+            self.enabled(RB3E_DISCOVERY_TARGETS="auto,192.168.1.255")
+
 
 if __name__ == "__main__":
     unittest.main()
