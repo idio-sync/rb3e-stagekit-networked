@@ -228,6 +228,12 @@ class Probe:
 
         The spec asks for both. They share one open stream because opening a
         second costs another heartbeat interval for nothing.
+
+        A caller who wants the heartbeat half to actually pass must give a
+        timeout longer than the server's heartbeat interval
+        (HEARTBEAT_SECONDS in runtime/web/api.py). Anything shorter is not a
+        wrong answer -- it just cannot observe a heartbeat that has not fired
+        yet, which is reported below as a skip, not a failure.
         """
         path = "/api/events"
         if self.token:
@@ -245,7 +251,17 @@ class Probe:
             saw_heartbeat = False
             saw_venue = False
             while time.monotonic() < deadline and not (saw_venue and saw_heartbeat):
-                line = response.readline()
+                try:
+                    line = response.readline()
+                except socket.timeout:
+                    # The read window closed. That is not a broken stream; it
+                    # just means nothing more arrived within it, which the
+                    # evaluation below already knows how to describe -- most
+                    # often the heartbeat, whose interval can outlast this
+                    # timeout. socket.timeout must be caught before the
+                    # OSError below: on Python 3.10+ it is a TimeoutError,
+                    # which is itself an OSError subclass.
+                    break
                 if not line:
                     break
                 text = line.decode("utf-8", "replace")
@@ -259,8 +275,9 @@ class Probe:
                               "stream within %.0fs" % self.timeout)
             if not saw_heartbeat:
                 return Result.skip("stream-events",
-                                   "the event arrived, but no heartbeat within "
-                                   "%.0fs -- the interval may exceed the timeout"
+                                   "the event reached the open stream, but no "
+                                   "heartbeat within %.0fs -- the server's "
+                                   "interval is longer than this timeout"
                                    % self.timeout)
             return Result("stream-events", True,
                           "the event reached the open stream, and a heartbeat "
