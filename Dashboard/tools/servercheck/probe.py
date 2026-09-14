@@ -174,16 +174,21 @@ class Probe:
         try:
             for datagram in fixtures.a_played_song():
                 self._send_event(datagram)
+            # The snapshot's game field is "song", not "song_name" -- see
+            # _GAME_FIELDS in runtime/state.py. A wrong key here fails
+            # *after* the event was correctly received, which sends the
+            # reader hunting the UDP path for a bug that is really in the
+            # assertion.
+            ok, last = self._wait_for(
+                lambda document: (document.get("game") or {}).get("song")
+                == fixtures.A_SONG["name"], "/api/state")
         except OSError as error:
-            return Result("events", False, "could not send on UDP %d: %s"
-                          % (self.event_port, error))
-        # The snapshot's game field is "song", not "song_name" -- see
-        # _GAME_FIELDS in runtime/state.py. A wrong key here fails *after* the
-        # event was correctly received, which sends the reader hunting the UDP
-        # path for a bug that is really in the assertion.
-        ok, last = self._wait_for(
-            lambda document: (document.get("game") or {}).get("song")
-            == fixtures.A_SONG["name"], "/api/state")
+            # Guards the poll too, not just the send above -- an unreachable
+            # server should report as "events", the name a caller and a
+            # controller expect, not the raw method name run_all's backstop
+            # would fall back to.
+            return Result("events", False, "could not reach the server: %s"
+                          % error)
         if not ok:
             return Result("events", False,
                           "sent a song but /api/state never reported it; last "
@@ -320,14 +325,16 @@ class Probe:
                                "binds UDP %d" % self.telemetry_port)
         try:
             self._send_telemetry(fixtures.telemetry(device_name))
+            ok, last = self._wait_for(
+                lambda document: any(
+                    device.get("name") == device_name
+                    for device in (document.get("devices") or {}).values()),
+                "/api/devices")
         except OSError as error:
-            return Result("telemetry", False, "could not send on UDP %d: %s"
-                          % (self.telemetry_port, error))
-        ok, last = self._wait_for(
-            lambda document: any(
-                device.get("name") == device_name
-                for device in (document.get("devices") or {}).values()),
-            "/api/devices")
+            # Guards the poll too, not just the send above -- see the same
+            # note in check_event_reception.
+            return Result("telemetry", False, "could not reach the server: %s"
+                          % error)
         if not ok:
             return Result("telemetry", False,
                           "sent telemetry for %r but it never appeared in "
@@ -357,12 +364,32 @@ class Probe:
                                    "fixture tests"
                                    % (capture_host, self.event_port, error))
             listener.settimeout(self.timeout)
-            status, body = self._request(
-                "/api/stagekit/command", token=self.token, method="POST",
-                body={"left": left, "right": right, "target": capture_host})
+            try:
+                status, body = self._request(
+                    "/api/stagekit/command", token=self.token, method="POST",
+                    body={"left": left, "right": right, "target": capture_host})
+            except OSError as error:
+                return Result("lighting", False,
+                              "could not reach the server: %s" % error)
             if status == 409:
-                return Result.skip("lighting",
-                                   "Stage Kit is not enabled on this server")
+                reason = ""
+                try:
+                    reason = (json.loads(body.decode("utf-8")) or {}).get(
+                        "error", "")
+                except (ValueError, UnicodeError):
+                    reason = body[:200].decode("utf-8", "replace")
+                # 409 covers two reasons the server's _command_error can
+                # send: Stage Kit not enabled (a real "not applicable here"),
+                # and a real transport failure ("The command could not be
+                # sent" -- a broken socket or NIC). Rate limiting is a 429,
+                # not a 409, and is handled by the status != 200 branch
+                # below. Only the not-enabled case is a skip; reporting the
+                # transport failure as a skip would hide exactly the defect
+                # this check exists to find.
+                if "not enabled" in reason.lower():
+                    return Result.skip("lighting", reason)
+                return Result("lighting", False,
+                              "the command was refused: %s" % reason)
             if status != 200:
                 return Result("lighting", False,
                               "the command endpoint returned HTTP %s: %s"

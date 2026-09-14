@@ -89,3 +89,19 @@ class RunAllTests(ProbeTestCase):
 
         self.assertTrue(results)
         self.assertFalse([r for r in results if r.ok])
+
+    def test_the_checks_that_can_pass_here_do_pass(self):
+        """Without this, a regression in a check's success path ships silently.
+
+        telemetry and lighting are skipped rather than passed on this server:
+        Stage Kit is off, so nothing binds 21071 and the command endpoint
+        refuses. Both are exercised for real in CI.
+        """
+        results = {result.name: result for result in self.probe().run_all()}
+
+        for name in ("health", "auth", "state", "events", "stream"):
+            with self.subTest(check=name):
+                self.assertTrue(results[name].ok, results[name].detail)
+        for name in ("telemetry", "lighting"):
+            with self.subTest(check=name):
+                self.assertTrue(results[name].skipped, results[name].detail)
