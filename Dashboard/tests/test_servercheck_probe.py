@@ -34,6 +34,12 @@ class ProbeTestCase(unittest.TestCase):
         # check to its timeout deliberately, and at the default that is thirty
         # seconds of a suite that currently runs in forty-four.
         kwargs.setdefault("timeout", 2.0)
+        # Likewise for the heartbeat window: its default (20s) is deliberately
+        # above the server's 15-second heartbeat interval so a real run can
+        # observe one, but that is 20 seconds this suite should not pay for.
+        # At 2s no test here can see a heartbeat, so check_stream_follows_events
+        # degrades to its skip path -- which is the correct, fast outcome.
+        kwargs.setdefault("heartbeat_window", 2.0)
         return Probe(self.base, **kwargs)
 
 

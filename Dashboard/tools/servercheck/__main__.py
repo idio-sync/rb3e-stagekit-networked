@@ -42,6 +42,10 @@ def parse_arguments(argv=None):
     probe.add_argument("--event-port", type=int, default=21070)
     probe.add_argument("--telemetry-port", type=int, default=21071)
     probe.add_argument("--timeout", type=float, default=10.0)
+    probe.add_argument("--heartbeat-window", type=float, default=20.0,
+                       help="How long to wait for the SSE heartbeat, which "
+                            "fires on its own 15-second interval independent "
+                            "of --timeout.")
     return parser.parse_args(argv)
 
 
@@ -51,7 +55,8 @@ def main(argv=None):
         probe = Probe(arguments.base_url, token=arguments.token,
                       host=arguments.host, event_port=arguments.event_port,
                       telemetry_port=arguments.telemetry_port,
-                      timeout=arguments.timeout)
+                      timeout=arguments.timeout,
+                      heartbeat_window=arguments.heartbeat_window)
         return 1 if report(probe.run_all()) else 0
     return 2
 

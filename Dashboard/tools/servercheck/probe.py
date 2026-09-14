@@ -49,13 +49,22 @@ class Probe:
 
     def __init__(self, base_url, token=None, host="127.0.0.1",
                  event_port=fixtures.EVENT_PORT,
-                 telemetry_port=fixtures.TELEMETRY_PORT, timeout=10.0):
+                 telemetry_port=fixtures.TELEMETRY_PORT, timeout=10.0,
+                 heartbeat_window=20.0):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.host = host
         self.event_port = event_port
         self.telemetry_port = telemetry_port
         self.timeout = timeout
+        # The server's SSE heartbeat interval (HEARTBEAT_SECONDS in
+        # runtime/web/api.py) is 15 seconds. That is a property of what is
+        # being observed, not of how patient a caller is willing to be, so it
+        # gets its own window rather than borrowing `timeout` -- a window
+        # shorter than the interval can never see a heartbeat and the check
+        # that waits for one degrades to a permanent skip. The default here
+        # is deliberately above 15s; other checks are not slowed to match.
+        self.heartbeat_window = heartbeat_window
 
     # -- plumbing -------------------------------------------------------
 
@@ -229,25 +238,26 @@ class Probe:
         The spec asks for both. They share one open stream because opening a
         second costs another heartbeat interval for nothing.
 
-        A caller who wants the heartbeat half to actually pass must give a
-        timeout longer than the server's heartbeat interval
-        (HEARTBEAT_SECONDS in runtime/web/api.py). Anything shorter is not a
-        wrong answer -- it just cannot observe a heartbeat that has not fired
-        yet, which is reported below as a skip, not a failure.
+        The heartbeat half waits on `self.heartbeat_window`, not
+        `self.timeout`: the server's SSE heartbeat interval
+        (HEARTBEAT_SECONDS in runtime/web/api.py) is 15 seconds, so a window
+        shorter than that can never observe one and this check would degrade
+        to a permanent skip. `heartbeat_window` defaults above 15s for
+        exactly that reason; `timeout` stays short for every other check.
         """
         path = "/api/events"
         if self.token:
             path += "?token=" + self.token
         try:
             response = urllib.request.urlopen(self.base_url + path,
-                                              timeout=self.timeout)
+                                              timeout=self.heartbeat_window)
         except OSError as error:
             return Result("stream-events", False,
                           "could not open the stream: %s" % error)
         try:
             venue = "Servercheck Arena"
             self._send_event(fixtures.venue(venue))
-            deadline = time.monotonic() + self.timeout
+            deadline = time.monotonic() + self.heartbeat_window
             saw_heartbeat = False
             saw_venue = False
             while time.monotonic() < deadline and not (saw_venue and saw_heartbeat):
@@ -258,7 +268,7 @@ class Probe:
                     # just means nothing more arrived within it, which the
                     # evaluation below already knows how to describe -- most
                     # often the heartbeat, whose interval can outlast this
-                    # timeout. socket.timeout must be caught before the
+                    # window. socket.timeout must be caught before the
                     # OSError below: on Python 3.10+ it is a TimeoutError,
                     # which is itself an OSError subclass.
                     break
@@ -272,13 +282,13 @@ class Probe:
             if not saw_venue:
                 return Result("stream-events", False,
                               "sent a venue event but it never reached the open "
-                              "stream within %.0fs" % self.timeout)
+                              "stream within %.0fs" % self.heartbeat_window)
             if not saw_heartbeat:
                 return Result.skip("stream-events",
                                    "the event reached the open stream, but no "
                                    "heartbeat within %.0fs -- the server's "
-                                   "interval is longer than this timeout"
-                                   % self.timeout)
+                                   "interval is longer than this window"
+                                   % self.heartbeat_window)
             return Result("stream-events", True,
                           "the event reached the open stream, and a heartbeat "
                           "arrived")
