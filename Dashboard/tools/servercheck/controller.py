@@ -291,17 +291,25 @@ def check_isolated_data_dir(data_dir):
     return Result("isolation", True, "%s is empty" % path)
 
 
-def check_shutdown(server):
-    """Stopping the server leaves no process behind, and on POSIX exits 0."""
+def check_shutdown(server, timeout=15.0):
+    """Stopping the server leaves no process behind, and on POSIX exits 0.
+
+    `timeout` is how long the server is given to go away on its own before it
+    is killed. The default is generous because a real server flushes history
+    on its way out; the tests pass a short one, so proving that a server
+    ignores the request does not cost fifteen seconds.
+    """
     if server.process is None:
         return Result("shutdown", False, "the server was never started")
     early = server.process.poll()
     if early is not None:
+        # A server that fell over on its own is the loudest defect this check
+        # can find. It must never be softened into a skip.
         return Result("shutdown", False,
                       "the server had already exited (code %s) before shutdown "
                       "was asked for; its output was:\n%s"
                       % (early, server.output()))
-    code = server.stop()
+    code = server.stop(timeout=timeout)
     if server.running or code is None:
         return Result("shutdown", False,
                       "the server was still running after being asked to stop "
@@ -370,6 +378,12 @@ def check_restart_persists_history(data_dir, token, web_port=8321,
 
     Starts a server, plays a song through the console port, stops it, starts
     another on the same data directory, and reads the history back.
+
+    Sound on its own for everything except one case: when the console event
+    never arrives, this check cannot tell a port owned by another process (a
+    precondition) from a dead listener or a broken state update (defects), so
+    it skips and says so. run_lifecycle runs it after the probe, whose
+    `events` check fails outright on either defect; read the two together.
     """
     name = "restart"
     first = LocalServer(data_dir, token, web_port=web_port, python=python,
@@ -408,14 +422,22 @@ def check_restart_persists_history(data_dir, token, web_port=8321,
         second.stop()
 
     if not reached:
-        # The datagram went somewhere else on this machine, so no play could
-        # be recorded and there is nothing to persist. The file surviving is
-        # worth reporting, but it is not the check that was asked for.
+        # The event never showed up in this server's state. The likeliest
+        # cause is a precondition rather than a defect -- something else on
+        # this machine owns UDP 21070 -- but a dead listener or a broken state
+        # update look identical from here, and both are defects. The skip
+        # detail says so out loud rather than implying the benign reading;
+        # inside run_lifecycle the probe's own `events` check has already
+        # failed on either defect, which is what discriminates them.
         return Result.skip(name,
                            "the server restarted and history.db survived, but "
-                           "the console event never reached this server -- "
-                           "something else on this machine owns UDP %d -- so "
-                           "no play was recorded to persist" % event_port)
+                           "the console event never reached this server, so no "
+                           "play was recorded to persist. Most often that means "
+                           "another process on this machine owns UDP %d; a dead "
+                           "listener or a broken state update would look the "
+                           "same here, and the probe's `events` check is what "
+                           "tells them apart -- read this skip with that "
+                           "check's result beside it" % event_port)
     if not plays:
         # The event did arrive, so history not recording it is a real defect,
         # never a skip.
