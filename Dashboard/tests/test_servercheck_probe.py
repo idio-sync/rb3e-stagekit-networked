@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
@@ -119,6 +120,46 @@ class StreamTests(ProbeTestCase):
         result = self.probe().check_event_stream()
 
         self.assertTrue(result.ok, result.detail)
+
+
+class EventReceptionBaselineTests(ProbeTestCase):
+    def test_fails_rather_than_falls_back_when_the_baseline_cannot_be_read(self):
+        """A broken pre-send /api/state call must fail the check, not
+        downgrade it to the old song-only assertion.
+
+        The fixture's song is already in state before the probe runs, which
+        is exactly the condition that made the old fallback (used when
+        before_version could not be read) produce a false pass: the
+        song-only assertion is satisfied by a value left over from an
+        earlier run, with nothing freshly delivered at all.
+        """
+        self.require_the_event_port()
+        probe = self.probe()
+        for datagram in fixtures.a_played_song():
+            probe._send_event(datagram)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            game = self.application.state.snapshot().get("game") or {}
+            if game.get("song") == fixtures.A_SONG["name"]:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the fixture song never reached this test's own server")
+
+        real_request = probe._request
+        calls = []
+
+        def flaky_first_state_call(path, token=None, method="GET", body=None):
+            calls.append(path)
+            if path == "/api/state" and calls.count("/api/state") == 1:
+                return 500, b""
+            return real_request(path, token=token, method=method, body=body)
+
+        with mock.patch.object(probe, "_request", side_effect=flaky_first_state_call):
+            result = probe.check_event_reception()
+
+        self.assertFalse(result.ok, result.detail)
+        self.assertFalse(result.skipped, result.detail)
 
 
 class RunAllTests(ProbeTestCase):

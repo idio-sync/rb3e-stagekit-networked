@@ -202,6 +202,16 @@ class Probe:
                     before_version = json.loads(body.decode("utf-8")).get("version")
                 except ValueError:
                     before_version = None
+            if not isinstance(before_version, int):
+                # A baseline that cannot be established is a failed check,
+                # not a silent downgrade to the song-only assertion below --
+                # that downgrade is exactly the bug this version guard exists
+                # to prevent. /api/state always includes an integer version
+                # on a 200 (state.snapshot() builds it unconditionally), so
+                # reaching here means the server is genuinely misbehaving.
+                return Result("events", False,
+                              "could not read a baseline version from "
+                              "/api/state before sending (HTTP %s)" % status)
             for datagram in fixtures.a_played_song():
                 self._send_event(datagram)
             # The snapshot's game field is "song", not "song_name" -- see
@@ -213,9 +223,7 @@ class Probe:
                 game = document.get("game") or {}
                 if game.get("song") != fixtures.A_SONG["name"]:
                     return False
-                version = document.get("version")
-                return (before_version is None or version is None
-                        or version > before_version)
+                return document.get("version") > before_version
             ok, last = self._wait_for(delivered, "/api/state")
         except OSError as error:
             # Guards the poll too, not just the send above -- an unreachable
@@ -307,8 +315,9 @@ class Probe:
                           "could not open the stream: %s" % error)
         try:
             venue = "Servercheck Arena %d" % time.time_ns()
+            venue_sent_at = time.monotonic()
             self._send_event(fixtures.venue(venue))
-            venue_deadline = time.monotonic() + self.timeout
+            venue_deadline = venue_sent_at + self.timeout
             heartbeat_deadline = time.monotonic() + self.heartbeat_window
             saw_heartbeat = False
             saw_venue = False
@@ -333,14 +342,21 @@ class Probe:
                 elif text.startswith("data: ") and venue in text:
                     saw_venue = True
                 if not saw_venue and time.monotonic() >= venue_deadline:
+                    # readline() only returns control here once a line has
+                    # actually arrived (most often the next heartbeat, up to
+                    # heartbeat_window later), so the wait actually taken can
+                    # run well past `self.timeout` even though the verdict is
+                    # correct. Report what elapsed, not the nominal timeout,
+                    # so the message stays honest about how long this took.
                     return Result("stream-events", False,
                                   "sent a venue event but it never reached "
                                   "the open stream within %.0fs"
-                                  % self.timeout)
+                                  % (time.monotonic() - venue_sent_at))
             if not saw_venue:
                 return Result("stream-events", False,
                               "sent a venue event but it never reached the open "
-                              "stream within %.0fs" % self.timeout)
+                              "stream within %.0fs"
+                              % (time.monotonic() - venue_sent_at))
             if not saw_heartbeat:
                 return Result.skip("stream-events",
                                    "the event reached the open stream, but no "
