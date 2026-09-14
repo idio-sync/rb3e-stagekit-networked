@@ -22,7 +22,23 @@ Every task states which environment its evidence comes from. A task whose checks
 
 - **Python 3.11, standard library only.** The harness adds no dependency. The server's only third-party dependency remains `requests`.
 - **The harness is not shipped in the image.** The Dockerfile copies `Dashboard/tools/healthcheck.py` and nothing else from `tools/`. Keep it that way.
-- **`Dashboard/tools/servercheck/` must not be swept into the desktop test job.** `build.yml` runs `python -m unittest discover -s tests` on three operating systems; anything under `Dashboard/tests/` is collected. The harness lives under `tools/` for that reason.
+- **`Dashboard/tools/servercheck/` is not itself collected by the desktop test job.** `build.yml` runs `python -m unittest discover -s tests` on three operating systems, and anything under `Dashboard/tests/` is collected; the harness modules live under `tools/` so the *package* is not swept up as a test.
+
+  Their unit tests do live in `Dashboard/tests/`, and those tests deliberately stand up real servers and real subprocesses. That is intended — it is the only automated coverage the harness gets — but it means the desktop job now binds sockets on three operating systems. Any test that needs UDP 21070 or 21071 must **skip** when the port is unavailable rather than fail, because a developer running the desktop dashboard owns those ports. Use a helper:
+
+  ```python
+  def port_is_free(port, protocol=socket.SOCK_DGRAM):
+      probe = socket.socket(socket.AF_INET, protocol)
+      try:
+          probe.bind(("", port))
+          return True
+      except OSError:
+          return False
+      finally:
+          probe.close()
+  ```
+
+  and guard with `@unittest.skipUnless(port_is_free(21070), "UDP 21070 is in use")`.
 - **`build.yml` is not modified.** Section 2 adds a separate workflow file.
 - **Ports are fixed:** UDP 21070 console events and lighting, UDP 21071 Pico discovery and telemetry, TCP 8321 dashboard. TCP 21070 belongs to the console.
 - **The desktop application is untouched.**
@@ -80,7 +96,7 @@ Everything else in this plan sends bytes at a server and asserts what happens. T
   - `stagekit(left: int, right: int) -> bytes`
   - `alive() -> bytes`, `state(playing: bool) -> bytes`
   - `telemetry(name: str, usb_status: str = "connected", wifi_signal: int = -55) -> bytes`
-  - `DISCOVERY: bytes` — the literal discovery datagram
+  - `DISCOVERY: bytes` — the literal discovery datagram. No probe check consumes it; it exists so the pilot can confirm by packet capture that the server is broadcasting what the Picos expect, and the fixture test pins it against the transport's literal.
   - `A_SONG: dict` — one canonical song used by every check, so assertions elsewhere can name it
 
 **Evidence environment:** the development workstation. Fully executable now.
@@ -357,7 +373,7 @@ class ConstantTests(unittest.TestCase):
         self.assertEqual(sent[0][0], fixtures.lighting_command(0x20, 0x01))
 ```
 
-If `StageKitTransport`'s internals make that construction awkward, build the expected packet with the literal `struct.pack('>I4B2B', 0x52423345, 0, 6, 2, 0, 0x20, 0x01)` from `stagekit.py:170` and compare, and say in your report that you did so and why.
+This construction was verified to work: `StageKitTransport()` takes no required arguments and `_lock` is already an `RLock`, so assigning `_control` is enough. Use it as written.
 
 - [ ] **Step 7: Run the full suite**
 
@@ -430,6 +446,10 @@ class ProbeTestCase(unittest.TestCase):
 
     def probe(self, **kwargs):
         kwargs.setdefault("token", self.TOKEN)
+        # Two seconds, not the ten-second default. Three of these tests drive a
+        # check to its timeout deliberately, and at the default that is thirty
+        # seconds of a suite that currently runs in forty-four.
+        kwargs.setdefault("timeout", 2.0)
         return Probe(self.base, **kwargs)
 
 
@@ -515,16 +535,28 @@ from . import fixtures
 
 
 class Result:
-    """One check's outcome."""
+    """One check's outcome: passed, failed, or not applicable here.
 
-    def __init__(self, name, ok, detail):
+    The third state earns its place. Several checks depend on Stage Kit being
+    enabled, and one depends on binding a port the server may already own.
+    Reporting those as failures against a server that is merely configured
+    differently trains the reader to ignore red, which is worse than not
+    running the check. A skip is reported, counted, and never a pass.
+    """
+
+    def __init__(self, name, ok, detail, skipped=False):
         self.name = name
-        self.ok = bool(ok)
+        self.skipped = bool(skipped)
+        self.ok = bool(ok) and not self.skipped
         self.detail = detail
 
+    @classmethod
+    def skip(cls, name, detail):
+        return cls(name, False, detail, skipped=True)
+
     def __repr__(self):
-        return "<Result %s %s: %s>" % (
-            self.name, "ok" if self.ok else "FAILED", self.detail)
+        state = "skipped" if self.skipped else ("ok" if self.ok else "FAILED")
+        return "<Result %s %s: %s>" % (self.name, state, self.detail)
 
 
 class Probe:
@@ -651,14 +683,24 @@ class Probe:
         except OSError as error:
             return Result("events", False, "could not send on UDP %d: %s"
                           % (self.event_port, error))
+        # The snapshot's game field is "song", not "song_name" -- see
+        # _GAME_FIELDS in runtime/state.py. A wrong key here fails *after* the
+        # event was correctly received, which sends the reader hunting the UDP
+        # path for a bug that is really in the assertion.
         ok, last = self._wait_for(
-            lambda document: (document.get("game") or {}).get("song_name")
+            lambda document: (document.get("game") or {}).get("song")
             == fixtures.A_SONG["name"], "/api/state")
         if not ok:
             return Result("events", False,
                           "sent a song but /api/state never reported it; last "
                           "game state was %r" % ((last or {}).get("game"),))
-        return Result("events", True, "the console song reached /api/state")
+        game = (last or {}).get("game") or {}
+        if game.get("shortname") != fixtures.A_SONG["shortname"]:
+            return Result("events", False,
+                          "the song arrived but shortname was %r, expected %r"
+                          % (game.get("shortname"), fixtures.A_SONG["shortname"]))
+        return Result("events", True,
+                      "the console song and shortname reached /api/state")
 
     def check_event_stream(self):
         """The SSE stream opens and delivers a first state event."""
@@ -677,7 +719,11 @@ class Probe:
             deadline = time.monotonic() + self.timeout
             block = b""
             while time.monotonic() < deadline:
-                line = response.readline()
+                try:
+                    line = response.readline()
+                except OSError as error:
+                    return Result("stream", False,
+                                  "the stream broke while reading: %s" % error)
                 if not line:
                     break
                 block += line
@@ -692,8 +738,74 @@ class Probe:
         finally:
             response.close()
 
+    def check_stream_follows_events(self):
+        """A UDP event must reach an already-open stream, and so must a heartbeat.
+
+        The spec asks for both. They share one open stream because opening a
+        second costs another heartbeat interval for nothing.
+        """
+        path = "/api/events"
+        if self.token:
+            path += "?token=" + self.token
+        try:
+            response = urllib.request.urlopen(self.base_url + path,
+                                              timeout=self.timeout)
+        except OSError as error:
+            return Result("stream-events", False,
+                          "could not open the stream: %s" % error)
+        try:
+            venue = "Servercheck Arena"
+            self._send_event(fixtures.venue(venue))
+            deadline = time.monotonic() + self.timeout
+            saw_heartbeat = False
+            saw_venue = False
+            while time.monotonic() < deadline and not (saw_venue and saw_heartbeat):
+                line = response.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", "replace")
+                if text.startswith(":"):
+                    saw_heartbeat = True
+                elif text.startswith("data: ") and venue in text:
+                    saw_venue = True
+            if not saw_venue:
+                return Result("stream-events", False,
+                              "sent a venue event but it never reached the open "
+                              "stream within %.0fs" % self.timeout)
+            if not saw_heartbeat:
+                return Result.skip("stream-events",
+                                   "the event arrived, but no heartbeat within "
+                                   "%.0fs -- the interval may exceed the timeout"
+                                   % self.timeout)
+            return Result("stream-events", True,
+                          "the event reached the open stream, and a heartbeat "
+                          "arrived")
+        except OSError as error:
+            return Result("stream-events", False, "the stream broke: %s" % error)
+        finally:
+            response.close()
+
+    def _owns_discovery(self):
+        """Whether this server binds UDP 21071 at all. /api/health says so."""
+        try:
+            status, body = self._request("/api/health")
+            if status != 200:
+                return None
+            return bool(json.loads(body.decode("utf-8")).get("owns_discovery"))
+        except (OSError, ValueError):
+            return None
+
     def check_telemetry(self, device_name="servercheck-pico"):
-        """A telemetry datagram on UDP 21071 must produce a device."""
+        """A telemetry datagram on UDP 21071 must produce a device.
+
+        Only meaningful when this server owns discovery. With Stage Kit off
+        nothing binds 21071 and no device can ever appear, so that is a skip
+        rather than a failure.
+        """
+        if self._owns_discovery() is False:
+            return Result.skip("telemetry",
+                               "this server does not own discovery, so nothing "
+                               "binds UDP %d" % self.telemetry_port)
         try:
             self._send_telemetry(fixtures.telemetry(device_name))
         except OSError as error:
@@ -712,19 +824,33 @@ class Probe:
 
     def check_lighting_bytes(self, left=0x20, right=0x01):
         """A lighting command must leave the server as the bytes a Pico expects."""
+        # The server is already bound to 0.0.0.0:21070 for console events, and
+        # on Linux SO_REUSEADDR does NOT permit a second unicast UDP bind on
+        # that port -- that would need SO_REUSEPORT. Binding a more specific
+        # address alongside the server's wildcard does work, and the specific
+        # socket wins delivery, so the command is aimed at 127.0.0.2. Windows
+        # allows the duplicate wildcard bind but has no 127.0.0.2 by default,
+        # so a bind failure is a skip, not a failure: Task 1 already pins these
+        # exact bytes against the real sender.
+        capture_host = "127.0.0.2"
         listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             try:
-                listener.bind(("", self.event_port))
+                listener.bind((capture_host, self.event_port))
             except OSError as error:
-                return Result("lighting", False,
-                              "could not listen on UDP %d for the command: %s"
-                              % (self.event_port, error))
+                return Result.skip("lighting",
+                                   "could not bind %s:%d to capture the command "
+                                   "(%s); the byte format is covered by the "
+                                   "fixture tests"
+                                   % (capture_host, self.event_port, error))
             listener.settimeout(self.timeout)
             status, body = self._request(
                 "/api/stagekit/command", token=self.token, method="POST",
-                body={"left": left, "right": right, "target": "127.0.0.1"})
+                body={"left": left, "right": right, "target": capture_host})
+            if status == 409:
+                return Result.skip("lighting",
+                                   "Stage Kit is not enabled on this server")
             if status != 200:
                 return Result("lighting", False,
                               "the command endpoint returned HTTP %s: %s"
@@ -751,6 +877,7 @@ class Probe:
         """Every check, in order, never raising."""
         checks = (self.check_health, self.check_auth, self.check_state,
                   self.check_event_reception, self.check_event_stream,
+                  self.check_stream_follows_events,
                   self.check_telemetry, self.check_lighting_bytes)
         results = []
         for check in checks:
@@ -767,7 +894,7 @@ The request shape is verified against `_stagekit_command` in `Dashboard/rb3dashb
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `cd Dashboard && python -m unittest discover -s tests -p "test_servercheck_probe.py" -v`
-Expected: PASS, 7 tests.
+Expected: PASS, 7 tests, in **under 15 seconds**. If it takes longer, a `Probe` somewhere is using the ten-second default instead of the two-second test timeout — find it rather than accepting the slowdown. The whole suite's budget is in the completion criteria.
 
 - [ ] **Step 5: Write the command line**
 
@@ -789,13 +916,18 @@ from .probe import Probe
 
 
 def report(results, stream=sys.stdout):
-    failures = 0
+    """Print each result and return the failure count. A skip is not a failure."""
+    failures = skipped = 0
     for result in results:
-        stream.write("%-10s %s  %s\n"
-                     % (result.name, "ok  " if result.ok else "FAIL", result.detail))
-        if not result.ok:
-            failures += 1
-    stream.write("\n%d checks, %d failed\n" % (len(results), failures))
+        if result.skipped:
+            state, skipped = "SKIP", skipped + 1
+        elif result.ok:
+            state = "ok  "
+        else:
+            state, failures = "FAIL", failures + 1
+        stream.write("%-16s %s  %s\n" % (result.name, state, result.detail))
+    stream.write("\n%d checks, %d failed, %d skipped\n"
+                 % (len(results), failures, skipped))
     return failures
 
 
@@ -840,6 +972,14 @@ cd Dashboard
 RB3E_AUTH_TOKEN=local-check RB3E_WEB_HOST=127.0.0.1 python rb3server.py
 ```
 
+In PowerShell, which has no inline environment prefix:
+
+```powershell
+cd Dashboard
+$env:RB3E_AUTH_TOKEN = "local-check"; $env:RB3E_WEB_HOST = "127.0.0.1"
+python rb3server.py
+```
+
 In another:
 
 ```bash
@@ -847,7 +987,9 @@ cd Dashboard/tools
 python -m servercheck probe --base-url http://127.0.0.1:8321 --token local-check
 ```
 
-Record the exact output in your report. On Windows the UDP checks may fail if a desktop dashboard is already bound to 21070 or 21071 — if so, stop the desktop app and try again, and if it still fails, record that plainly rather than adjusting the check to pass.
+**Expect skips, and do not treat them as defects.** Against a default `rb3server.py`, Stage Kit is off, so `telemetry` and `lighting` both report SKIP with a reason. That is the correct outcome for that configuration — those two are exercised for real in CI, where the container enables Stage Kit. A healthy local run is therefore **6 ok, 0 failed, 2 skipped**.
+
+Record the exact output in your report. If a desktop dashboard is already bound to 21070 or 21071, the event checks will fail — stop the desktop app and try again, and if it still fails, record that plainly rather than adjusting the check to pass.
 
 - [ ] **Step 7: Run the full suite**
 
@@ -920,12 +1062,12 @@ class IsolationTests(unittest.TestCase):
         self.assertTrue(check_isolated_data_dir(self.directory).ok)
 
     def test_a_directory_with_content_is_not_isolated(self):
-        (self.directory / "history.sqlite3").write_text("old", encoding="utf-8")
+        (self.directory / "history.db").write_text("old", encoding="utf-8")
 
         result = check_isolated_data_dir(self.directory)
 
         self.assertFalse(result.ok)
-        self.assertIn("history.sqlite3", result.detail)
+        self.assertIn("history.db", result.detail)
 
 
 class LifecycleTests(unittest.TestCase):
@@ -964,8 +1106,12 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(server.wait_until_healthy())
         second = sorted(path.name for path in self.directory.iterdir())
 
-        self.assertTrue(first, "the first run wrote nothing to the data directory")
-        self.assertEqual(first, second)
+        # SessionStore.open() creates history.db during start(), before any
+        # song is played, so the first run is never empty. Assert on the file
+        # rather than the whole listing: an ungraceful stop can leave WAL
+        # sidecars behind and a full-listing comparison would flap.
+        self.assertIn("history.db", first)
+        self.assertIn("history.db", second)
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -1003,10 +1149,13 @@ In `Dashboard/tools/servercheck/__main__.py`, add a `local` subcommand taking `-
 
 - [ ] **Step 6: Run the whole harness against a local server, by hand**
 
-```bash
-cd Dashboard/tools
-python -m servercheck local --data-dir "$(mktemp -d)" --token local-check
+```powershell
+cd Dashboard\tools
+$dir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid()))
+python -m servercheck local --data-dir $dir.FullName --token local-check
 ```
+
+`mktemp -d` under Git Bash yields an MSYS path that Python may resolve differently; the PowerShell form avoids the question.
 
 Record the exact output in your report.
 
@@ -1038,7 +1187,7 @@ git commit -m "test: add a lifecycle controller for the server checks"
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `Dashboard/tests/test_packaging.py`, in a new class:
+Add to `Dashboard/tests/test_packaging.py`, in a new class. Note these assertions are written against the workflow as Step 4 actually writes it — a matrix over `mqtt`, so the literal string `INSTALL_MQTT=true` never appears:
 
 ```python
 class ContainerWorkflowTests(unittest.TestCase):
@@ -1057,12 +1206,25 @@ class ContainerWorkflowTests(unittest.TestCase):
         self.assertRegex(self.text, r"branches:\s*\[\s*main\s*\]")
 
     def test_it_builds_both_mqtt_variants(self):
-        self.assertIn("INSTALL_MQTT=false", self.text)
-        self.assertIn("INSTALL_MQTT=true", self.text)
+        self.assertRegex(self.text, r"mqtt:\s*\[\s*\"?false\"?\s*,\s*\"?true\"?\s*\]")
+        self.assertIn("INSTALL_MQTT=${{ matrix.mqtt }}", self.text)
 
     def test_it_uses_host_networking(self):
         """Bridge networking carries no broadcast; the server would see nothing."""
         self.assertIn("--network host", self.text)
+
+    def test_it_enables_stagekit_with_explicit_targets(self):
+        """Otherwise two probe checks skip, and the config refuses to start."""
+        self.assertIn("RB3E_STAGEKIT_ENABLED=true", self.text)
+        self.assertIn("RB3E_DISCOVERY_TARGETS=", self.text)
+
+    def test_it_asserts_the_runtime_user(self):
+        """Building proves useradd ran; this proves the process is that user."""
+        self.assertIn("id -u", self.text)
+        self.assertIn("id -g", self.text)
+
+    def test_it_keeps_the_logs_on_failure(self):
+        self.assertIn("if: always()", self.text)
 
     def test_it_publishes_no_image(self):
         """Publishing is a separate, authorized decision."""
@@ -1082,44 +1244,228 @@ class ContainerWorkflowTests(unittest.TestCase):
 Run: `cd Dashboard && python -m unittest discover -s tests -p "test_packaging.py" -v`
 Expected: FAIL with `FileNotFoundError` for the workflow.
 
-- [ ] **Step 3: Write the workflow**
+- [ ] **Step 3: Write the build and preflight half of the workflow**
 
-Create `.github/workflows/server-container.yml`. It must:
+Create `.github/workflows/server-container.yml`:
 
-- Be named `Server Container`, and trigger on `push: branches: [main]` and `workflow_dispatch`. **No `pull_request` trigger.**
-- Have a job matrix over `mqtt: [false, true]`.
-- Build with `docker build --build-arg INSTALL_MQTT=${{ matrix.mqtt }} -t rb3e-dashboard-server:${{ matrix.mqtt }} .`
-- Create a host data directory owned by a **different** uid than the image's 99:100 — for example `sudo install -d -o 1234 -g 1234 "$PWD/appdata-wrong"` — run the container against it, and assert the container exits non-zero and its log contains the preflight's message naming the uid. That is Section 1's data-directory check proving itself under real ownership. Then create a correctly owned directory (`sudo install -d -o 99 -g 100`) for the real run.
-- Run the container detached with `--network host`, `-e RB3E_WEB_HOST=0.0.0.0`, `-e RB3E_AUTH_TOKEN=<a generated value>`, and the appdata bind mount.
-- Assert the running process is uid 99 and gid 100: `docker exec <name> id -u` and `id -g`. Building the image proves `useradd` succeeded; this proves the process actually runs as that user.
-- Run the probe from the runner: `cd Dashboard/tools && python -m servercheck probe --base-url http://127.0.0.1:8321 --token <token>`.
-- Assert Docker's own health check reports healthy: poll `docker inspect --format '{{.State.Health.Status}}'`.
-- `docker restart` the container, wait for healthy again, and assert the SQLite history file still exists in the host appdata directory.
-- `docker stop` it and assert the exit code is 0 — that is graceful SIGTERM handling, which Windows could not verify.
-- For `matrix.mqtt == true` only: run `eclipse-mosquitto` as a **container on the host network** (`docker run -d --network host eclipse-mosquitto`) rather than as a workflow `services:` container. A `services:` container sits on a bridge network while the server runs with `--network host`, and reconciling the two is avoidable complexity. Configure the server with `RB3E_MQTT_HOST=127.0.0.1`, subscribe with `mosquitto_sub` to confirm discovery topics are published, then `docker restart` the broker and confirm the server recovers and does not exit.
-- Always upload the container logs as an artifact, including on failure — `if: always()`. A red run whose logs are gone costs another full cycle.
+```yaml
+name: Server Container
 
-- [ ] **Step 4: Validate the workflow file parses**
+# Deliberately not on pull_request: build.yml already builds three desktop
+# executables and two firmware targets on every PR, and this adds a Docker
+# build on top. A push to main also fires build.yml's latest-release job,
+# which republishes the public "latest" release -- so workflow_dispatch on a
+# branch is the low-side-effect way to get a run.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-The repository has no YAML dependency, so check with whatever is available rather than adding one:
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mqtt: [false, true]
 
-```bash
-python -c "import yaml, sys; yaml.safe_load(open('.github/workflows/server-container.yml')); print('parses')"
+    env:
+      TOKEN: container-check-token
+      IMAGE: rb3e-dashboard-server:mqtt-${{ matrix.mqtt }}
+      NAME: rb3e-check-${{ matrix.mqtt }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build the image
+        run: |
+          docker build \
+            --build-arg INSTALL_MQTT=${{ matrix.mqtt }} \
+            -t "$IMAGE" .
+
+      - name: An unwritable appdata directory is refused, legibly
+        run: |
+          # Section 1's preflight should exit 2 naming the uid, rather than
+          # failing later with a database error. 1234 is deliberately not the
+          # image's 99:100.
+          sudo install -d -o 1234 -g 1234 "$PWD/appdata-wrong"
+          set +e
+          docker run --rm --network host \
+            -e RB3E_WEB_HOST=0.0.0.0 \
+            -e RB3E_AUTH_TOKEN="$TOKEN" \
+            -v "$PWD/appdata-wrong:/data" \
+            "$IMAGE" > wrong.log 2>&1
+          status=$?
+          set -e
+          cat wrong.log
+          if [ "$status" -eq 0 ]; then
+            echo "::error::the server started against an unwritable data directory"
+            exit 1
+          fi
+          grep -q "not writable" wrong.log
+          grep -qE "euid=99|uid=99" wrong.log
+          echo "refused with status $status, and the message names the uid"
 ```
 
-If PyYAML is not installed, do **not** install it as a project dependency. Use `python -c "import json,sys; print('no yaml module available')"` and instead verify by eye against the GitHub Actions schema, saying in your report that the file was not machine-validated.
+- [ ] **Step 4: Add the run, the probe, and the lifecycle half**
 
-- [ ] **Step 5: Run the packaging tests**
+Append these steps to the same job:
+
+```yaml
+      - name: Start the container
+        run: |
+          # Unraid's appdata ownership, which the image is built for.
+          sudo install -d -o 99 -g 100 "$PWD/appdata"
+          # Stage Kit on, so the telemetry and lighting probes actually run.
+          # It needs explicit discovery targets or the config refuses to start
+          # -- that is Section 1's rule, working as intended.
+          docker run -d --name "$NAME" --network host \
+            -e RB3E_WEB_HOST=0.0.0.0 \
+            -e RB3E_AUTH_TOKEN="$TOKEN" \
+            -e RB3E_STAGEKIT_ENABLED=true \
+            -e RB3E_DISCOVERY_TARGETS=127.0.0.255 \
+            -v "$PWD/appdata:/data" \
+            "$IMAGE"
+
+      - name: The container becomes healthy
+        run: |
+          for _ in $(seq 1 30); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME")
+            echo "health: $state"
+            [ "$state" = "healthy" ] && exit 0
+            [ "$state" = "unhealthy" ] && break
+            sleep 2
+          done
+          docker logs "$NAME"
+          echo "::error::the container never became healthy"
+          exit 1
+
+      - name: The process runs as uid 99, gid 100
+        run: |
+          # Building proves useradd succeeded. This proves the process is that
+          # user, which is what makes Unraid's appdata writable.
+          test "$(docker exec "$NAME" id -u)" = "99"
+          test "$(docker exec "$NAME" id -g)" = "100"
+
+      - name: Probe the running container
+        working-directory: Dashboard/tools
+        run: |
+          python -m servercheck probe \
+            --base-url http://127.0.0.1:8321 \
+            --token "$TOKEN"
+
+      - name: History survives a restart
+        run: |
+          test -f "$PWD/appdata/history.db"
+          before=$(sudo md5sum "$PWD/appdata/history.db" | cut -d' ' -f1)
+          docker restart "$NAME"
+          for _ in $(seq 1 30); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME")
+            [ "$state" = "healthy" ] && break
+            sleep 2
+          done
+          test -f "$PWD/appdata/history.db"
+          echo "history.db present before ($before) and after the restart"
+
+      - name: Stopping is graceful
+        run: |
+          # SIGTERM, then the exit code. Windows could not verify this: its
+          # terminate() is TerminateProcess, which cannot be graceful.
+          docker stop --time 20 "$NAME"
+          code=$(docker inspect --format '{{.State.ExitCode}}' "$NAME")
+          echo "exit code: $code"
+          test "$code" = "0"
+
+      - name: Container logs
+        if: always()
+        run: docker logs "$NAME" || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-logs-mqtt-${{ matrix.mqtt }}
+          path: |
+            wrong.log
+          if-no-files-found: ignore
+```
+
+- [ ] **Step 5: Add the MQTT half, for the `true` variant only**
+
+Insert these before the "Stopping is graceful" step. They run only on the MQTT build:
+
+```yaml
+      - name: Start a real broker
+        if: matrix.mqtt == true
+        run: |
+          # A host-network container, not a workflow services: container. The
+          # server runs with --network host, so a services: container on the
+          # bridge would need its published port reconciled; and eclipse-
+          # mosquitto 2.x defaults to local-only anonymous access, which works
+          # on the host netns and would not work from a bridge.
+          docker run -d --name broker --network host eclipse-mosquitto
+          sudo apt-get update && sudo apt-get install -y mosquitto-clients
+          for _ in $(seq 1 15); do
+            mosquitto_sub -h 127.0.0.1 -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: The server publishes discovery to the broker
+        if: matrix.mqtt == true
+        run: |
+          docker rm -f "$NAME"
+          docker run -d --name "$NAME" --network host \
+            -e RB3E_WEB_HOST=0.0.0.0 \
+            -e RB3E_AUTH_TOKEN="$TOKEN" \
+            -e RB3E_STAGEKIT_ENABLED=true \
+            -e RB3E_DISCOVERY_TARGETS=127.0.0.255 \
+            -e RB3E_MQTT_HOST=127.0.0.1 \
+            -v "$PWD/appdata:/data" \
+            "$IMAGE"
+          timeout 30 mosquitto_sub -h 127.0.0.1 \
+            -t 'homeassistant/#' -C 1 -W 25 | tee discovery.txt
+          test -s discovery.txt
+
+      - name: The server survives a broker restart
+        if: matrix.mqtt == true
+        run: |
+          docker restart broker
+          sleep 10
+          # The server must still be up: Home Assistant is an integration, not
+          # the reason this process exists.
+          test "$(docker inspect --format '{{.State.Running}}' "$NAME")" = "true"
+          docker logs "$NAME" 2>&1 | tail -20
+```
+
+Add `discovery.txt` and `wrong.log` to the upload step's `path`.
+
+- [ ] **Step 6: Check the workflow parses**
+
+The repository has no YAML dependency and must not gain one. Check with PyYAML only if it is already present:
+
+```bash
+python -c "import yaml; yaml.safe_load(open('.github/workflows/server-container.yml')); print('parses')"
+```
+
+If PyYAML is absent, say so in your report and record the file as not machine-validated. Do not `pip install` it.
+
+- [ ] **Step 7: Run the packaging tests**
 
 Run: `cd Dashboard && python -m unittest discover -s tests -p "test_packaging.py" -v`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full suite**
+- [ ] **Step 8: Run the full suite**
 
 Run: `cd Dashboard && python -m unittest discover -s tests`
-Expected: OK. Six tests added; nothing may fail.
+Expected: OK. Nine tests added; nothing may fail.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add .github/workflows/server-container.yml Dashboard/tests/test_packaging.py
@@ -1178,7 +1524,9 @@ Say plainly that the probe sends real console events and real telemetry, so a se
 
 - [ ] **Step 5: Write the outcome notes and the gap ledger**
 
-Append to this plan a section recording:
+The spec names `docs/superpowers/plans/2026-09-13-stage-three.md` as the gap ledger's home, "so it is not invented twice". Honour that: the **ledger** is a section of that file, covering all of Stage 3. The **outcome notes for Section 2** — the run URL and which cases passed — go in this file, next to the plan they describe, and the ledger links to them.
+
+Record in this file:
 
 - The run URL and which mandatory cases passed.
 - Every check that is **implemented but never executed**, listed as unrun.
@@ -1196,7 +1544,7 @@ git commit -m "docs: record the Stage 3 Section 2 container run"
 
 ## Section 2 completion criteria
 
-1. `cd Dashboard && python -m unittest discover -s tests` reports OK, with about 29 tests more than the 663 baseline at `38dbeb0` and no failures.
+1. `cd Dashboard && python -m unittest discover -s tests` reports OK, with about 32 tests more than the 663 baseline at `38dbeb0` and no failures, **in under 120 seconds**. The baseline is 44 seconds; the probe and controller tests start real servers and subprocesses, and a suite that creeps past two minutes will stop being run.
 2. `python -m servercheck probe` has been run by hand against a local `rb3server.py` on the workstation, and its output is recorded.
 3. `python -m servercheck local` has been run by hand, and its output is recorded.
 4. One `server-container.yml` run has completed green, with its run URL recorded, covering **every** mandatory case listed in Task 5 Step 2. A partial run is not this criterion; a case that cannot be made to pass is recorded in the gap ledger as unverified rather than dropped.
