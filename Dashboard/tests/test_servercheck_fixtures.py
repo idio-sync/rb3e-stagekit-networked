@@ -77,11 +77,15 @@ class ConstantTests(unittest.TestCase):
 
     def test_the_wire_constants_match_the_server(self):
         from rb3dashboard import protocol
+        from rb3dashboard.stagekit import _DISCOVERY_PACKET
 
         self.assertEqual(fixtures.MAGIC, protocol.RB3E_EVENTS_MAGIC)
         self.assertEqual(fixtures.PROTOCOL, protocol.RB3E_EVENTS_PROTOCOL)
         self.assertEqual(fixtures.EVENT_PORT, protocol.RB3E_PORT)
         self.assertEqual(fixtures.TELEMETRY_PORT, protocol.TELEMETRY_PORT)
+        # Pinned against the real transport constant, not just the literal
+        # string above -- that literal does not catch the transport drifting.
+        self.assertEqual(fixtures.DISCOVERY, _DISCOVERY_PACKET)
 
     def test_the_event_types_match_the_server(self):
         from rb3dashboard import protocol
