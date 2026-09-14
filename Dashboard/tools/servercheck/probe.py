@@ -14,6 +14,7 @@ import json
 import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from . import fixtures
@@ -170,8 +171,29 @@ class Probe:
         return Result("state", True, "snapshot at version %s" % document["version"])
 
     def check_event_reception(self):
-        """A console event on UDP 21070 must change the server's state."""
+        """A console event on UDP 21070 must change the server's state.
+
+        Asserting only that /api/state currently shows the fixture's song is
+        not enough: a server that already saw this fixture on an earlier run
+        -- exactly what happens the second time an operator points this at
+        the Unraid host during the pilot -- already carries that value, and
+        would pass with nothing delivered at all. So this reads /api/state's
+        version before sending anything, and requires the matching snapshot's
+        version to have moved past it as well as carrying the expected song.
+        `update_game` (runtime/state.py) only advances the version when a
+        field actually differs, but `_on_song_started` always stamps a fresh
+        `song_start_time` from the real clock, so a genuine redelivery of this
+        exact fixture still advances the version even when every other field
+        already matched.
+        """
         try:
+            status, body = self._request("/api/state", token=self.token)
+            before_version = None
+            if status == 200:
+                try:
+                    before_version = json.loads(body.decode("utf-8")).get("version")
+                except ValueError:
+                    before_version = None
             for datagram in fixtures.a_played_song():
                 self._send_event(datagram)
             # The snapshot's game field is "song", not "song_name" -- see
@@ -179,9 +201,14 @@ class Probe:
             # *after* the event was correctly received, which sends the
             # reader hunting the UDP path for a bug that is really in the
             # assertion.
-            ok, last = self._wait_for(
-                lambda document: (document.get("game") or {}).get("song")
-                == fixtures.A_SONG["name"], "/api/state")
+            def delivered(document):
+                game = document.get("game") or {}
+                if game.get("song") != fixtures.A_SONG["name"]:
+                    return False
+                version = document.get("version")
+                return (before_version is None or version is None
+                        or version > before_version)
+            ok, last = self._wait_for(delivered, "/api/state")
         except OSError as error:
             # Guards the poll too, not just the send above -- an unreachable
             # server should report as "events", the name a caller and a
@@ -191,8 +218,9 @@ class Probe:
                           % error)
         if not ok:
             return Result("events", False,
-                          "sent a song but /api/state never reported it; last "
-                          "game state was %r" % ((last or {}).get("game"),))
+                          "sent a song but /api/state never showed it as a new "
+                          "change (version stayed at %r); last game state was "
+                          "%r" % (before_version, (last or {}).get("game"),))
         game = (last or {}).get("game") or {}
         if game.get("shortname") != fixtures.A_SONG["shortname"]:
             return Result("events", False,
@@ -205,14 +233,17 @@ class Probe:
         """The SSE stream opens and delivers a first state event."""
         path = "/api/events"
         if self.token:
-            path += "?token=" + self.token
+            path += "?token=" + urllib.parse.quote(self.token, safe="")
         try:
             response = urllib.request.urlopen(self.base_url + path,
                                               timeout=self.timeout)
         except OSError as error:
             return Result("stream", False, "could not open the stream: %s" % error)
         try:
-            if response.headers.get("Content-Type") != "text/event-stream":
+            # get_content_type() strips parameters (e.g. "; charset=utf-8"),
+            # so a future charset on the server's response cannot break this
+            # for a reason unrelated to what is actually being checked.
+            if response.headers.get_content_type() != "text/event-stream":
                 return Result("stream", False, "wrong content type: %s"
                               % response.headers.get("Content-Type"))
             deadline = time.monotonic() + self.timeout
@@ -248,11 +279,18 @@ class Probe:
         (HEARTBEAT_SECONDS in runtime/web/api.py) is 15 seconds, so a window
         shorter than that can never observe one and this check would degrade
         to a permanent skip. `heartbeat_window` defaults above 15s for
-        exactly that reason; `timeout` stays short for every other check.
+        exactly that reason; `timeout` stays short for every other check. The
+        venue half is judged against `self.timeout` on its own, so a venue
+        event that genuinely never arrives is reported in `timeout` seconds,
+        not stretched out to `heartbeat_window`.
+
+        The venue name is made unique per call (a nanosecond timestamp
+        suffix) so a stale value already sitting in state from an earlier
+        run of this same check cannot be mistaken for freshly-delivered data.
         """
         path = "/api/events"
         if self.token:
-            path += "?token=" + self.token
+            path += "?token=" + urllib.parse.quote(self.token, safe="")
         try:
             response = urllib.request.urlopen(self.base_url + path,
                                               timeout=self.heartbeat_window)
@@ -260,12 +298,14 @@ class Probe:
             return Result("stream-events", False,
                           "could not open the stream: %s" % error)
         try:
-            venue = "Servercheck Arena"
+            venue = "Servercheck Arena %d" % time.time_ns()
             self._send_event(fixtures.venue(venue))
-            deadline = time.monotonic() + self.heartbeat_window
+            venue_deadline = time.monotonic() + self.timeout
+            heartbeat_deadline = time.monotonic() + self.heartbeat_window
             saw_heartbeat = False
             saw_venue = False
-            while time.monotonic() < deadline and not (saw_venue and saw_heartbeat):
+            while (time.monotonic() < heartbeat_deadline
+                   and not (saw_venue and saw_heartbeat)):
                 try:
                     line = response.readline()
                 except socket.timeout:
@@ -284,10 +324,15 @@ class Probe:
                     saw_heartbeat = True
                 elif text.startswith("data: ") and venue in text:
                     saw_venue = True
+                if not saw_venue and time.monotonic() >= venue_deadline:
+                    return Result("stream-events", False,
+                                  "sent a venue event but it never reached "
+                                  "the open stream within %.0fs"
+                                  % self.timeout)
             if not saw_venue:
                 return Result("stream-events", False,
                               "sent a venue event but it never reached the open "
-                              "stream within %.0fs" % self.heartbeat_window)
+                              "stream within %.0fs" % self.timeout)
             if not saw_heartbeat:
                 return Result.skip("stream-events",
                                    "the event reached the open stream, but no "

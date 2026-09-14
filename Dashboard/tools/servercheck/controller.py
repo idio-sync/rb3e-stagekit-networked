@@ -486,7 +486,7 @@ def run_lifecycle(data_dir, token, web_port=8321, python=sys.executable,
                       timeout=probe_timeout,
                       heartbeat_window=heartbeat_window)
         results.extend(probe.run_all())
-        results.append(check_shutdown(server))
+        results.append(check_shutdown(server, timeout=timeout))
     except Exception as error:
         results.append(Result("lifecycle", False,
                               "the run itself raised: %r" % error))
