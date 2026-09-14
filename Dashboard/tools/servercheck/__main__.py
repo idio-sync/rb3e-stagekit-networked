@@ -25,12 +25,22 @@ from . import controller
 from .probe import Probe
 
 
-def report(results, stream=sys.stdout):
-    """Print each result and return the failure count. A skip is not a failure."""
+def report(results, stream=sys.stdout, require=()):
+    """Print each result and return the failure count.
+
+    A skip is not a failure on its own -- except for a check named in
+    `require`. Naming a check there means "this must actually have run", so a
+    skip of it is reported and counted the same as a failure would be, with
+    its own message so a reader can tell "the check failed on its merits"
+    apart from "the check never ran at all".
+    """
     failures = skipped = 0
+    unmet = []
     for result in results:
         if result.skipped:
             state, skipped = "SKIP", skipped + 1
+            if result.name in require:
+                unmet.append(result.name)
         elif result.ok:
             state = "ok  "
         else:
@@ -38,7 +48,10 @@ def report(results, stream=sys.stdout):
         stream.write("%-16s %s  %s\n" % (result.name, state, result.detail))
     stream.write("\n%d checks, %d failed, %d skipped\n"
                  % (len(results), failures, skipped))
-    return failures
+    if unmet:
+        stream.write("required check(s) skipped instead of run: %s\n"
+                     % ", ".join(sorted(unmet)))
+    return failures + len(unmet)
 
 
 def parse_arguments(argv=None):
@@ -59,6 +72,15 @@ def parse_arguments(argv=None):
                        help="How long to wait for the SSE heartbeat, which "
                             "fires on its own 15-second interval independent "
                             "of --timeout.")
+    probe.add_argument("--require", default="",
+                       help="Comma-separated check names (see Probe.CHECK_NAMES) "
+                            "that must actually run. A skip of a named check "
+                            "is reported and exits non-zero, the same as a "
+                            "failure would -- a check outside this process's "
+                            "control (Stage Kit off, a port already owned) "
+                            "must not be able to pass CI by quietly not "
+                            "running. An unknown name is an error before "
+                            "anything is checked.")
 
     local = subcommands.add_parser(
         "local", help="Start a server here, check it, and stop it. Never "
@@ -77,15 +99,30 @@ def parse_arguments(argv=None):
     return parser.parse_args(argv)
 
 
+def _parse_require(raw):
+    """A comma-separated option into a list, dropping blanks around commas."""
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
 def main(argv=None):
     arguments = parse_arguments(argv)
     if arguments.command == "probe":
+        require = _parse_require(arguments.require)
+        unknown = sorted(set(require) - set(Probe.CHECK_NAMES))
+        if unknown:
+            # Caught before a single network call is made: a typo in a CI
+            # workflow's --require must be loud immediately, not discovered
+            # after paying for a probe run that could never have satisfied it.
+            sys.stderr.write(
+                "unknown --require name(s): %s (known checks: %s)\n"
+                % (", ".join(unknown), ", ".join(Probe.CHECK_NAMES)))
+            return 2
         probe = Probe(arguments.base_url, token=arguments.token,
                       host=arguments.host, event_port=arguments.event_port,
                       telemetry_port=arguments.telemetry_port,
                       timeout=arguments.timeout,
                       heartbeat_window=arguments.heartbeat_window)
-        return 1 if report(probe.run_all()) else 0
+        return 1 if report(probe.run_all(), require=require) else 0
     if arguments.command == "local":
         results = controller.run_lifecycle(
             arguments.data_dir, arguments.token, web_port=arguments.web_port,

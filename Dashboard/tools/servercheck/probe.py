@@ -48,6 +48,14 @@ class Result:
 class Probe:
     """Drive a running server over its network interfaces."""
 
+    # The Result name every check in run_all() reports under, in the order
+    # run_all() runs them. Kept explicit (rather than introspected from the
+    # check methods) so a caller validating a check name -- the CLI's
+    # --require, for instance -- has one place to check against that does not
+    # depend on method-name-to-result-name conventions holding forever.
+    CHECK_NAMES = ("health", "auth", "state", "events", "stream",
+                  "stream-events", "telemetry", "lighting")
+
     def __init__(self, base_url, token=None, host="127.0.0.1",
                  event_port=fixtures.EVENT_PORT,
                  telemetry_port=fixtures.TELEMETRY_PORT, timeout=10.0,

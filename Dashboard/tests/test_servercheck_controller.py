@@ -73,6 +73,32 @@ class LifecycleTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
 
+    @unittest.skipIf(os.name == "nt",
+                     "Windows has no graceful termination signal: SIGTERM "
+                     "maps to TerminateProcess there, so check_shutdown's "
+                     "ok=True pass branch cannot be reached on this "
+                     "platform.")
+    def test_check_shutdown_passes_against_a_healthy_server(self):
+        """check_shutdown's pass branch, exercised through the real function.
+
+        test_sigterm_produces_a_clean_exit calls server.terminate() directly,
+        so it never runs controller.check_shutdown itself: neither its
+        ok=True pass branch nor its code!=0 failure branch is exercised
+        anywhere. The planned CI workflow does not fill that gap either -- it
+        stops the container with `docker stop` and inspects the exit code in
+        shell, never invoking the controller. This calls check_shutdown the
+        way run_lifecycle does, against a server that is actually healthy.
+        """
+        server = self.server()
+        server.start()
+        self.addCleanup(server.stop)
+        self.assertTrue(server.wait_until_healthy())
+
+        result = controller.check_shutdown(server)
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertFalse(result.skipped)
+
     def test_history_survives_a_restart(self):
         with self.server() as server:
             self.assertTrue(server.wait_until_healthy())
