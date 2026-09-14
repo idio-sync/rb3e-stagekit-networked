@@ -4,6 +4,18 @@
 
 Run from the Dashboard/tools directory, or with that directory on PYTHONPATH.
 Exit status 0 means every check passed.
+
+If you start a server by hand to point this at, stop it when you are done.
+A server left running owns UDP 21070 (and 21071 when it owns discovery) for
+the whole machine, and the next person -- or the next test run -- sends
+datagrams that are delivered to your leftover process instead of theirs.
+Dashboard/tests/test_servercheck_probe.py detects exactly that and skips
+rather than failing, but a skipped check is coverage you did not get. On
+Windows, confirm with:
+
+    Get-NetUDPEndpoint -LocalPort 21070
+
+and on Linux or macOS with `ss -lunp 'sport = :21070'` or `lsof -iUDP:21070`.
 """
 
 import argparse
