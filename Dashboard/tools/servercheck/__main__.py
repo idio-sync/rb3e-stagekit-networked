@@ -21,6 +21,7 @@ and on Linux or macOS with `ss -lunp 'sport = :21070'` or `lsof -iUDP:21070`.
 import argparse
 import sys
 
+from . import controller
 from .probe import Probe
 
 
@@ -58,6 +59,21 @@ def parse_arguments(argv=None):
                        help="How long to wait for the SSE heartbeat, which "
                             "fires on its own 15-second interval independent "
                             "of --timeout.")
+
+    local = subcommands.add_parser(
+        "local", help="Start a server here, check it, and stop it. Never "
+                      "point this at a machine somebody else is using: it "
+                      "starts and signals processes and writes to the data "
+                      "directory.")
+    local.add_argument("--data-dir", required=True,
+                       help="An empty directory this run may own. It is "
+                            "written to, and its contents are asserted on.")
+    local.add_argument("--token", default="local-check")
+    local.add_argument("--web-port", type=int, default=8321)
+    local.add_argument("--timeout", type=float, default=30.0,
+                       help="How long to wait for the server to come up.")
+    local.add_argument("--heartbeat-window", type=float, default=20.0,
+                       help="See the probe subcommand.")
     return parser.parse_args(argv)
 
 
@@ -70,6 +86,12 @@ def main(argv=None):
                       timeout=arguments.timeout,
                       heartbeat_window=arguments.heartbeat_window)
         return 1 if report(probe.run_all()) else 0
+    if arguments.command == "local":
+        results = controller.run_lifecycle(
+            arguments.data_dir, arguments.token, web_port=arguments.web_port,
+            timeout=arguments.timeout,
+            heartbeat_window=arguments.heartbeat_window)
+        return 1 if report(results) else 0
     return 2
 
 
