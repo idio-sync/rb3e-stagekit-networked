@@ -1,0 +1,250 @@
+name: Server Container
+
+# Deliberately not on pull_request: build.yml already builds three desktop
+# executables and two firmware targets on every PR, and this adds a Docker
+# build on top. A push to main also fires build.yml's latest-release job,
+# which republishes the public "latest" release -- so workflow_dispatch on a
+# branch is the low-side-effect way to get a run.
+#
+# Nothing here publishes an image: no registry login, no push, no registry
+# reference at all. Publishing is a separate, authorized decision.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mqtt: [false, true]
+
+    env:
+      TOKEN: container-check-token
+      IMAGE: rb3e-dashboard-server:mqtt-${{ matrix.mqtt }}
+      NAME: rb3e-check-${{ matrix.mqtt }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build the image
+        run: |
+          docker build \
+            --build-arg INSTALL_MQTT=${{ matrix.mqtt }} \
+            -t "$IMAGE" .
+
+      - name: An unwritable appdata directory is refused, legibly
+        run: |
+          # Section 1's preflight should exit non-zero naming the uid, rather
+          # than failing later with a database error. 1234 is deliberately not
+          # the image's 99:100.
+          sudo install -d -o 1234 -g 1234 "$PWD/appdata-wrong"
+          set +e
+          docker run --rm --network host \
+            -e RB3E_WEB_HOST=0.0.0.0 \
+            -e RB3E_AUTH_TOKEN="$TOKEN" \
+            -v "$PWD/appdata-wrong:/data" \
+            "$IMAGE" > wrong.log 2>&1
+          status=$?
+          set -e
+          cat wrong.log
+          if [ "$status" -eq 0 ]; then
+            echo "::error::the server started against an unwritable data directory"
+            exit 1
+          fi
+          grep -q "not writable" wrong.log
+          grep -qE "euid=99|uid=99" wrong.log
+          echo "refused with status $status, and the message names the uid"
+
+      - name: Start the container
+        run: |
+          # Unraid's appdata ownership, which the image is built for.
+          sudo install -d -o 99 -g 100 "$PWD/appdata"
+          # Stage Kit on, so the telemetry and lighting probes actually run --
+          # the probe step below requires exactly those two to have run.
+          # It needs explicit discovery targets or the config refuses to start
+          # -- that is Section 1's rule, working as intended.
+          docker run -d --name "$NAME" --network host \
+            -e RB3E_WEB_HOST=0.0.0.0 \
+            -e RB3E_AUTH_TOKEN="$TOKEN" \
+            -e RB3E_STAGEKIT_ENABLED=true \
+            -e RB3E_DISCOVERY_TARGETS=127.0.0.255 \
+            -v "$PWD/appdata:/data" \
+            "$IMAGE"
+
+      - name: The container becomes healthy
+        run: |
+          for _ in $(seq 1 30); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME")
+            echo "health: $state"
+            [ "$state" = "healthy" ] && exit 0
+            [ "$state" = "unhealthy" ] && break
+            sleep 2
+          done
+          docker logs "$NAME"
+          echo "::error::the container never became healthy"
+          exit 1
+
+      - name: The process runs as uid 99, gid 100
+        run: |
+          # Building proves useradd succeeded. This proves the process is that
+          # user, which is what makes Unraid's appdata writable.
+          test "$(docker exec "$NAME" id -u)" = "99"
+          test "$(docker exec "$NAME" id -g)" = "100"
+
+      - name: Probe the running container
+        working-directory: Dashboard/tools
+        run: |
+          # --require is what makes this step mean "verified" rather than
+          # "nothing blew up". Without it the probe exits 0 whether telemetry
+          # and lighting ran or silently skipped, and those two are exactly
+          # the checks that skip when Stage Kit is off. The container above
+          # enables Stage Kit precisely so they can run, so a skip here is a
+          # regression and has to be red.
+          #
+          # --heartbeat-window is left at its 20s default on purpose: the
+          # server's SSE heartbeat fires on its own 15-second interval, so a
+          # window under 15s would make stream-events skip through no fault
+          # of the server.
+          python -m servercheck probe \
+            --base-url http://127.0.0.1:8321 \
+            --token "$TOKEN" \
+            --require telemetry,lighting
+
+      - name: History survives a restart
+        run: |
+          test -f "$PWD/appdata/history.db"
+          before=$(sudo md5sum "$PWD/appdata/history.db" | cut -d' ' -f1)
+          docker restart "$NAME"
+          for _ in $(seq 1 30); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME")
+            [ "$state" = "healthy" ] && break
+            sleep 2
+          done
+          test -f "$PWD/appdata/history.db"
+          echo "history.db present before ($before) and after the restart"
+
+      - name: Start a real broker
+        if: matrix.mqtt == true
+        run: |
+          # A host-network container, not a workflow services: container. The
+          # server runs with --network host, so a services: container on the
+          # bridge would need its published port reconciled; and eclipse-
+          # mosquitto 2.x defaults to local-only anonymous access, which works
+          # on the host netns and would not work from a bridge.
+          docker run -d --name broker --network host eclipse-mosquitto
+          sudo apt-get update && sudo apt-get install -y mosquitto-clients
+          for _ in $(seq 1 15); do
+            mosquitto_sub -h 127.0.0.1 -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: The server publishes discovery to the broker
+        if: matrix.mqtt == true
+        run: |
+          docker rm -f "$NAME"
+          docker run -d --name "$NAME" --network host \
+            -e RB3E_WEB_HOST=0.0.0.0 \
+            -e RB3E_AUTH_TOKEN="$TOKEN" \
+            -e RB3E_STAGEKIT_ENABLED=true \
+            -e RB3E_DISCOVERY_TARGETS=127.0.0.255 \
+            -e RB3E_MQTT_HOST=127.0.0.1 \
+            -v "$PWD/appdata:/data" \
+            "$IMAGE"
+          timeout 30 mosquitto_sub -h 127.0.0.1 \
+            -t 'homeassistant/#' -C 1 -W 25 | tee discovery.txt
+          test -s discovery.txt
+
+      - name: The server survives a broker restart
+        if: matrix.mqtt == true
+        run: |
+          docker restart broker
+          sleep 10
+          # The server must still be up: Home Assistant is an integration, not
+          # the reason this process exists.
+          test "$(docker inspect --format '{{.State.Running}}' "$NAME")" = "true"
+          docker logs "$NAME" 2>&1 | tail -20
+
+      - name: Stopping is graceful
+        run: |
+          # SIGTERM, then the exit code. Windows could not verify this: its
+          # terminate() is TerminateProcess, which cannot be graceful.
+          docker stop --time 20 "$NAME"
+          code=$(docker inspect --format '{{.State.ExitCode}}' "$NAME")
+          echo "exit code: $code"
+          test "$code" = "0"
+
+      - name: Free the ports for the controller
+        run: |
+          # Keep a copy of the logs before the container goes away, then
+          # remove it and the broker so UDP 21070, UDP 21071 and TCP 8321 are
+          # free for the controller run below, which starts its own server
+          # directly on this runner.
+          docker logs "$NAME" > container.log 2>&1 || true
+          docker rm -f "$NAME" || true
+          docker rm -f broker || true
+
+      - name: The controller's lifecycle checks, on the runner
+        working-directory: Dashboard/tools
+        run: |
+          # This is not a duplicate of the docker steps above, and neither
+          # half should be deleted as redundant. The docker steps verify the
+          # *image*: its uid, its healthcheck, its bind mount, its response to
+          # SIGTERM. This step verifies the *harness*: servercheck's
+          # controller -- data-directory isolation, startup, graceful
+          # shutdown, and history surviving a restart -- which is 500 lines
+          # that otherwise execute nowhere on Linux, because the shell above
+          # re-implements the same judgement in a second language and only
+          # the shell copy would ever run.
+          #
+          # It runs after the container is removed because it starts a real
+          # server here and needs UDP 21070/21071 and TCP 8321 to itself.
+          #
+          # requests is the server's only runtime dependency, and the
+          # controller launches rb3server.py with this interpreter.
+          python -m pip install --disable-pip-version-check \
+            -r ../requirements-server.txt
+          # An empty directory of its own: the controller asserts the
+          # directory is empty before it writes anything, so the container's
+          # appdata/ would fail it immediately.
+          rm -rf "$RUNNER_TEMP/local-data"
+          mkdir -p "$RUNNER_TEMP/local-data"
+          python -m servercheck local \
+            --data-dir "$RUNNER_TEMP/local-data" \
+            --token "$TOKEN" \
+            --web-port 8321
+
+      - name: Container logs
+        if: always()
+        run: |
+          # Always, including on failure: a red run whose logs are gone costs
+          # another full cycle. The container may already have been removed
+          # above, in which case container.log is the copy taken then and
+          # must not be overwritten with "no such container".
+          if docker inspect "$NAME" >/dev/null 2>&1; then
+            docker logs "$NAME" > container.log 2>&1 || true
+          fi
+          if docker inspect broker >/dev/null 2>&1; then
+            docker logs broker > broker.log 2>&1 || true
+          fi
+          cat container.log || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-logs-mqtt-${{ matrix.mqtt }}
+          path: |
+            wrong.log
+            container.log
+            broker.log
+            discovery.txt
+          if-no-files-found: ignore

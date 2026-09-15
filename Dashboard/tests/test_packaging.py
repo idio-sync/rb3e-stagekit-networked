@@ -388,5 +388,108 @@ class ReducedDependencyTests(unittest.TestCase):
         self.assertIn("image dependency set", result.stdout)
 
 
+class ContainerWorkflowTests(unittest.TestCase):
+    """The workflow exists, is scoped correctly, and publishes nothing.
+
+    These assert what .github/workflows/server-container.yml actually says.
+    The workflow was written after the servercheck harness gained --require
+    and its controller subcommand, so several assertions here are about
+    behaviour the original plan did not know existed.
+    """
+
+    def setUp(self):
+        self.path = REPO / ".github" / "workflows" / "server-container.yml"
+        self.text = read(self.path)
+
+    def test_it_does_not_run_on_pull_requests(self):
+        """build.yml already builds five artifacts per PR; this is extra."""
+        self.assertNotRegex(self.text, r"(?m)^\s*pull_request:")
+
+    def test_it_runs_on_pushes_to_main_and_on_demand(self):
+        self.assertIn("workflow_dispatch:", self.text)
+        self.assertRegex(self.text, r"branches:\s*\[\s*main\s*\]")
+
+    def test_it_builds_both_mqtt_variants(self):
+        self.assertRegex(self.text, r"mqtt:\s*\[\s*\"?false\"?\s*,\s*\"?true\"?\s*\]")
+        self.assertIn("INSTALL_MQTT=${{ matrix.mqtt }}", self.text)
+
+    def test_it_uses_host_networking(self):
+        """Bridge networking carries no broadcast; the server would see nothing."""
+        self.assertIn("--network host", self.text)
+
+    def test_it_enables_stagekit_with_explicit_targets(self):
+        """Otherwise two probe checks skip, and the config refuses to start."""
+        self.assertIn("RB3E_STAGEKIT_ENABLED=true", self.text)
+        self.assertIn("RB3E_DISCOVERY_TARGETS=", self.text)
+
+    def test_it_asserts_the_runtime_user(self):
+        """Building proves useradd ran; this proves the process is that user."""
+        self.assertIn("id -u", self.text)
+        self.assertIn("id -g", self.text)
+
+    def test_it_keeps_the_logs_on_failure(self):
+        self.assertIn("if: always()", self.text)
+
+    def test_it_uploads_the_container_log_and_not_only_the_console_copy(self):
+        """A red run whose logs are gone costs another full cycle."""
+        self.assertIn("container.log", self.text)
+        self.assertRegex(
+            self.text,
+            r"(?s)uses: actions/upload-artifact@v4.*?container\.log")
+
+    def test_it_publishes_no_image(self):
+        """Publishing is a separate, authorized decision."""
+        for forbidden in ("docker push", "ghcr.io", "docker/login-action"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.text)
+
+    def test_the_probe_requires_the_stagekit_checks_to_have_run(self):
+        """Without --require, a silent skip of telemetry or lighting would
+        exit 0 and CI would call "did not run" a pass."""
+        self.assertRegex(self.text,
+                         r"--require\s+telemetry,lighting")
+        # A --require name the probe does not know is an error before any
+        # check runs, so the two named here have to be real check names.
+        tools = str(DASHBOARD / "tools")
+        if tools not in sys.path:
+            sys.path.insert(0, tools)
+        from servercheck.probe import Probe
+
+        self.assertTrue({"telemetry", "lighting"}.issubset(set(Probe.CHECK_NAMES)))
+
+    def test_it_does_not_shorten_the_heartbeat_window(self):
+        """The SSE heartbeat fires on its own 15-second interval; a window
+        under that makes stream-events skip for no good reason."""
+        for value in re.findall(r"--heartbeat-window\s+([0-9.]+)", self.text):
+            self.assertGreaterEqual(float(value), 15.0)
+
+    def test_it_runs_the_controller_on_the_runner(self):
+        """Half the harness owns process lifecycle. Re-implementing shutdown
+        and restart in shell alone would leave that half running nowhere."""
+        self.assertRegex(self.text, r"python -m servercheck local")
+        self.assertIn("--data-dir", self.text)
+
+    def test_the_controller_runs_after_the_container_is_removed(self):
+        """It starts its own server and needs 21070, 21071 and 8321 free."""
+        removal = self.text.index("docker rm -f \"$NAME\" || true")
+        controller = self.text.index("python -m servercheck local")
+        self.assertLess(removal, controller)
+
+    def test_the_controller_gets_its_own_empty_data_directory(self):
+        """check_isolated_data_dir refuses a directory with anything in it."""
+        self.assertRegex(self.text, r"--data-dir\s+\"\$RUNNER_TEMP/local-data\"")
+        self.assertIn('rm -rf "$RUNNER_TEMP/local-data"', self.text)
+
+    def test_the_two_halves_are_documented_as_deliberate(self):
+        """A later reader must not delete either as redundant."""
+        self.assertIn("not a duplicate", self.text)
+
+    def test_the_existing_build_workflow_is_untouched(self):
+        build = read(REPO / ".github" / "workflows" / "build.yml")
+
+        self.assertIn("Build Executables", build)
+        self.assertIn("build-firmware", build)
+
+
 if __name__ == "__main__":
     unittest.main()
