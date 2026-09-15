@@ -410,7 +410,11 @@ class ContainerWorkflowTests(unittest.TestCase):
         self.assertRegex(self.text, r"branches:\s*\[\s*main\s*\]")
 
     def test_it_builds_both_mqtt_variants(self):
-        self.assertRegex(self.text, r"mqtt:\s*\[\s*\"?false\"?\s*,\s*\"?true\"?\s*\]")
+        # Deliberately not \"?false\"? / \"?true\"?: a quoted ["false", "true"]
+        # matrix makes GitHub's loose equality coerce `matrix.mqtt == true` to
+        # 1 == NaN, which is false for both legs, silently skipping every
+        # MQTT step. Only the unquoted-boolean form is acceptable here.
+        self.assertRegex(self.text, r"mqtt:\s*\[\s*false\s*,\s*true\s*\]")
         self.assertIn("INSTALL_MQTT=${{ matrix.mqtt }}", self.text)
 
     def test_it_uses_host_networking(self):
@@ -459,7 +463,13 @@ class ContainerWorkflowTests(unittest.TestCase):
 
     def test_it_does_not_shorten_the_heartbeat_window(self):
         """The SSE heartbeat fires on its own 15-second interval; a window
-        under that makes stream-events skip for no good reason."""
+        under that makes stream-events skip for no good reason.
+
+        The workflow does not pass --heartbeat-window today -- it relies on
+        the probe's 20s default -- so re.findall returns [] and this loop
+        body never runs. That is deliberate: this test is a future-guard for
+        whoever adds the flag later, not a check of anything present now.
+        """
         for value in re.findall(r"--heartbeat-window\s+([0-9.]+)", self.text):
             self.assertGreaterEqual(float(value), 15.0)
 

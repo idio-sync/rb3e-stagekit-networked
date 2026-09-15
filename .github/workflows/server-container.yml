@@ -60,8 +60,8 @@ jobs:
             echo "::error::the server started against an unwritable data directory"
             exit 1
           fi
-          grep -q "not writable" wrong.log
-          grep -qE "euid=99|uid=99" wrong.log
+          test "$status" = "2"
+          grep -qE "not writable.*euid=99" wrong.log
           echo "refused with status $status, and the message names the uid"
 
       - name: Start the container
@@ -83,13 +83,13 @@ jobs:
       - name: The container becomes healthy
         run: |
           for _ in $(seq 1 30); do
-            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME")
+            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME" 2>/dev/null || echo none)
             echo "health: $state"
             [ "$state" = "healthy" ] && exit 0
             [ "$state" = "unhealthy" ] && break
             sleep 2
           done
-          docker logs "$NAME"
+          docker logs "$NAME" || true
           echo "::error::the container never became healthy"
           exit 1
 
@@ -124,32 +124,51 @@ jobs:
           test -f "$PWD/appdata/history.db"
           before=$(sudo md5sum "$PWD/appdata/history.db" | cut -d' ' -f1)
           docker restart "$NAME"
+          ready=
           for _ in $(seq 1 30); do
-            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME")
-            [ "$state" = "healthy" ] && break
+            state=$(docker inspect --format '{{.State.Health.Status}}' "$NAME" 2>/dev/null || echo none)
+            [ "$state" = "healthy" ] && ready=1 && break
             sleep 2
           done
+          if [ -z "$ready" ]; then
+            echo "::error::the container did not come back after the restart"
+            docker logs "$NAME" || true
+            exit 1
+          fi
           test -f "$PWD/appdata/history.db"
           echo "history.db present before ($before) and after the restart"
 
       - name: Start a real broker
-        if: matrix.mqtt == true
+        if: matrix.mqtt
         run: |
           # A host-network container, not a workflow services: container. The
           # server runs with --network host, so a services: container on the
           # bridge would need its published port reconciled; and eclipse-
           # mosquitto 2.x defaults to local-only anonymous access, which works
           # on the host netns and would not work from a bridge.
-          docker run -d --name broker --network host eclipse-mosquitto
-          sudo apt-get update && sudo apt-get install -y mosquitto-clients
+          docker run -d --name broker --network host eclipse-mosquitto:2
+          sudo apt-get update
+          sudo apt-get install -y mosquitto-clients
+          ready=
           for _ in $(seq 1 15); do
-            mosquitto_sub -h 127.0.0.1 -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1 && break
+            mosquitto_sub -h 127.0.0.1 -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1 && ready=1 && break
             sleep 1
           done
+          if [ -z "$ready" ]; then
+            echo "::error::the broker never accepted a connection"
+            docker logs broker || true
+            exit 1
+          fi
 
       - name: The server publishes discovery to the broker
-        if: matrix.mqtt == true
+        if: matrix.mqtt
         run: |
+          set -o pipefail
+          # RB3E_DISCOVERY_TARGETS=127.0.0.255 makes the server broadcast its
+          # own discovery datagrams back onto 0.0.0.0:21071, which is this
+          # same process's listening socket -- a benign self-loop, not a
+          # second peer. _parse_telemetry rejects them as not real telemetry,
+          # so this is just noise in the logs, not a bug.
           docker rm -f "$NAME"
           docker run -d --name "$NAME" --network host \
             -e RB3E_WEB_HOST=0.0.0.0 \
@@ -164,7 +183,7 @@ jobs:
           test -s discovery.txt
 
       - name: The server survives a broker restart
-        if: matrix.mqtt == true
+        if: matrix.mqtt
         run: |
           docker restart broker
           sleep 10
@@ -189,6 +208,11 @@ jobs:
           # free for the controller run below, which starts its own server
           # directly on this runner.
           docker logs "$NAME" > container.log 2>&1 || true
+          # eclipse-mosquitto logs to a file inside the image, not stdout, so
+          # "docker logs broker" is nearly always empty. Read the real file
+          # before the broker is removed, so a refused connection above is
+          # still diagnosable from the uploaded artifact.
+          docker exec broker cat /mosquitto/log/mosquitto.log > broker.log 2>&1 || true
           docker rm -f "$NAME" || true
           docker rm -f broker || true
 
@@ -217,23 +241,26 @@ jobs:
           # appdata/ would fail it immediately.
           rm -rf "$RUNNER_TEMP/local-data"
           mkdir -p "$RUNNER_TEMP/local-data"
+          set -o pipefail
           python -m servercheck local \
             --data-dir "$RUNNER_TEMP/local-data" \
             --token "$TOKEN" \
-            --web-port 8321
+            --web-port 8321 \
+            2>&1 | tee "$GITHUB_WORKSPACE/controller.log"
 
       - name: Container logs
         if: always()
         run: |
           # Always, including on failure: a red run whose logs are gone costs
           # another full cycle. The container may already have been removed
-          # above, in which case container.log is the copy taken then and
-          # must not be overwritten with "no such container".
+          # above, in which case container.log (and broker.log) is the copy
+          # taken then and must not be overwritten with "no such container".
           if docker inspect "$NAME" >/dev/null 2>&1; then
             docker logs "$NAME" > container.log 2>&1 || true
           fi
-          if docker inspect broker >/dev/null 2>&1; then
-            docker logs broker > broker.log 2>&1 || true
+          if [ ! -s broker.log ] && docker inspect broker >/dev/null 2>&1; then
+            # eclipse-mosquitto logs to a file, not stdout; read that file.
+            docker exec broker cat /mosquitto/log/mosquitto.log > broker.log 2>&1 || true
           fi
           cat container.log || true
 
@@ -247,4 +274,5 @@ jobs:
             container.log
             broker.log
             discovery.txt
+            controller.log
           if-no-files-found: ignore

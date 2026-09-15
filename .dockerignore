@@ -25,3 +25,4 @@ Dashboard/requirements.txt
 **/*.pyc
 **/*.pyo
 appdata/
+appdata-wrong/
