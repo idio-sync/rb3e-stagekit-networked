@@ -718,16 +718,27 @@ class MqttWiringTests(ServerTestCase):
         messages = [entry["message"]
                     for entry in application.state.snapshot()["log"]]
         self.assertTrue(any("paho-mqtt" in text for text in messages))
+        # Disabled, but still something the operator asked for: "configured"
+        # must not read the same as a server with no broker at all.
+        report = application.integration_report()["mqtt"]
+        self.assertTrue(report["configured"])
+        self.assertFalse(report["connected"])
 
-    def test_an_unreachable_broker_disables_mqtt_rather_than_the_server(self):
+    def test_an_unexpected_mqtt_failure_disables_mqtt_rather_than_the_server(self):
+        """A broker that is merely down no longer reaches here -- the
+        publisher retries that in the background (see
+        ``test_reliability_integrations.py``). What is left is the permanent
+        kind, where disabling MQTT is the honest answer."""
         application = self.make(mqtt_host="broker.local")
         application.mqtt.start = lambda: (_ for _ in ()).throw(
-            OSError("connection refused"))
+            RuntimeError("the publisher is broken"))
 
         application.start()
 
         self.assertTrue(application.is_running())
         self.assertIsNone(application.mqtt)
+        self.assertTrue(
+            application.integration_report()["mqtt"]["configured"])
 
     def test_a_working_broker_publishes_and_stops_cleanly(self):
         application = self.make(mqtt_host="broker.local")

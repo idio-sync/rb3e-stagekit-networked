@@ -15,6 +15,19 @@ Home Assistant keeps the entities when this server is away; availability is a
 retained last-will, so those entities show as unavailable rather than frozen on
 their last value. Publishing only changed topics keeps a broker log readable:
 device telemetry arrives every few seconds and almost none of it is news.
+
+A broker that is not there *yet* is retried. On a NAS the broker and this
+container start in an undefined order, and losing that race used to disable
+MQTT for the life of the process: the entities never appeared, nothing said
+why, and the only cure was a restart nobody knew to perform. The initial
+connect therefore falls back to a background retry with a growing, bounded
+backoff that a stop interrupts -- the same shape ``outbound.py`` uses for its
+delivery retries, deliberately not a second mechanism.
+
+Losing a broker *after* connecting is a different case and is not handled
+here: ``loop_start`` runs paho's own network loop, which reconnects by itself.
+``test_runtime_mqtt.py``'s ``PostConnectLossTests`` pins that division of
+labour so nothing in this module quietly takes it over.
 """
 
 import json
@@ -77,7 +90,9 @@ class MqttPublisher:
                  base_topic=DEFAULT_BASE_TOPIC,
                  discovery_prefix=DEFAULT_DISCOVERY_PREFIX,
                  client_id="rb3dashboard", keepalive=60,
-                 client_factory=default_client_factory, on_error=None):
+                 client_factory=default_client_factory, on_error=None,
+                 retry_interval=5.0, retry_max_interval=60.0,
+                 retry_join_timeout=5.0, retry_waiter=None):
         if not str(host).strip():
             raise ValueError("An MQTT broker address is required")
         self._host = host.strip()
@@ -93,6 +108,17 @@ class MqttPublisher:
         self._client = None
         self._published = {}
         self._announced_devices = set()
+        # Retry state. The condition is both the lock guarding the client and
+        # the thing a backoff waits on, so a stop interrupts it immediately
+        # rather than after however long the current backoff had left.
+        self._retry_interval = max(float(retry_interval), 0.0)
+        self._retry_max_interval = max(float(retry_max_interval),
+                                       self._retry_interval)
+        self._retry_join_timeout = retry_join_timeout
+        self._retry_waiter = retry_waiter
+        self._condition = threading.Condition()
+        self._stopping = False
+        self._retry_thread = None
 
     # -- topics ---------------------------------------------------------
 
@@ -109,24 +135,146 @@ class MqttPublisher:
     # -- lifecycle ------------------------------------------------------
 
     def start(self):
-        if self._client is not None:
+        """Connect, or start trying. A broker that is down is not a failure.
+
+        Only a missing ``paho-mqtt`` still raises: a package will not install
+        itself between attempts, so retrying it would be a busy loop around a
+        permanent condition.
+        """
+        with self._condition:
+            if self._client is not None or self._retry_thread is not None:
+                return
+            self._stopping = False
+        client = self._build_client()
+        try:
+            client.connect(self._host, self._port, self._keepalive)
+        except Exception as error:
+            self._report_unreachable(error)
+            self._begin_retrying()
             return
+        self._activate(client)
+
+    def _build_client(self):
         client = self._client_factory(self._client_id)
         if self._username:
             client.username_pw_set(self._username, self._password)
         # The will is what makes an unplanned exit honest: the broker publishes
         # it for us and every entity turns unavailable.
         client.will_set(self.availability_topic, OFFLINE, qos=1, retain=True)
-        client.connect(self._host, self._port, self._keepalive)
+        return client
+
+    def _activate(self, client):
+        """Adopt a connected client and say everything it has not heard."""
         client.loop_start()
-        self._client = client
+        with self._condition:
+            self._client = client
         self._published = {}
         self._announced_devices = set()
         self._announce_game()
         self._publish(self.availability_topic, ONLINE, retain=True, force=True)
 
+    # -- the initial connect, retried ------------------------------------
+
+    def is_retrying(self):
+        with self._condition:
+            return self._retry_thread is not None
+
+    def _begin_retrying(self):
+        with self._condition:
+            if self._stopping or self._retry_thread is not None:
+                return
+            self._retry_thread = threading.Thread(
+                target=self._retry, name="RB3E-mqtt-connect", daemon=True)
+            # Started under the lock so a concurrent stop cannot try to join a
+            # thread that has not begun.
+            self._retry_thread.start()
+
+    def _retry(self):
+        # The first retry is immediate: a broker still starting is usually
+        # only moments away, and a connection refused costs nothing. Only a
+        # broker that is really absent pays the growing backoff.
+        delay = 0.0
+        try:
+            while True:
+                if self._wait(delay):
+                    return
+                delay = min(max(delay * 2.0, self._retry_interval),
+                            self._retry_max_interval)
+                try:
+                    client = self._build_client()
+                except MqttUnavailable as error:
+                    self._report(error)
+                    return
+                try:
+                    client.connect(self._host, self._port, self._keepalive)
+                except Exception as error:
+                    self._report_unreachable(error)
+                    continue
+                with self._condition:
+                    stopping = self._stopping
+                if stopping:
+                    self._discard(client)
+                    return
+                self._activate(client)
+                return
+        finally:
+            with self._condition:
+                self._retry_thread = None
+                self._condition.notify_all()
+
+    def _wait(self, seconds):
+        """Wait out a backoff; return True when a stop interrupted it.
+
+        The shape is ``OutboundWorker._sleep``'s, deliberately: one waiting
+        discipline in this server, not two. ``retry_waiter`` is the seam a
+        test uses to advance time without spending it.
+        """
+        waiter = self._retry_waiter
+        if waiter is not None:
+            return bool(waiter(seconds))
+        with self._condition:
+            if self._stopping:
+                return True
+            if seconds > 0:
+                self._condition.wait(seconds)
+            return self._stopping
+
+    def _discard(self, client):
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+    def _report_unreachable(self, error):
+        """Say the broker is away, and never say anything else.
+
+        This runs once per backoff for as long as the broker is gone, so
+        anything secret here would be printed on a loop. The password is not
+        interpolated, and the exception comes from the client's connect, which
+        has never been given the password in any form it could echo.
+        """
+        self._report(ConnectionError(
+            "could not reach the broker at %s:%s (%s); still trying"
+            % (self._host, self._port, error)))
+
+    def _await_retry(self, timeout):
+        """Wait for a retry in flight to finish. Used by stop and by tests."""
+        with self._condition:
+            thread = self._retry_thread
+        if thread is None or thread is threading.current_thread():
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
+
     def stop(self):
-        client, self._client = self._client, None
+        with self._condition:
+            self._stopping = True
+            # Wake a backoff rather than waiting it out: shutdown must not be
+            # held up by a broker that was never there.
+            self._condition.notify_all()
+        self._await_retry(self._retry_join_timeout)
+        with self._condition:
+            client, self._client = self._client, None
         if client is None:
             return
         try:
@@ -139,6 +287,25 @@ class MqttPublisher:
 
     def is_running(self):
         return self._client is not None
+
+    def is_connected(self):
+        """Whether the broker is attached, as closely as it can be known.
+
+        paho's network loop reconnects after an unexpected disconnect, so an
+        attached client outlives a broker restart while being briefly unable
+        to publish. Ask paho where it can answer; a client that cannot is
+        taken at its word that it is attached.
+        """
+        client = self._client
+        if client is None:
+            return False
+        probe = getattr(client, "is_connected", None)
+        if probe is None:
+            return True
+        try:
+            return bool(probe())
+        except Exception:  # pragma: no cover - defensive
+            return True
 
     # -- discovery ------------------------------------------------------
 
@@ -273,6 +440,17 @@ class MqttService:
     def is_running(self):
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
+
+    def is_connected(self):
+        """Whether the broker is actually attached.
+
+        Distinct from :meth:`is_running`, which only says this service's
+        thread is alive. Since a broker that is down at startup is retried,
+        the two can disagree for as long as the broker is away, and an
+        operator diagnosing missing entities needs the one that means
+        "publishing".
+        """
+        return self._publisher.is_connected()
 
     def start(self):
         self._publisher.start()

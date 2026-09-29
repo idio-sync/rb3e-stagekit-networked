@@ -1,6 +1,8 @@
 """Home Assistant MQTT discovery, against a fake broker client."""
 
 import json
+import threading
+import time
 import unittest
 
 from rb3dashboard.runtime.mqtt import (
@@ -363,6 +365,189 @@ class OptionalDependencyTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("paho-mqtt", message)
         self.assertIn("requirements-mqtt.txt", message)
+
+
+class RefusingClient(FakeClient):
+    """A broker that is not there yet, and then is.
+
+    ``failures`` connect attempts raise; the next one succeeds. This is the
+    NAS ordering problem: Mosquitto and this container start in an undefined
+    order, and losing the race must not cost Home Assistant for the life of
+    the process.
+    """
+
+    def __init__(self, client_id=None, failures=1):
+        super().__init__(client_id)
+        self.remaining = failures
+        self.attempts = 0
+        self.connected_now = threading.Event()
+
+    def connect(self, host, port, keepalive):
+        self.attempts += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise OSError("connection refused")
+        super().connect(host, port, keepalive)
+        self.connected_now.set()
+
+
+class StartupRetryTests(unittest.TestCase):
+    """A broker that is down at startup must be retried, not given up on."""
+
+    def build(self, failures=1, waiter=None, **kwargs):
+        clients = []
+
+        def factory(client_id):
+            # Every attempt builds its own client, so the count of refusals
+            # lives here rather than inside one of them.
+            client = RefusingClient(
+                client_id, failures=1 if len(clients) < failures else 0)
+            clients.append(client)
+            return client
+
+        kwargs.setdefault("host", "broker.local")
+        publisher = MqttPublisher(client_factory=factory,
+                                  retry_waiter=waiter, **kwargs)
+        self.addCleanup(publisher.stop)
+        return publisher, clients
+
+    def instant_waiter(self, stop_after=None):
+        """An injected clock: time passes when asked, never in wall seconds."""
+        delays = []
+
+        def waiter(seconds):
+            delays.append(seconds)
+            return stop_after is not None and len(delays) >= stop_after
+
+        return waiter, delays
+
+    def test_a_broker_that_is_down_at_startup_does_not_raise(self):
+        waiter, _ = self.instant_waiter(stop_after=1)
+        publisher, _clients = self.build(failures=99, waiter=waiter)
+
+        publisher.start()
+
+        self.assertFalse(publisher.is_running())
+
+    def test_the_publisher_connects_when_the_broker_returns(self):
+        """No restart: one start() call, and the broker arrives late."""
+        waiter, _ = self.instant_waiter()
+        publisher, clients = self.build(failures=2, waiter=waiter)
+
+        publisher.start()
+        self.assertTrue(clients[-1].connected_now.wait(5))
+        publisher._await_retry(5)
+
+        self.assertTrue(publisher.is_running())
+        self.assertEqual(clients[-1].payload(publisher.availability_topic),
+                         "online")
+        self.assertTrue(any(topic.endswith("/config")
+                            for topic in clients[-1].topics()))
+
+    def test_the_backoff_grows_and_is_bounded(self):
+        waiter, delays = self.instant_waiter(stop_after=8)
+        publisher, _clients = self.build(
+            failures=99, waiter=waiter, retry_interval=1.0,
+            retry_max_interval=4.0)
+
+        publisher.start()
+        publisher._await_retry(5)
+
+        # The first retry is immediate; only a broker that is really
+        # absent pays the growing backoff.
+        self.assertEqual(delays[:5], [0.0, 1.0, 2.0, 4.0, 4.0])
+        self.assertTrue(all(delay <= 4.0 for delay in delays))
+
+    def test_a_stop_during_a_backoff_does_not_hang(self):
+        """The real waiter, with a backoff far longer than the test's patience."""
+        publisher, clients = self.build(failures=99, retry_interval=30.0)
+        publisher.start()
+        deadline = time.monotonic() + 5
+        while not clients:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+
+        started = time.monotonic()
+        publisher.stop()
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 2.0)
+        self.assertFalse(publisher.is_retrying())
+
+    def test_starting_twice_while_retrying_connects_once(self):
+        waiter, delays = self.instant_waiter(stop_after=2)
+        publisher, clients = self.build(failures=99, waiter=waiter)
+
+        publisher.start()
+        publisher.start()
+        publisher._await_retry(5)
+
+        self.assertFalse(publisher.is_running())
+        self.assertEqual(len(delays), 2)
+
+    def test_the_password_never_reaches_a_failure_report(self):
+        """A retry logs once per backoff; a password here would leak forever."""
+        reported = []
+        waiter, _ = self.instant_waiter(stop_after=6)
+        publisher, _clients = self.build(
+            failures=99, waiter=waiter, username="ha",
+            password="hunter2-correct-horse", on_error=reported.append)
+
+        publisher.start()
+        publisher._await_retry(5)
+
+        self.assertTrue(reported)
+        for error in reported:
+            self.assertNotIn("hunter2", str(error))
+
+    def test_a_missing_package_is_not_retried(self):
+        """paho will not install itself between attempts."""
+
+        def factory(client_id):
+            raise MqttUnavailable("paho-mqtt is not installed")
+
+        publisher = MqttPublisher(host="broker.local", client_factory=factory)
+        self.addCleanup(publisher.stop)
+
+        with self.assertRaises(MqttUnavailable):
+            publisher.start()
+        self.assertFalse(publisher.is_retrying())
+
+
+class PostConnectLossTests(PublisherTestCase):
+    """A regression pin, not a fix: paho's own network loop owns reconnection.
+
+    ``loop_start`` runs paho's loop, which reconnects after an unexpected
+    disconnect on its own. Nothing in this module may take that over, so what
+    is pinned here is that the loop is started and left running, and that a
+    publish failure while it is down is reported rather than raised.
+    """
+
+    def test_the_network_loop_is_started_and_owns_reconnection(self):
+        publisher = self.publisher()
+        publisher.start()
+
+        self.assertTrue(self.client.looping)
+        self.assertTrue(publisher.is_running())
+
+    def test_a_publish_while_the_broker_is_away_is_reported_not_raised(self):
+        errors = []
+        self.client = FakeClient()
+        publisher = MqttPublisher(
+            host="broker.local",
+            client_factory=lambda client_id: self.client,
+            on_error=errors.append)
+        self.addCleanup(publisher.stop)
+        publisher.start()
+
+        self.client.fail_publish = True
+        publisher.publish_state(self.snapshot())
+
+        self.assertTrue(errors)
+        # Still connected as far as this publisher is concerned: tearing the
+        # client down here would take reconnection away from paho's loop.
+        self.assertTrue(publisher.is_running())
+        self.assertTrue(self.client.looping)
 
 
 if __name__ == "__main__":

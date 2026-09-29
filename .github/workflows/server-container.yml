@@ -185,11 +185,54 @@ jobs:
       - name: The server survives a broker restart
         if: matrix.mqtt
         run: |
+          set -o pipefail
           docker restart broker
-          sleep 10
+          # Wait for the broker rather than guessing: the checks below all
+          # need it accepting connections again.
+          ready=
+          for _ in $(seq 1 20); do
+            mosquitto_sub -h 127.0.0.1 -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1 && ready=1 && break
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::the broker never came back after its restart"
+            exit 1
+          fi
           # The server must still be up: Home Assistant is an integration, not
           # the reason this process exists.
           test "$(docker inspect --format '{{.State.Running}}' "$NAME")" = "true"
+
+          # Re-run the discovery assertion from the step above. Note what it
+          # does and does not prove: the image's mosquitto.conf has
+          # persistence on and "docker restart" keeps the container's data,
+          # so what arrives here is the *retained* configuration being served
+          # again. That is worth asserting -- Home Assistant keeps its
+          # entities -- but on its own it would pass against a server that had
+          # stopped publishing entirely, which is why the connection check
+          # below exists rather than this alone.
+          timeout 30 mosquitto_sub -h 127.0.0.1 \
+            -t 'homeassistant/#' -C 1 -W 25 | tee rediscovery.txt
+          test -s rediscovery.txt
+
+          # The non-vacuous half: the server's own client has reattached to
+          # the broker, asked of the server rather than inferred from a
+          # message the broker had already stored. /api/integrations reports
+          # "connected" from paho's own is_connected(), so this is false while
+          # the network loop is still reconnecting.
+          connected=
+          for _ in $(seq 1 30); do
+            state=$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+              http://127.0.0.1:8321/api/integrations \
+              | python -c 'import json,sys; print(json.load(sys.stdin)["mqtt"]["connected"])' 2>/dev/null || echo error)
+            echo "mqtt connected: $state"
+            [ "$state" = "True" ] && connected=1 && break
+            sleep 2
+          done
+          if [ -z "$connected" ]; then
+            echo "::error::the server never reconnected to the restarted broker"
+            docker logs "$NAME" 2>&1 | tail -40
+            exit 1
+          fi
           docker logs "$NAME" 2>&1 | tail -20
 
       - name: Stopping is graceful

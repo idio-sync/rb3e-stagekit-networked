@@ -214,9 +214,39 @@ same thing immediately instead of waiting for the broker to notice.
 Only changed values are published. Pico telemetry arrives every few seconds and
 almost none of it is news, so a broker log stays readable.
 
-A broker that is down or refusing connections disables MQTT and logs why. It
-does not stop the server: Home Assistant is an integration, not the reason this
-process exists, and the lights should keep working without it.
+### What happens when the broker goes away
+
+A broker that is down or refusing connections **does not** disable MQTT, and it
+does not stop the server either: Home Assistant is an integration, not the
+reason this process exists, and the lights keep working without it.
+
+- **Down when the server starts.** The server starts anyway and retries the
+  connection in the background: once immediately, then every 5 seconds,
+  doubling to a ceiling of 60 seconds, for as long as it takes. When the broker
+  appears, discovery is published and the entities arrive — no restart. This
+  matters on a NAS, where the broker and this container start in an undefined
+  order and losing that race used to cost you Home Assistant until somebody
+  noticed and restarted the server. Each failed attempt logs one line naming
+  the broker address; no credential is ever in it.
+- **Lost after connecting.** `paho-mqtt`'s own network loop reconnects, so
+  nothing in this server needs to. Discovery configuration is retained on the
+  broker, so the entities survive the gap.
+- **`paho-mqtt` not installed.** The server says so plainly in its log and runs
+  without MQTT, as above.
+
+Either way, a stop interrupts a retry immediately; shutdown is never held up
+waiting out a backoff.
+
+`GET /api/integrations` (behind the token) tells the two states apart:
+
+| Field | Meaning |
+| --- | --- |
+| `configured` | You set `RB3E_MQTT_HOST`. It stays true even when MQTT could not start, so **off** and **broken** do not look the same. |
+| `running` | This server's publishing thread is alive. |
+| `connected` | The broker is actually attached, from `paho`'s own view. This is the one that means entities are arriving. |
+
+`configured: true` with `connected: false` means the server wants a broker and
+does not have one — look at the log and at the broker.
 
 ## Access control
 

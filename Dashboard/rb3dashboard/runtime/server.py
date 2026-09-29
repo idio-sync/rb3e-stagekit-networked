@@ -167,6 +167,7 @@ class ServerApplication:
                  mqtt_base_topic="rb3dashboard",
                  mqtt_discovery_prefix="homeassistant",
                  mqtt_client_id="rb3dashboard",
+                 mqtt_client_factory=None,
                  webhook_capacity=100,
                  webhook_retries=2,
                  webhook_timeout=5.0,
@@ -280,16 +281,27 @@ class ServerApplication:
                                max_event_streams=max_event_streams,
                                stream_write_timeout=stream_write_timeout)
 
+        # Kept separately from ``self.mqtt``, which is cleared when MQTT
+        # cannot start. Without it, a broker the operator asked for and did
+        # not get reports exactly like one they never asked for, and
+        # /api/integrations cannot tell "off" from "broken".
+        self._mqtt_configured = bool(mqtt_host)
         self.mqtt = None
         if mqtt_host:
+            publisher_arguments = {}
+            if mqtt_client_factory is not None:
+                publisher_arguments["client_factory"] = mqtt_client_factory
             self.mqtt = MqttService(
                 MqttPublisher(
                     mqtt_host, port=mqtt_port, username=mqtt_username,
                     password=mqtt_password, base_topic=mqtt_base_topic,
                     discovery_prefix=mqtt_discovery_prefix,
                     client_id=mqtt_client_id,
+                    # Connect failures arrive here too now, so the wording
+                    # covers both a failed publish and a broker being away.
                     on_error=lambda error: self._record_log(
-                        "MQTT publish failed: %s" % error, level="warning")),
+                        "MQTT: %s" % error, level="warning"),
+                    **publisher_arguments),
                 self.state,
                 on_error=lambda error: self._record_log(
                     "MQTT publish failed: %s" % error, level="warning"))
@@ -357,9 +369,16 @@ class ServerApplication:
         if self.outbound is not None:
             report["webhook"].update(self.outbound.counters())
             report["webhook"]["pending"] = self.outbound.pending()
-        report["mqtt"] = {"configured": self.mqtt is not None,
+        report["mqtt"] = {"configured": self._mqtt_configured,
                           "running": bool(self.mqtt is not None
-                                          and self.mqtt.is_running())}
+                                          and self.mqtt.is_running()),
+                          # "running" is this server's publishing thread;
+                          # "connected" is the broker. They disagree while a
+                          # broker that was down at startup is being retried,
+                          # and "connected" is the one that means entities are
+                          # actually arriving in Home Assistant.
+                          "connected": bool(self.mqtt is not None
+                                            and self.mqtt.is_connected())}
         report["relay"] = {"configured": self.relay is not None}
         if self.relay is not None:
             report["relay"].update(self.relay.counters())
@@ -387,7 +406,8 @@ class ServerApplication:
             self._record_log(
                 "integrations -- webhook: %s, mqtt: %s, relay: %s, history: %s"
                 % ("on" if report["webhook"]["configured"] else "off",
-                   "on" if report["mqtt"]["running"] else "off",
+                   "on" if report["mqtt"]["connected"] else
+                   ("retrying" if report["mqtt"]["configured"] else "off"),
                    "on" if report["relay"]["configured"] else "off",
                    "on" if self.history is not None else "off"))
         except Exception as error:
@@ -571,6 +591,12 @@ class ServerApplication:
         Home Assistant is an integration, not the reason this process exists,
         and a broker that is down or a package that is missing should not stop
         the lights working.
+
+        A broker that is merely *down* no longer arrives here: the publisher
+        retries that in the background and ``start`` returns. What is left is
+        the permanent kind -- a missing package, or a fault in this server --
+        where disabling MQTT is the honest answer. ``integration_report``
+        still says the operator asked for it.
         """
         try:
             self.mqtt.start()
