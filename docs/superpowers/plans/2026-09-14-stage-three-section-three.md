@@ -60,6 +60,7 @@ Stated here so no task re-derives it, and so a task that finds otherwise knows i
 | `Dashboard/rb3dashboard/runtime/config.py` | New settings for the cap and the deadline. | 3 |
 | `Dashboard/rb3dashboard/runtime/server.py` | Threads the new settings from `ServerApplication` to `WebService`. **Without this the settings never arrive and `serve_application(**kwargs)` raises `TypeError`.** | 3 |
 | `Dashboard/tests/test_runtime_config.py` | Validation for the new settings. | 3 |
+| `Dashboard/tests/test_runtime_server.py` | Its two fake web-service factories take fixed keyword arguments and raise `TypeError` the moment `ServerApplication` forwards a new setting. **Any task adding a setting must expect to touch this file.** | 3 |
 | `Dashboard/tests/test_reliability_queues.py` (new) | Queue saturation and drop policy. | 4 |
 | `Dashboard/tests/test_reliability_devices.py` (new) | Device offline, forget, and return. | 5 |
 | `Dashboard/tests/test_reliability_shutdown.py` (new) | SIGTERM, SIGINT, unclean kill, data integrity after. | 6 |
@@ -214,7 +215,18 @@ git commit -m "test: add reliability measurement support"
 **The reap is now one `poll_interval` — ~0.5s, never above 0.53s in any run — and no longer depends on load.** Two consequences for later tasks:
 
 - **Scenario 2 stopped being an independent measurement.** Load was what distinguished it, and after the fix the drop is instant either way. Task 10 should record it as the same data point as scenario 1, not as a second one.
-- **The storm's peak concurrent threads fell from +100 to +23, which is uncomfortably close to Task 3's default cap of 32.** The reap now overlaps the storm instead of trailing it, so the peak is timing-dependent and will differ on Linux CI. Task 3 must re-measure it against the real cap rather than assume headroom, and Task 4's storm test must not quietly depend on 100 sequential cycles staying under the cap — if it can hit the cap, it should say what it expects when it does.
+- **The storm's peak concurrent threads fell from +100 to +23** — but that is a *thread* peak with the reap overlapping, and Task 3 measured the *stream slot* peak at 30-32 against a cap of 32. The two are not the same number, and the slot peak is the one a cap sees. See Task 4 for the measurement and what it means.
+
+**Task 3 outcome (`273f38d`), recorded so later tasks do not re-derive it:**
+
+| | Uncapped | Capped at 32 |
+| --- | --- | --- |
+| 200 concurrent streams | all accepted, +201 threads, 50.3MB peak RSS | 32 accepted / 168 refused, 37 threads, 35.9MB |
+| `/api/state` while saturated | 200 | 200 |
+
+**The default stays 32.** A cap that survives a 100/s synthetic reconnect loop would have to exceed ~50 here and more on a faster machine — a number picked to make a test green, which this plan forbids. No browser reconnects an `EventSource` a hundred times a second; a real storm is a handful of tabs, the server answered 200 throughout, every refusal carried `Retry-After: 5`, and a refused `EventSource` is admitted on its next attempt because a slot returns in ~0.5s.
+
+**Known gap for Task 10's ledger:** the write deadline's *firing* has no end-to-end test. Since `edabd9f` a departed peer is noticed in ~0.5s, so producing a genuine blocked `sendall` needs a client that reads too slowly to keep up yet never departs. The logging and its rate limiting are covered by driving `StreamGate` directly with an injected clock; `settimeout` itself runs on every stream test; the timeout path firing does not.
 
 The cause is one line of `_stream`'s design. The loop already waits in slices (`state.wait_for_change(since, timeout=min(self.poll_interval, self.heartbeat))`, `api.py:409-410`), but it only ever *writes*. A peer that closed is invisible until the next heartbeat write fails, so the floor on noticing is `HEARTBEAT_SECONDS = 15.0` — and on an idle server with a stalled-but-open reader, the write never fails at all, so the floor is infinite.
 
@@ -530,7 +542,11 @@ class ReconnectStormTests(unittest.TestCase):
 
 **The thread-leak half of this task moved to Task 2**, where it is a failing test against a measured defect rather than a tolerance invented here. The original draft asserted `threads_delta <= 5` after 100 reconnects; the measured delta was **+100**, so that test could never have passed, and no tolerance would have made it honest. What remains here is the part Task 2 does not cover: that a server which has just weathered a storm still answers.
 
-Note the interaction with Task 3's cap: 100 *sequential* cycles never exceed a cap of 32, because each connection closes before the next opens — but only once Task 2 makes the close prompt. Before Task 2, the 33rd connection of this loop receives a 503.
+**Measured at Task 3, and it contradicts what this plan first said here.** The claim was that 100 sequential cycles never exceed a cap of 32, because each connection closes before the next opens. That is false. Five runs at the default cap peaked at 32, 30, 32, 32, 32 concurrent streams and refused between **0 and 13** of the 100 — same code, same machine, timing alone.
+
+The reason is a rate-versus-latency argument the plan did not make: the loop reconnects at ~100/s, while a closed stream's slot takes up to one `poll_interval` (0.5s) to come back, because the handler is parked in `wait_for_change` and frees the slot on its next pass. Steady-state occupancy is therefore roughly `rate x release_latency` ~= 50, which sits above 32 no matter what a household-scale cap is set to.
+
+**So this task's storm test must expect 503s at the default cap and say so**, or lift the cap above the storm and assert every connection was admitted. What it must not do is assert something that refusals can satisfy. Task 3 found exactly that defect in Task 2's storm test: it asserted only that threads return to baseline, and a refused connection never holds a thread, so on four runs in five the assertion was being propped up by the very refusals it does not measure. It now runs at `max_event_streams=128` and asserts all 100 returned 200.
 
 - [ ] **Step 2: Run it and record what happens**
 
@@ -839,6 +855,8 @@ One line each: what broke, how it was found, the commit that fixed it.
 In `docs/superpowers/plans/2026-09-13-stage-three.md`, add what Section 3 leaves unverified. **Create the ledger section if it is not there** — Section 2 Task 5 never ran, so it may never have been written. At minimum, carried from earlier sections:
 
 - A real Mosquitto restart is CI-only; no broker has been contacted from this workstation.
+- The stream write deadline's firing is not covered end to end — only its logging, via an injected clock. See Task 3's outcome above for why the departure fix makes the blocked-`sendall` condition hard to produce.
+- The storm-versus-cap peak is timing-dependent (30-32 across five identical runs) and was measured only on Windows. Linux CI may saturate more readily if connections establish faster.
 - SIGTERM's clean exit is POSIX-only and unverified here.
 - Every measurement is Windows-only; Linux numbers will differ, and the container's numbers are unknown.
 - Discovery broadcast is still unverified (Section 2).
