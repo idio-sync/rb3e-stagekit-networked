@@ -203,12 +203,18 @@ git commit -m "test: add reliability measurement support"
 
 **What was measured, 2026-09-29:**
 
-| Scenario | Result |
-| --- | --- |
-| Idle server, reader stops reading, connection left open | Handler thread alive at 90s. Never dropped. |
-| Loaded server (5 KB every 50ms, 4096-byte client `SO_RCVBUF`) | Dropped at ~30-31s, matching `timeout = 30.0`. |
-| 5 streams closed client-side | Threads back to baseline after **15.02s**. |
-| 100 sequential connect/close cycles | Storm took 0.08s, left **+100 threads**, reaped 16.02s later. |
+| Scenario | Before | After (`edabd9f`) |
+| --- | --- | --- |
+| Idle server, half-closed reader | Alive at 90s. Never dropped. | **0.52s** |
+| Loaded server (5 KB every 50ms, client draining) | ~30-31s, the incidental `timeout = 30.0` | **0.00-0.03s** |
+| 5 streams closed client-side | Baseline after **15.02s** | **0.52s** |
+| 100 sequential connect/close cycles | Storm 0.08s, **+100 threads**, reaped 16.02s later | Storm 1.05s, **peak +23 threads**, reaped 0.50s later |
+| Healthy draining client over 20s | — | Not dropped (correct) |
+
+**The reap is now one `poll_interval` — ~0.5s, never above 0.53s in any run — and no longer depends on load.** Two consequences for later tasks:
+
+- **Scenario 2 stopped being an independent measurement.** Load was what distinguished it, and after the fix the drop is instant either way. Task 10 should record it as the same data point as scenario 1, not as a second one.
+- **The storm's peak concurrent threads fell from +100 to +23, which is uncomfortably close to Task 3's default cap of 32.** The reap now overlaps the storm instead of trailing it, so the peak is timing-dependent and will differ on Linux CI. Task 3 must re-measure it against the real cap rather than assume headroom, and Task 4's storm test must not quietly depend on 100 sequential cycles staying under the cap — if it can hit the cap, it should say what it expects when it does.
 
 The cause is one line of `_stream`'s design. The loop already waits in slices (`state.wait_for_change(since, timeout=min(self.poll_interval, self.heartbeat))`, `api.py:409-410`), but it only ever *writes*. A peer that closed is invisible until the next heartbeat write fails, so the floor on noticing is `HEARTBEAT_SECONDS = 15.0` — and on an idle server with a stalled-but-open reader, the write never fails at all, so the floor is infinite.
 
@@ -285,30 +291,48 @@ If any of them passes, stop and tell me. It means the measurement does not hold 
 
 - [ ] **Step 3: Implement detection**
 
-In `_stream`'s wait loop (`api.py:400-414`), after `state.wait_for_change` returns and before the heartbeat check:
+**Implemented at `edabd9f`. The plan's original instruction here was wrong and is corrected below.**
+
+It said to put the check "after `state.wait_for_change` returns and before the heartbeat check". That branch is unreachable for a stream whose state changes on every pass: `_stream` does `snapshot() -> version > since -> _send_event -> continue`, so a busy stream never reaches the post-wait code. A half-closed peer that is still draining keeps every write succeeding, so the `OSError` path never fires either — the defect would have been moved rather than fixed, and a busy server would hold such a client forever.
+
+The check goes at the **top of the `while` loop**, where it covers both branches at the same latency bound:
 
 ```python
+            while not self._stopping():
                 if self._peer_departed():
                     return None
+                snapshot = state.snapshot()
+                ...
 ```
 
 And the helper. An SSE client sends nothing after its request, so anything readable is EOF or a reset — never real data:
 
+The plan's first draft caught `OSError` wholesale and returned `True`. That is too broad: `BlockingIOError` and `InterruptedError` are `OSError` subclasses meaning "readable, then not" and "a signal arrived", and `TimeoutError` likewise — none of them means the peer left, and treating them as departure drops healthy clients. As built:
+
 ```python
     def _peer_departed(self):
-        """True when the client has gone. An SSE peer never sends, so readable
-        means EOF or reset — and a half-closed socket stays readable, which is
-        exactly the abandoned-tab case the heartbeat could not see."""
-        try:
-            readable, _, _ = select.select([self.connection], [], [], 0)
-            if not readable:
-                return False
-            return self.connection.recv(1, socket.MSG_PEEK) == b""
-        except OSError:
+        connection = self.connection
+        if connection is None:  # pragma: no cover - defensive
             return True
+        try:
+            readable, _, _ = select.select([connection], [], [], 0)
+        except (OSError, ValueError):
+            return True            # closed socket: negative fileno
+        if not readable:
+            return False
+        try:
+            return connection.recv(1, socket.MSG_PEEK) == b""
+        except (BlockingIOError, InterruptedError):
+            return False           # spurious wakeup, not a departure
+        except (TimeoutError, socket.timeout):  # pragma: no cover
+            return False
+        except OSError:
+            return True            # reset peer (how Windows reports this)
 ```
 
-`MSG_PEEK` matters: without it a stray byte is consumed and the connection left in an odd state. It is available on Windows and POSIX alike. Import `select` and `socket` at module scope if they are not already there.
+`MSG_PEEK` matters: without it a stray byte is consumed and the connection left in an odd state. It is available on Windows and POSIX alike. `select` and `socket` are imported at module scope in `api.py`.
+
+A fourth test was added beyond the three above, and it is the one worth keeping in mind: a **healthy client that keeps draining is held for a full 20s window spanning a heartbeat, and is not dropped.** A departure check that fires spuriously is worse than no check at all.
 
 - [ ] **Step 4: Run them to verify they pass**
 
