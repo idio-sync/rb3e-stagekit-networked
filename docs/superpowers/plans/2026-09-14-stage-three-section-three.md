@@ -865,6 +865,7 @@ In `docs/superpowers/plans/2026-09-13-stage-three.md`, add what Section 3 leaves
 - Every measurement is Windows-only; Linux numbers will differ, and the container's numbers are unknown.
 - Discovery broadcast is still unverified (Section 2).
 - No real console, no real Picos, no Unraid.
+- **A Pico that changes address is two devices.** `state.record_device` keys on the sender address alone (`state.py:157`), so a Pico returning on a new DHCP lease becomes a second entry with nothing linking it to the first, and the stale entry shows offline until `device_forget_after`. The dashboard therefore lists one physical Pico twice for up to that long. Found in Task 5 and recorded as product behaviour, not fixed — deciding whether devices should carry an identity independent of their address is a design question for the pilot, not a reliability fix. It is the kind of thing a real party will surface immediately.
 
 - [ ] **Step 4: Commit**
 
