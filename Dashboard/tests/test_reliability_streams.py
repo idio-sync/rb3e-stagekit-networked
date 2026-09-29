@@ -123,6 +123,64 @@ class DepartedClientTests(unittest.TestCase):
         self.assertTrue(reaped, "the storm leaked threads")
 
 
+class ReconnectStormTests(unittest.TestCase):
+    """EventSource reconnects on its own. A sleeping laptop produces bursts."""
+
+    def test_a_storm_at_the_default_cap_is_served_or_refused_and_recovers(self):
+        """The storm runs at the DEFAULT cap, so 503s are expected here.
+
+        Task 2's storm test lifts the cap to 128 and asserts all 100 admitted,
+        which is what makes its thread assertion honest. This is the other
+        side: at the default of 32 the loop reconnects at ~100/s while a
+        closed stream's slot takes up to one poll_interval to return, so
+        occupancy runs near 50 and between 0 and 13 of the 100 were refused in
+        five identical runs (2026-09-29, Windows 10, Python 3.11). The count
+        varies with timing alone, so it is recorded, never asserted.
+
+        What is asserted is what refusals cannot satisfy on their own:
+
+        * The first ``limit`` connections are all 200. Occupancy before the
+          k-th connection is at most k-1, so none of them can legitimately be
+          refused; a server that refuses everything fails here.
+        * Every answer is 200 or 503, and every 503 carries Retry-After.
+        * Once the storm stops, a new stream is admitted within a deadline and
+          an ordinary request answers 200. A gate that leaked slots to the
+          storm would stay full and fail the admission.
+        """
+        application, base = serve_application(self)
+        limit = application.web.stream_gate.limit
+        self.assertEqual(limit, 32, "this test documents the default cap")
+
+        answers = []
+        for _ in range(100):
+            client = open_stream(base, expect_status=200)
+            answers.append((client.status, client.headers.get("retry-after")))
+            client.close()
+
+        statuses = [status for status, _ in answers]
+        self.assertEqual(statuses[:limit], [200] * limit,
+                         "connections under the cap were refused")
+        self.assertEqual(set(statuses) - {200, 503}, set(),
+                         "an answer that is neither served nor refused")
+        for status, retry_after in answers:
+            if status == 503:
+                self.assertIsNotNone(retry_after,
+                                     "a refusal without Retry-After")
+
+        deadline = time.monotonic() + 5.0
+        while True:
+            after = open_stream(base, expect_status=200)
+            self.addCleanup(after.close)
+            if after.status == 200 or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        self.assertEqual(after.status, 200,
+                         "the storm left every stream slot held "
+                         "(%d of 100 were refused)" % statuses.count(503))
+        status, _ = get(base + "/api/state")
+        self.assertEqual(status, 200)
+
+
 class AbandonedStreamTests(unittest.TestCase):
     """A tab left open on a sleeping phone must not cost the server forever."""
 
