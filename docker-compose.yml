@@ -24,6 +24,9 @@ services:
     container_name: rb3e-dashboard
     network_mode: host
     restart: unless-stopped
+    # Alternative: store credentials in a file instead of this file.
+    # See the section on `.env` files in docs/deployment.md for the tradeoff.
+    # env_file: .env.secrets
     environment:
       # Where sessions and play history are kept, inside the container.
       RB3E_DATA_DIR: /data

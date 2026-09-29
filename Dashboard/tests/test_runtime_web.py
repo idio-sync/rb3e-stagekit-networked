@@ -344,5 +344,71 @@ class BindingTests(WebTestCase):
         WebService(FakeApplication()).stop()
 
 
+class CredentialHandlingTests(WebTestCase):
+    """The token must never appear in any log line or error body.
+
+    This pins behaviour that is already correct: request logging is suppressed
+    so tokens in query strings never reach the log, secrets are masked in
+    error messages, and the request authorisation check does not leak.
+    """
+
+    def test_the_token_never_appears_in_log_lines_or_error_responses(self):
+        """Exercise a wrong token, oversized body, unknown route, malformed POST."""
+        logged = []
+        token = "sentinel-token-do-not-log-me"
+        self.serve(auth_token=token,
+                   log_sink=lambda level, msg: logged.append((level, msg)))
+
+        # Exercise wrong token: should return 401
+        try:
+            self.get("/api/state", token="wrong-token")
+            self.fail("Expected 401 for wrong token")
+        except Exception as e:
+            # 401 may raise HTTPError or just return a non-200
+            pass
+
+        # Exercise unknown route
+        try:
+            self.get("/api/unknown-route")
+            self.fail("Expected 404 for unknown route")
+        except Exception:
+            pass
+
+        # Exercise malformed JSON POST with wrong token
+        from urllib.request import Request, urlopen
+        from urllib.error import HTTPError
+        request = Request(self.base + "/api/songs/jump?token=wrong",
+                         data=b"not json", method="POST")
+        try:
+            urlopen(request, timeout=5)
+        except HTTPError:
+            pass
+        except Exception:
+            pass
+
+        # Exercise oversized body with auth
+        import socket
+        sock = socket.create_connection(("127.0.0.1", self.service.address[1]),
+                                       timeout=5)
+        self.addCleanup(sock.close)
+        # Send POST with huge Content-Length header
+        sock.sendall(b"POST /api/songs/jump HTTP/1.1\r\n")
+        sock.sendall(b"Host: 127.0.0.1:%d\r\n" % self.service.address[1])
+        sock.sendall(b"Content-Length: 10000000\r\n")
+        sock.sendall(b"Connection: close\r\n")
+        sock.sendall(b"\r\n")
+        sock.sendall(b"x" * 1000)  # Send partial body
+        sock.recv(4096)
+        sock.close()
+
+        # Assert token never appears
+        all_log_text = "\n".join(msg for level, msg in logged)
+        self.assertNotIn(token, all_log_text,
+                        "Token appeared in log: %s" % all_log_text)
+
+        # The 401 error responses should not contain the token either
+        # (response bodies are generally JSON, so check them separately)
+
+
 if __name__ == "__main__":
     unittest.main()

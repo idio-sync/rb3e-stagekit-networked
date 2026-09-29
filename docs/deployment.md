@@ -97,6 +97,22 @@ Environment variables win. An unknown key is an error rather than something
 quietly ignored, because a silently dropped typo behaves exactly like a setting
 that had no effect.
 
+### Environment variables: direct versus `.env` files
+
+The compose file shows the `environment` block with `${RB3E_AUTH_TOKEN:?...}`
+interpolation, which requires the token to be set before `docker compose` runs.
+This is the safer default: a typo in the variable name fails the command, and
+the token is not written to the compose file itself.
+
+An alternative is to use `env_file:` to load variables from a file instead. The
+compose file includes a commented example. This is useful when you have many
+variables, or when you want to rotate the token without editing the compose
+file. The cost is that the file itself must be protected: if it is readable by
+an unprivileged account on the same host, so is the token. On a single-user
+workstation that is acceptable; on shared infrastructure it is not. Choose based
+on your threat model: if the compose file and the env file are both world-readable,
+the `env_file` approach gains nothing.
+
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `RB3E_AUTH_TOKEN` | empty | Token for the API and dashboard. **Required** for any bind other than loopback. |
@@ -271,6 +287,41 @@ audit trail. Anyone with the token can drive your lights.
 Do not expose the port to the internet. If you want it reachable from outside
 your network, put it behind something that does authentication properly, and
 keep in mind that `/api/health` answers without a token so health checks work.
+
+### Query parameter authentication and its cost
+
+The API accepts the token as a query parameter in addition to the `Authorization`
+header. This is necessary because the browser `EventSource` API cannot set
+request headers, and the event stream is the main point of the API. However,
+this convenience has a real cost: the token then appears in browser history on
+every client, in the referrer header if the browser follows a link, and in the
+access logs of any proxy or firewall in front of the server. **This is another
+reason not to expose this port to the internet.** The token is kept out of this
+server's own logs by design — request logging is suppressed entirely — but logs
+and history are outside the server's control. For a home LAN behind a trusted
+router this is acceptable; for anything else, use the `Authorization` header
+instead (as the desktop dashboard does) and let the event stream retry until the
+client can use a header, or use a reverse proxy that translates headers to
+cookies or other session tokens.
+
+### Token rotation
+
+The token is read once at startup and stored on the web service handler. Every
+ordinary HTTP request (GET, POST to non-streaming endpoints) is authorised by
+comparing its token against this startup value, so a changed token is **not**
+recognised by any running request. Event streams are authorised once when they
+open and are never re-authorised for the rest of their lifetime.
+
+**Therefore, changing the token requires a full restart of the server.** The
+restart terminates every open connection, including every event stream, so
+revocation is complete — an operator rotating a leaked token can rely on it.
+
+Note: there is no SIGHUP handler and no config-reload path in the server. If a
+live-reload facility were ever added, open event streams would outlive the
+rotation unless they were explicitly closed, so any such facility would need to
+close them as part of the reload.
+
+### Running without a token
 
 The server will run without a token if you insist: set `RB3E_ALLOW_OPEN_API=true`
 and it will serve an open API on whatever address you bind. The compose file in
