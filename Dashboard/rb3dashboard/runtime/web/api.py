@@ -33,6 +33,8 @@ try:
     from http.server import BaseHTTPRequestHandler
 except ImportError:  # pragma: no cover - Python 2 is unsupported
     raise
+import select
+import socket
 import time
 try:
     from urllib.parse import parse_qs, urlparse
@@ -398,6 +400,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         last_beat = time.monotonic()
         try:
             while not self._stopping():
+                # Checked at the top, not only after the wait: a stream whose
+                # state changes on every pass `continue`s, and a check placed
+                # after the wait would never run for it.
+                if self._peer_departed():
+                    return None
                 snapshot = state.snapshot()
                 if snapshot["version"] > since:
                     since = snapshot["version"]
@@ -417,6 +424,41 @@ class ApiHandler(BaseHTTPRequestHandler):
             # The client went away, which is ordinary for a browser tab.
             return None
         return None
+
+    def _peer_departed(self):
+        """True when the client has gone.
+
+        An SSE peer never sends after its request, so anything readable here is
+        end of stream or a reset -- never data this handler owes an answer to.
+        A half-closed socket stays readable forever, which is exactly the
+        abandoned-tab case a write-only loop could not see: the heartbeat still
+        succeeds because our own direction of the connection is fine.
+
+        ``MSG_PEEK`` leaves whatever was read in the kernel buffer, so a peer
+        that did send something unexpected is not silently robbed of a byte --
+        the connection is closed, but never half-consumed.
+        """
+        connection = self.connection
+        if connection is None:  # pragma: no cover - defensive
+            return True
+        try:
+            readable, _, _ = select.select([connection], [], [], 0)
+        except (OSError, ValueError):
+            # A closed socket has a negative fileno and select rejects it.
+            return True
+        if not readable:
+            return False
+        try:
+            return connection.recv(1, socket.MSG_PEEK) == b""
+        except (BlockingIOError, InterruptedError):
+            # Readable then not: a spurious wakeup, not a departure.
+            return False
+        except (TimeoutError, socket.timeout):  # pragma: no cover - unlikely
+            return False
+        except OSError:
+            # A reset peer. ConnectionResetError is how Windows reports a
+            # client that closed with data still queued to it.
+            return True
 
     def _stopping(self):
         return self.stopping is not None and self.stopping.is_set()
