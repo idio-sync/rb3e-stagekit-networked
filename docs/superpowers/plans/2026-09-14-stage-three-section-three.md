@@ -861,7 +861,10 @@ In `docs/superpowers/plans/2026-09-13-stage-three.md`, add what Section 3 leaves
 - A real Mosquitto restart is CI-only; no broker has been contacted from this workstation.
 - The stream write deadline's firing is not covered end to end — only its logging, via an injected clock. See Task 3's outcome above for why the departure fix makes the blocked-`sendall` condition hard to produce.
 - The storm-versus-cap peak is timing-dependent (30-32 across five identical runs) and was measured only on Windows. Linux CI may saturate more readily if connections establish faster.
-- SIGTERM's clean exit is POSIX-only and unverified here.
+- **Both graceful signals are POSIX-only.** The plan said SIGINT was verifiable on the workstation; it is not, for the same `CREATE_NEW_PROCESS_GROUP` reason as SIGTERM. The unclean kill is the only one of the three that runs here.
+- **Windows has no clean stop at all.** Measured in Task 6: `LocalServer.stop()` exits `3221225786` (`0xC000013A`, STATUS_CONTROL_C_EXIT) and leaves `ended_at` NULL — the shutdown path does not run. `test_servercheck_controller.py:102` has therefore been asserting a restart across an *ungraceful* stop on this platform all along.
+- **A killed run leaves an open-ended session row forever.** `ended_at` stays NULL and nothing closes it on the next start, so any history view summing session durations sees one un-ended session per unclean stop. Recorded as product behaviour, not fixed in Task 6.
+- **`/api/history` answers 200 with `enabled: False` when the database failed to open.** `_open_history` (`server.py:543-557`) catches `StoreError`, logs, sets `self.history = None` and starts anyway; `_history` (`api.py:313-322`) then returns 200. So health-plus-200 cannot detect a server that silently lost its history — `enabled` is the only field that discriminates. Any future test asserting recovery must assert on `enabled`, not on the status code. This is deliberate design (history is not why the process exists), but it is exactly the silent-failure shape this plan is built to catch, and it nearly produced a vacuous test in Task 6.
 - Every measurement is Windows-only; Linux numbers will differ, and the container's numbers are unknown.
 - Discovery broadcast is still unverified (Section 2).
 - No real console, no real Picos, no Unraid.
