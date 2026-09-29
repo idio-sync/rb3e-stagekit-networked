@@ -693,12 +693,32 @@ Home Assistant goes down. The broker restarts. The webhook URL is wrong. None of
 
 **Files:**
 - Create: `Dashboard/tests/test_reliability_integrations.py`
+- Modify: `Dashboard/rb3dashboard/runtime/mqtt.py` (startup retry — see the decision below)
+- Modify: `Dashboard/tests/test_runtime_mqtt.py`
+- Modify: `.github/workflows/server-container.yml`
+- Modify: `docs/deployment.md`
 
 **Interfaces:**
 - Consumes: Task 1's support.
-- Produces: nothing new.
+- Produces: whatever settings the startup retry needs. Keep them to a minimum and justify each.
 
-**Evidence environment:** the development workstation, against a fake broker client and a webhook endpoint that refuses. **A real Mosquitto restart is CI-only** — `server-container.yml` already covers it. Do not attempt to install a broker here.
+**Evidence environment:** the development workstation, against a fake broker client and a webhook endpoint that refuses. **Do not install a broker here.** The real-broker work is a CI change, specified below.
+
+### Two decisions taken by the repository owner, 2026-09-29
+
+The plan previously asserted that `server-container.yml` "already covers" the broker requirements. **It does not.** Its broker step (`server-container.yml:186-193`) restarts the broker and asserts only that the container is still running — no republish check, no last will, no start-with-broker-down case. The last will is verified against a fake only (`test_runtime_mqtt.py:120`).
+
+Reviewing that turned up a genuine spec contradiction, and both halves are now settled.
+
+**Decision 1 — a broker that is down at startup must be retried.** `MqttPublisher.start` calls `client.connect()` once (`mqtt.py:111-121`); if it raises, MQTT is disabled for the life of the process, and `docs/deployment.md:200-202` documents that as though it were deliberate. The spec says the server "starts with the broker down, recovers when it returns", and **the spec wins**: on a NAS, Mosquitto and this container start in an undefined order, so losing that race silently costs Home Assistant until somebody notices and restarts the server. That is exactly the quiet failure this section exists to remove.
+
+Add a background retry around the *initial* connect, with backoff, interruptible on shutdown — the same interruptible-backoff shape `outbound.py` already uses; follow it rather than inventing a second one. **Failing test first:** start with no broker, bring one up (a fake that refuses until told otherwise), assert the publisher connects and discovery is published without a restart.
+
+Note that *post-connect* loss is a different case and is probably already handled: `client.loop_start()` (`mqtt.py:121`) runs paho's network loop, which reconnects on its own after an unexpected disconnect. Verify that before writing anything for it — if it holds, it is a regression pin, not a fix, and say so. Update `deployment.md:200-202`, which currently describes the old behaviour as the contract.
+
+**Decision 2 — CI must prove recovery against a real broker.** After the existing `docker restart broker` step, **re-run the `mosquitto_sub` discovery assertion that already appears earlier in the job.** Asserting the container is still running proves only that the server did not crash; it says nothing about whether publishing resumed. This is the first real-broker proof of recovery in the repository.
+
+The last will against a real broker stays unproven for now, by decision — it goes to Task 10's ledger, not into this workflow.
 
 - [ ] **Step 1: Write the tests**
 
@@ -708,7 +728,8 @@ Create `Dashboard/tests/test_reliability_integrations.py`. Cover:
 - Repeated webhook failures increment the outbound worker's counters and do not grow its queue without bound.
 - Retries respect `webhook_retries` and the backoff is interruptible — a stop during backoff must not hang. `outbound.py` documents this; pin it.
 - With `mqtt_host` set and `paho-mqtt` absent, the server logs plainly and carries on rather than refusing to start. `docs/deployment.md` promises exactly this; assert it.
-- With a fake client that raises on connect, MQTT is disabled and the server still runs.
+- With a fake client that raises on connect, **the server still runs and keeps retrying** (Decision 1). The old expectation — MQTT disabled for the process lifetime — is the behaviour being changed, so a test asserting it would pin the defect. Write the failing test first.
+- A stop during a connect retry does not hang. The backoff must be interruptible, like `outbound.py`'s.
 - `/api/integrations` reports the integration as configured-but-not-running, so an operator can tell "off" from "broken".
 
 That last distinction is the one that matters most: a webhook that is not configured and a webhook that is failing every send must not look the same.
@@ -717,16 +738,28 @@ That last distinction is the one that matters most: a webhook that is not config
 
 Run: `cd Dashboard && python -m unittest discover -s tests -p "test_reliability_integrations.py" -v`
 
-- [ ] **Step 3: Run the full suite**
+- [ ] **Step 3: Implement the startup retry**
+
+Per Decision 1. Failing test first; the backoff interruptible on shutdown.
+
+- [ ] **Step 4: Update the CI broker step**
+
+Per Decision 2. Re-run the discovery assertion after `docker restart broker`. **You cannot run this workflow locally** — no Docker, no broker. Read the job carefully, change it minimally, and say plainly in your report that it is unverified here and will first execute on CI.
+
+- [ ] **Step 5: Update `docs/deployment.md`**
+
+Lines 200-202 describe the pre-Decision-1 behaviour as the contract. Correct them.
+
+- [ ] **Step 6: Run the full suite**
 
 Run: `cd Dashboard && python -m unittest discover -s tests`
-Expected: OK. Report count and runtime.
+Expected: OK. Report count, runtime, and this task's second-cost. A retry loop that sleeps in a test is a budget risk — drive it with an injected clock, as Task 5 did.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add Dashboard/tests/test_reliability_integrations.py
-git commit -m "test: survive unavailable integrations"
+git add Dashboard/tests/test_reliability_integrations.py Dashboard/rb3dashboard/runtime/mqtt.py Dashboard/tests/test_runtime_mqtt.py .github/workflows/server-container.yml docs/deployment.md
+git commit -m "feat: keep trying a broker that was not there at startup"
 ```
 
 ---
@@ -858,7 +891,8 @@ One line each: what broke, how it was found, the commit that fixed it.
 
 In `docs/superpowers/plans/2026-09-13-stage-three.md`, add what Section 3 leaves unverified. **Create the ledger section if it is not there** — Section 2 Task 5 never ran, so it may never have been written. At minimum, carried from earlier sections:
 
-- A real Mosquitto restart is CI-only; no broker has been contacted from this workstation.
+- No broker has been contacted from this workstation; all MQTT evidence here is against a fake.
+- **The last will is unproven against a real broker** — only against a fake (`test_runtime_mqtt.py:120`). Left that way by decision on 2026-09-29, in favour of proving recovery first. Proving it needs a subscriber on the availability topic, a `docker kill`, and an assertion that OFFLINE arrived from the broker rather than from the server.
 - The stream write deadline's firing is not covered end to end — only its logging, via an injected clock. See Task 3's outcome above for why the departure fix makes the blocked-`sendall` condition hard to produce.
 - The storm-versus-cap peak is timing-dependent (30-32 across five identical runs) and was measured only on Windows. Linux CI may saturate more readily if connections establish faster.
 - **Both graceful signals are POSIX-only.** The plan said SIGINT was verifiable on the workstation; it is not, for the same `CREATE_NEW_PROCESS_GROUP` reason as SIGTERM. The unclean kill is the only one of the three that runs here.
