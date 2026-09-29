@@ -253,6 +253,13 @@ class ServerApplication:
         self.songs = song_browser_factory(
             gui_callback=self._post(self._record_log))
 
+        # Kept separately from ``self.history``, which is cleared when the
+        # database cannot be opened -- the same reason ``_mqtt_configured``
+        # exists. Without it, history that failed reports like history that
+        # was switched off.
+        self._history_configured = bool(history_enabled and data_dir)
+        self._history_write_failures = 0
+        self._history_failures_lock = threading.Lock()
         self.history = None
         if history_enabled and data_dir:
             self.history = SessionStore(
@@ -379,6 +386,14 @@ class ServerApplication:
                           # actually arriving in Home Assistant.
                           "connected": bool(self.mqtt is not None
                                             and self.mqtt.is_connected())}
+        with self._history_failures_lock:
+            failures = self._history_write_failures
+        report["history"] = {"configured": self._history_configured,
+                             "open": self.history is not None,
+                             # Writes that failed after the database opened.
+                             # Each is also logged, but a log scrolls away and
+                             # a count does not.
+                             "write_failures": failures}
         report["relay"] = {"configured": self.relay is not None}
         if self.relay is not None:
             report["relay"].update(self.relay.counters())
@@ -622,6 +637,8 @@ class ServerApplication:
         try:
             action(store)
         except Exception as error:
+            with self._history_failures_lock:
+                self._history_write_failures += 1
             self._record_log("Could not record history: %s" % error,
                              level="warning")
 

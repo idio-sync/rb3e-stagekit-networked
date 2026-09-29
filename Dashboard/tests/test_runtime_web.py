@@ -66,6 +66,38 @@ class HealthTests(WebTestCase):
         self.assertTrue(self.get("/api/health")[1]["owns_discovery"])
 
 
+    def test_the_health_payload_is_exactly_these_four_fields(self):
+        """Pinned so a refactor cannot quietly widen what strangers can read.
+
+        /api/health answers without a token. Anything diagnostic -- integration
+        state, addresses, queue depths, failure counts -- belongs on
+        /api/integrations, behind the token. A field added here must be added
+        to this list on purpose, in the same change that argues for it.
+        """
+        self.serve(auth_token="secret")
+
+        document = self.get("/api/health")[1]
+
+        self.assertEqual(sorted(document),
+                         ["owns_discovery", "running", "status", "version"])
+
+    def test_health_does_not_carry_what_the_integrations_report_does(self):
+        """The report is served behind the token and never through health."""
+        application = FakeApplication()
+        application.integration_report = lambda: {
+            "mqtt": {"configured": True, "connected": False},
+            "history": {"configured": True, "open": False}}
+        self.serve(application=application, auth_token="secret")
+
+        health = json.dumps(self.get("/api/health")[1])
+        self.assertNotIn("mqtt", health)
+        self.assertNotIn("history", health)
+        with self.assertRaises(HTTPError) as caught:
+            self.get("/api/integrations")
+        self.assertEqual(caught.exception.code, 401)
+        self.assertIn("mqtt", self.get("/api/integrations", token="secret")[1])
+
+
 class AuthTests(WebTestCase):
     def test_state_requires_the_token_when_one_is_configured(self):
         self.serve(auth_token="secret")

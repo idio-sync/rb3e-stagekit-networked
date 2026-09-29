@@ -74,6 +74,20 @@ Then open `http://your-server:8321` and paste the token when the page asks.
   It follows `RB3E_CONFIG` when you use a configuration file, and reports the
   container unhealthy — rather than probing a default port that might belong to
   something else — if that file cannot be read.
+- **What health fails on, and what it deliberately does not.** Docker restarts
+  an unhealthy container, and a restart drops the live session state and
+  interrupts the lights, so health fails only when the server is not serving or
+  not running: the case a restart can actually fix. A dead Home Assistant, a
+  broker that is down, a webhook failing every send, a full event-stream cap, a
+  saturated event queue and a history database that will not open all leave the
+  lights working, and a restart repairs none of them. They are *degraded*, not
+  *dead*, so they are visible but never gate health. Look for them at
+  `GET /api/integrations` (behind the token): `webhook`, `mqtt`
+  (`configured` / `running` / `connected`), `history` (`configured` / `open` /
+  `write_failures`), `relay` and `queue`. `/api/health` answers without a token
+  and carries only `status`, `running`, `owns_discovery` and `version`, so
+  nothing diagnostic is put there. There is no separate readiness endpoint:
+  nothing here does rolling deployments, so nothing would call one.
 
 ## Settings
 

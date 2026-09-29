@@ -28,6 +28,8 @@ What is *not* here, with where it lives instead:
 """
 
 import builtins
+import os
+import tempfile
 import json
 import socket
 import sys
@@ -296,3 +298,66 @@ class MqttUnavailableTests(IntegrationReport, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HistoryUnavailableTests(IntegrationReport, unittest.TestCase):
+    """Task 8: history that is off, history that failed, history that is failing.
+
+    ``_open_history`` disables history and starts anyway when the database will
+    not open, and ``_remember`` swallows a write that fails afterwards. Both
+    leave ``/api/health`` at 200 and, before this, left ``/api/integrations``
+    silent: a server whose history never opened reported exactly what one with
+    history switched off reported. Same defect as the MQTT case, so the same
+    three-way answer is required here.
+
+    Diagnostics live on ``/api/integrations`` (behind the token) and never on
+    ``/api/health``, which answers without one.
+    """
+
+    def test_history_switched_off_reads_as_not_configured(self):
+        """The control: 'configured' must discriminate off from broken."""
+        _application, base = serve_application(
+            self, auth_token=TOKEN, history_enabled=False)
+
+        history = self.report(base)["history"]
+        self.assertFalse(history["configured"])
+        self.assertFalse(history["open"])
+
+    def test_history_that_could_not_open_reads_as_configured_but_not_open(self):
+        blocker = tempfile.NamedTemporaryFile(delete=False)
+        blocker.close()
+        self.addCleanup(os.unlink, blocker.name)
+        # A directory beneath a regular file cannot be created, on any platform.
+        application, base = serve_application(
+            self, auth_token=TOKEN, data_dir=os.path.join(blocker.name, "data"))
+
+        history = self.report(base)["history"]
+        self.assertTrue(history["configured"])
+        self.assertFalse(history["open"])
+        self.assertTrue(application.is_running())
+        # The trap: the server still says it is healthy, and /api/history still
+        # answers 200. Neither is the evidence; the report above is.
+        self.assertEqual(self.health(base)["running"], True)
+        status, body = get(base + "/api/history", token=TOKEN)
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(body.decode("utf-8"))["enabled"])
+
+    def test_history_that_fails_after_starting_counts_its_failed_writes(self):
+        application, base = serve_application(self, auth_token=TOKEN)
+        before = self.report(base)["history"]
+        self.assertTrue(before["open"])
+        self.assertEqual(before["write_failures"], 0)
+
+        # A database that has gone read-only underneath a running server.
+        application.history._connection.execute("PRAGMA query_only = 1")
+        application._on_song_started("Artist", "Song", "song")
+        application._on_song_started("Artist", "Song", "song")
+
+        after = self.report(base)["history"]
+        self.assertTrue(after["open"])
+        self.assertEqual(after["write_failures"], 2)
+        self.assertTrue(application.is_running())
+        # Reading still works, so /api/history alone would call this healthy.
+        status, body = get(base + "/api/history", token=TOKEN)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body.decode("utf-8"))["enabled"])
