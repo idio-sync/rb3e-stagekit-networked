@@ -37,6 +37,13 @@ class DefaultTests(ConfigTestCase):
         """TCP 21070 belongs to RB3Enhanced's own song list and web UI."""
         self.assertNotEqual(ServerConfig.load(environ={}).web_port, 21070)
 
+    def test_the_stream_limits_have_deliberate_defaults(self):
+        """Both were accidents before: no cap at all, and a borrowed timeout."""
+        config = self.load()
+
+        self.assertEqual(config.max_event_streams, 32)
+        self.assertEqual(config.stream_write_timeout, 30.0)
+
     def test_discovery_is_off_by_default(self):
         """Only one process may own Pico discovery."""
         self.assertFalse(self.load().stagekit_enabled)
@@ -178,6 +185,20 @@ class ValidationTests(ConfigTestCase):
         with self.assertRaises(ConfigError):
             self.load(RB3E_QUEUE_CAPACITY="0")
 
+    def test_the_stream_cap_must_admit_at_least_one_stream(self):
+        """A cap of zero would serve a dashboard that can never connect."""
+        for value in ("0", "-1"):
+            with self.assertRaises(ConfigError) as caught:
+                self.load(RB3E_MAX_EVENT_STREAMS=value)
+            self.assertIn("max_event_streams", str(caught.exception))
+
+    def test_the_stream_write_timeout_must_be_positive(self):
+        """Zero would mean a non-blocking socket, not 'no deadline'."""
+        for value in ("0", "-2.5"):
+            with self.assertRaises(ConfigError) as caught:
+                self.load(RB3E_STREAM_WRITE_TIMEOUT=value)
+            self.assertIn("stream_write_timeout", str(caught.exception))
+
     def test_bind_addresses_cannot_be_blank(self):
         with self.assertRaises(ConfigError):
             self.load(RB3E_LISTEN_ADDRESS="   ")
@@ -229,12 +250,16 @@ class ApplicationKwargsTests(ConfigTestCase):
         config = self.load(RB3E_STAGEKIT_ENABLED="true",
                            RB3E_DISCOVERY_TARGETS="192.0.2.255",
                            RB3E_QUEUE_CAPACITY="7",
+                           RB3E_MAX_EVENT_STREAMS="4",
+                           RB3E_STREAM_WRITE_TIMEOUT="2.5",
                            RB3E_HA_WEBHOOK_URL="http://ha.example/hook")
 
         kwargs = config.application_kwargs()
 
         self.assertTrue(kwargs["stagekit_enabled"])
         self.assertEqual(kwargs["queue_capacity"], 7)
+        self.assertEqual(kwargs["max_event_streams"], 4)
+        self.assertEqual(kwargs["stream_write_timeout"], 2.5)
         self.assertEqual(kwargs["webhook_url"], "http://ha.example/hook")
 
 

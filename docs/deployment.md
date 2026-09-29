@@ -101,6 +101,23 @@ that had no effect.
 | `RB3E_RELAY_TARGETS` | empty | Only for consoles configured with `BroadcastTarget`. See below. |
 | `RB3E_ALLOW_OPEN_API` | `false` | Permit a tokenless API on a network bind. Off, and refusing to start, by default. |
 | `RB3E_ALLOW_INFERRED_DISCOVERY` | `false` | Guess a /24 from the default route instead of naming targets. |
+| `RB3E_MAX_EVENT_STREAMS` | `32` | How many dashboard event streams may be open at once. Bounds the thread-per-connection server against tabs that pile up: uncapped, 200 abandoned streams cost 200 threads. Beyond the cap the server answers `503` with a `Retry-After` instead of accepting a connection it cannot serve. |
+| `RB3E_STREAM_WRITE_TIMEOUT` | `30.0` | Seconds a write to an event stream may block before the stream is dropped and a warning logged. Protects against a client that reads too slowly to keep up — a phone on a weak link — rather than one that has gone, which is noticed within half a second regardless. |
+
+**The stream cap is global, not per client.** One client can therefore hold
+every slot and lock the others out, including the browser you are trying to
+diagnose from. That is a deliberate trade rather than an oversight: this API
+sits behind a token on a home LAN, where the only clients are your own tabs, and
+per-client accounting would mean trusting a client-supplied identity or keying
+off an address that NAT and a phone roaming between wifi and cellular both
+change. If you expose this server to something less trusted, the cap is not the
+control you want — a reverse proxy with per-client limits in front of it is.
+
+A saturated cap does not affect anything else: `/api/state`, `/api/health` and
+the dashboard page itself keep answering, because only `/api/events` is counted.
+A refused stream carries `Retry-After: 5`, and a slot comes back roughly half a
+second after its client goes away, so a browser `EventSource` that is turned
+away reconnects successfully on its own.
 
 `RB3E_DISCOVERY_TARGETS` is required once `RB3E_STAGEKIT_ENABLED` is on. The
 server refuses to start without it rather than guessing, because the guess is a

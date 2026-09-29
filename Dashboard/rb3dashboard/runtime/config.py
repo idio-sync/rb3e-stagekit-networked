@@ -138,6 +138,13 @@ _FIELDS = {
     "console_timeout": (_as_float, 30.0),
     "maintenance_interval": (_as_float, 1.0),
     "queue_capacity": (_as_int, 1000),
+    # A browser tab that stops reading holds a handler thread until its write
+    # deadline. Thirty-two concurrent streams is far more than a household
+    # needs and far less than a thread-per-connection server can be hurt by.
+    "max_event_streams": (_as_int, 32),
+    # Chosen deliberately. Until now this was the keep-alive read timeout
+    # doing double duty, which worked but was nobody's decision.
+    "stream_write_timeout": (_as_float, 30.0),
     "command_rate": (_as_float, 10.0),
     "command_burst": (_as_float, 20.0),
     "log_capacity": (_as_int, 200),
@@ -258,7 +265,8 @@ class ServerConfig:
                     "%s must be between 1 and 65535, not %d" % (name, values[name]))
         for name in ("device_offline_after", "device_forget_after",
                      "console_timeout", "maintenance_interval",
-                     "discovery_interval", "command_rate", "command_burst"):
+                     "discovery_interval", "command_rate", "command_burst",
+                     "stream_write_timeout"):
             if values[name] <= 0:
                 raise ConfigError("%s must be greater than zero, not %s"
                                   % (name, values[name]))
@@ -268,7 +276,8 @@ class ServerConfig:
         if values["webhook_timeout"] <= 0:
             raise ConfigError("webhook_timeout must be greater than zero, not %s"
                               % values["webhook_timeout"])
-        for name in ("queue_capacity", "log_capacity", "webhook_capacity"):
+        for name in ("queue_capacity", "log_capacity", "webhook_capacity",
+                     "max_event_streams"):
             if values[name] < 1:
                 raise ConfigError("%s must be at least 1, not %d"
                                   % (name, values[name]))
@@ -322,6 +331,8 @@ class ServerConfig:
             "console_timeout": self.console_timeout,
             "maintenance_interval": self.maintenance_interval,
             "queue_capacity": self.queue_capacity,
+            "max_event_streams": self.max_event_streams,
+            "stream_write_timeout": self.stream_write_timeout,
             "discovery_targets": self.discovery_targets,
             "discovery_enabled": self.discovery_enabled,
             "discovery_interval": self.discovery_interval,

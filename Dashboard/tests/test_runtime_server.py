@@ -509,8 +509,9 @@ class WebWiringTests(ServerTestCase):
         created = []
 
         def factory(application, host=None, port=None, auth_token=None,
-                    log_sink=None):
+                    log_sink=None, **settings):
             service = FakeWebService(application, host, port, auth_token)
+            service.settings = settings
             created.append(service)
             return service
 
@@ -528,6 +529,15 @@ class WebWiringTests(ServerTestCase):
         self.assertEqual(created[0].auth_token, "secret")
         self.assertTrue(created[0].started)
 
+    def test_the_stream_limits_reach_the_web_service(self):
+        """The cap is useless if the setting stops at the application."""
+        application, created = self.make_web(max_event_streams=4,
+                                             stream_write_timeout=7.5)
+        application.start()
+
+        self.assertEqual(created[0].settings["max_event_streams"], 4)
+        self.assertEqual(created[0].settings["stream_write_timeout"], 7.5)
+
     def test_the_web_service_stops_before_the_services_behind_it(self):
         """No request may arrive while the listener is being torn down."""
         application, created = self.make_web()
@@ -543,7 +553,7 @@ class WebWiringTests(ServerTestCase):
         created_holder = created
 
         def failing_factory(application_, host=None, port=None,
-                            auth_token=None, log_sink=None):
+                            auth_token=None, log_sink=None, **settings):
             service = FakeWebService(application_, host, port, auth_token)
             service.start_error = OSError("web port in use")
             created_holder.append(service)

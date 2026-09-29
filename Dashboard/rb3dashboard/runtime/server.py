@@ -176,6 +176,8 @@ class ServerApplication:
                  console_timeout=30.0,
                  maintenance_interval=1.0,
                  queue_capacity=1000,
+                 max_event_streams=32,
+                 stream_write_timeout=30.0,
                  log_sink=None,
                  clock=time.time):
         if device_forget_after < device_offline_after:
@@ -186,6 +188,8 @@ class ServerApplication:
         self._device_offline_after = device_offline_after
         self._device_forget_after = device_forget_after
         self._console_timeout = console_timeout
+        self._max_event_streams = max_event_streams
+        self._stream_write_timeout = stream_write_timeout
         self._stagekit_enabled = stagekit_enabled
         self._owns_discovery = bool(stagekit_enabled and discovery_enabled)
         self._configured_console = console_address
@@ -272,7 +276,9 @@ class ServerApplication:
         if web_enabled:
             factory = WebService if web_service_factory is None else web_service_factory
             self.web = factory(self, host=web_host, port=web_port,
-                               auth_token=auth_token, log_sink=log_sink)
+                               auth_token=auth_token, log_sink=log_sink,
+                               max_event_streams=max_event_streams,
+                               stream_write_timeout=stream_write_timeout)
 
         self.mqtt = None
         if mqtt_host:

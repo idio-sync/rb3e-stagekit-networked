@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from pathlib import Path
 import unittest
 
@@ -11,7 +12,8 @@ import unittest
 # `python tests/test_reliability_streams.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from reliability_support import (Sampler, open_stream, peak_rss_bytes,
+from rb3dashboard.runtime.web.service import StreamGate
+from reliability_support import (Sampler, get, open_stream, peak_rss_bytes,
                                  serve_application, thread_count)
 
 
@@ -94,14 +96,192 @@ class DepartedClientTests(unittest.TestCase):
                         "an idle server held a departed reader indefinitely")
 
     def test_a_reconnect_storm_leaves_no_threads_behind(self):
-        """100 cycles measured +100 threads before this task."""
-        application, base = serve_application(self)
+        """100 cycles measured +100 threads before this task.
+
+        The cap is lifted above the storm on purpose. Measured 2026-09-29 with
+        the default cap of 32, this loop refuses 0-13 of its 100 connections:
+        it reconnects at about 100/s while a closed stream's slot takes up to
+        one poll_interval to come back, so steady-state occupancy runs above
+        32. A refused connection never holds a thread, so with the default cap
+        this test could pass on refusals rather than on reaping -- the thread
+        assertion would be propped up by the very thing it does not measure.
+        Admitting all 100 and asserting it keeps the claim honest.
+        """
+        application, base = serve_application(self, max_event_streams=128)
         with Sampler() as sampler:
+            statuses = []
             for _ in range(100):
-                open_stream(base).close()
+                client = open_stream(base, expect_status=200)
+                statuses.append(client.status)
+                client.close()
             reaped = sampler.wait_for_baseline(timeout=10.0)
 
+        self.assertEqual(statuses.count(200), 100,
+                         "only %d of 100 connections were served, so a clean "
+                         "thread count proves nothing about reaping"
+                         % statuses.count(200))
         self.assertTrue(reaped, "the storm leaked threads")
+
+
+class AbandonedStreamTests(unittest.TestCase):
+    """A tab left open on a sleeping phone must not cost the server forever."""
+
+    def test_streams_beyond_the_cap_are_refused_not_accepted(self):
+        """Accepting a connection it cannot serve is worse than refusing it."""
+        application, base = serve_application(self, max_event_streams=2)
+        held = [open_stream(base) for _ in range(2)]
+        for client in held:
+            self.addCleanup(client.close)
+
+        refused = open_stream(base, expect_status=503)
+        self.addCleanup(refused.close)
+
+        self.assertEqual(refused.status, 503)
+
+    def test_a_refused_stream_says_why(self):
+        application, base = serve_application(self, max_event_streams=1)
+        held = open_stream(base)
+        self.addCleanup(held.close)
+
+        refused = open_stream(base, expect_status=503)
+        self.addCleanup(refused.close)
+
+        self.assertIn("stream", refused.body.decode("utf-8").lower())
+
+    def test_a_refused_stream_tells_the_client_when_to_come_back(self):
+        """EventSource reconnects by itself and will hammer a full server."""
+        application, base = serve_application(self, max_event_streams=1)
+        held = open_stream(base)
+        self.addCleanup(held.close)
+
+        refused = open_stream(base, expect_status=503)
+        self.addCleanup(refused.close)
+
+        self.assertEqual(refused.status, 503)
+        self.assertIn("retry-after", refused.headers)
+        self.assertGreaterEqual(int(refused.headers["retry-after"]), 1)
+
+    def test_a_closed_stream_frees_its_slot(self):
+        """A cap that never releases is a slow denial of service.
+
+        The plan asserted this with a single attempt straight after the close.
+        That races and fails: the handler is parked in ``wait_for_change`` for
+        up to one ``poll_interval`` and only frees the slot on its next pass,
+        so the slot comes back in about half a second rather than instantly.
+        Retrying to a deadline asserts the real property -- the slot comes
+        back, and quickly -- without pretending the release is synchronous.
+        A deadline that expires is a failure here, never a skip.
+        """
+        application, base = serve_application(self, max_event_streams=1)
+        first = open_stream(base)
+        first.close()
+
+        started = time.monotonic()
+        deadline = started + 5.0
+        while True:
+            second = open_stream(base, expect_status=200)
+            if second.status == 200:
+                break
+            second.close()
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        elapsed = time.monotonic() - started
+        self.addCleanup(second.close)
+
+        self.assertEqual(second.status, 200,
+                         "the slot was still held %.2fs after the client "
+                         "closed" % elapsed)
+        self.assertLess(elapsed, 2.0,
+                        "the slot took %.2fs to come back; a cap whose slots "
+                        "return slowly is a slow denial of service" % elapsed)
+
+    def test_the_cap_does_not_affect_ordinary_requests(self):
+        """Only /api/events is capped; the dashboard must still load."""
+        application, base = serve_application(self, max_event_streams=1)
+        held = open_stream(base)
+        self.addCleanup(held.close)
+
+        status, _ = get(base + "/api/state")
+
+        self.assertEqual(status, 200)
+
+
+class StreamGateTests(unittest.TestCase):
+    """The admission counter and its rate-limited warning, driven directly."""
+
+    def make(self, limit=2, start=0.0):
+        self.now = start
+        self.lines = []
+        return StreamGate(limit, log=lambda message, level="info":
+                          self.lines.append((level, message)),
+                          clock=lambda: self.now)
+
+    def test_slots_run_out_and_come_back(self):
+        gate = self.make(limit=2)
+
+        self.assertTrue(gate.acquire())
+        self.assertTrue(gate.acquire())
+        self.assertFalse(gate.acquire())
+        gate.release()
+
+        self.assertTrue(gate.acquire())
+        self.assertEqual(gate.active, 2)
+
+    def test_releasing_more_than_was_taken_cannot_mint_slots(self):
+        """Every exit path releases, and a double release must not widen it."""
+        gate = self.make(limit=1)
+        gate.acquire()
+        gate.release()
+        gate.release()
+        gate.release()
+
+        self.assertTrue(gate.acquire())
+        self.assertFalse(gate.acquire())
+
+    def test_the_deadline_warning_is_rate_limited_per_address(self):
+        """A storm of stalled clients must not become a storm of warnings."""
+        gate = self.make()
+
+        self.assertTrue(gate.note_write_deadline("10.0.0.1", 30.0))
+        self.assertFalse(gate.note_write_deadline("10.0.0.1", 30.0))
+        self.assertFalse(gate.note_write_deadline("10.0.0.1", 30.0))
+
+        self.assertEqual(len(self.lines), 1)
+        self.assertEqual(self.lines[0][0], "warning")
+        self.assertIn("10.0.0.1", self.lines[0][1])
+
+    def test_a_different_address_is_not_silenced_by_the_first(self):
+        gate = self.make()
+        gate.note_write_deadline("10.0.0.1", 30.0)
+
+        self.assertTrue(gate.note_write_deadline("10.0.0.2", 30.0))
+
+    def test_the_suppressed_hits_are_counted_not_lost(self):
+        gate = self.make()
+        gate.note_write_deadline("10.0.0.1", 30.0)
+        gate.note_write_deadline("10.0.0.1", 30.0)
+        gate.note_write_deadline("10.0.0.1", 30.0)
+
+        self.now += StreamGate.LOG_INTERVAL_SECONDS
+        self.assertTrue(gate.note_write_deadline("10.0.0.1", 30.0))
+
+        self.assertIn("2 more", self.lines[-1][1])
+
+    def test_the_address_map_does_not_grow_without_bound(self):
+        """A reconnect storm from many ports would otherwise leak memory."""
+        gate = self.make()
+
+        for index in range(StreamGate._MAX_REMEMBERED + 50):
+            # Distinct addresses inside one window, so nothing is stale and
+            # the bound has to be enforced by eviction rather than by expiry.
+            gate.note_write_deadline("10.%d.%d.1" % (index // 256, index % 256),
+                                     30.0)
+
+        # The prune runs before the insert, so the steady state is the bound
+        # plus the address being recorded right now.
+        self.assertLessEqual(len(gate._logged_at),
+                             StreamGate._MAX_REMEMBERED + 1)
 
 
 if __name__ == "__main__":

@@ -80,6 +80,13 @@ class ApiHandler(BaseHTTPRequestHandler):
     # idle sockets are dropped. Event streams write continuously and are not
     # affected; they end when the client leaves or the service stops.
     timeout = 30.0
+    # The concurrency bound for /api/events, supplied by the web service. None
+    # means unbounded, which is what a bare handler outside a service gets.
+    stream_gate = None
+    # The write deadline for a stream, chosen rather than inherited. Before
+    # this the keep-alive read timeout above did double duty: it worked, but
+    # it was nobody's decision and it was never logged when it fired.
+    stream_write_timeout = 30.0
 
     # -- plumbing -------------------------------------------------------
 
@@ -382,11 +389,49 @@ class ApiHandler(BaseHTTPRequestHandler):
         return self._error(502, reason)
 
     def _stream(self, query):
+        """Take a stream slot, serve the stream, and always give the slot back.
+
+        Admission happens before the 200 goes out: accepting a connection this
+        server cannot serve is worse than refusing it, because the client then
+        believes it has a live stream.
+        """
+        gate = self.stream_gate
+        if gate is not None and not gate.acquire():
+            return self._stream_unavailable(gate)
+        try:
+            return self._stream_events(query)
+        finally:
+            # A finally, not a trailing call: an early return, a broken pipe
+            # and a service shutdown all have to free the slot, and only one
+            # of those leaves through the bottom of the function.
+            if gate is not None:
+                gate.release()
+
+    def _stream_unavailable(self, gate):
+        """Refuse a stream, and tell the client when to come back.
+
+        A browser EventSource reconnects on its own, so a 503 without a
+        Retry-After turns a saturated server into a busy loop.
+        """
+        self.close_connection = True
+        return self._write(503, json.dumps({
+            "error": "This server is already serving its maximum of %d "
+                     "event streams" % gate.limit,
+            "max_event_streams": gate.limit,
+        }), extra_headers=(("Retry-After", "%d" % gate.retry_after),))
+
+    def _stream_events(self, query):
         """Send state snapshots as server-sent events until the client leaves."""
         since = _first_int(query.get("since"), default=None)
         if since is None:
             since = _first_int([self.headers.get("Last-Event-ID", "")],
                                default=-1)
+
+        # The write deadline, set explicitly rather than inherited from the
+        # keep-alive read timeout. It only fires when sendall blocks, which
+        # needs the socket buffers full -- a slow reader, not an absent one.
+        if self.stream_write_timeout and self.connection is not None:
+            self.connection.settimeout(self.stream_write_timeout)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -420,10 +465,32 @@ class ApiHandler(BaseHTTPRequestHandler):
                     # pretending the state changed.
                     self._send_raw(": heartbeat\n\n")
                     last_beat = time.monotonic()
+        except (TimeoutError, socket.timeout):
+            # Listed before OSError, which TimeoutError subclasses. This is a
+            # reader too slow to keep up rather than one that has gone, and it
+            # is the one case worth a log line.
+            self._note_write_deadline()
+            return None
         except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
             # The client went away, which is ordinary for a browser tab.
             return None
         return None
+
+    def _note_write_deadline(self):
+        """Log a stream dropped for missing its write deadline, rate-limited.
+
+        A deadline nobody can see firing is how this stayed invisible in the
+        first place. The gate rate-limits to one line per client address per
+        minute, because a storm of stalled clients is precisely when it fires.
+        """
+        gate = self.stream_gate
+        if gate is None:
+            return
+        address = self.client_address[0] if self.client_address else "?"
+        try:
+            gate.note_write_deadline(address, self.stream_write_timeout)
+        except Exception:  # pragma: no cover - logging must never take a stream down
+            pass
 
     def _peer_departed(self):
         """True when the client has gone.
