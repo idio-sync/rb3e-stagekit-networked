@@ -546,6 +546,10 @@ class ReconnectStormTests(unittest.TestCase):
 
 The reason is a rate-versus-latency argument the plan did not make: the loop reconnects at ~100/s, while a closed stream's slot takes up to one `poll_interval` (0.5s) to come back, because the handler is parked in `wait_for_change` and frees the slot on its next pass. Steady-state occupancy is therefore roughly `rate x release_latency` ~= 50, which sits above 32 no matter what a household-scale cap is set to.
 
+**Adjudicated 2026-09-29, after Task 4 reported a contradicting result.** Task 4 reported 0 refusals in 6 of 6 runs and concluded the 0-13 range does not reproduce. Re-measured independently with the same `open_stream` helper: **refused 6, 0, 4 across three runs, peak occupancy 28-32.** The 0-13 range stands and the cap is genuinely reached; Task 4's run was unlucky or ran under different load. A single quiet run is not evidence that a timing-dependent number has changed.
+
+Also measured, and worth knowing before anyone writes another storm: a **raw** connect/close loop that never reads peaks at occupancy **2**, not 32, because `_peer_departed` reaps it almost instantly. A storm that does not wait for its responses is not a storm. Use `open_stream`.
+
 **So this task's storm test must expect 503s at the default cap and say so**, or lift the cap above the storm and assert every connection was admitted. What it must not do is assert something that refusals can satisfy. Task 3 found exactly that defect in Task 2's storm test: it asserted only that threads return to baseline, and a refused connection never holds a thread, so on four runs in five the assertion was being propped up by the very refusals it does not measure. It now runs at `max_event_streams=128` and asserts all 100 returned 200.
 
 - [ ] **Step 2: Run it and record what happens**
