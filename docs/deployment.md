@@ -299,10 +299,16 @@ access logs of any proxy or firewall in front of the server. **This is another
 reason not to expose this port to the internet.** The token is kept out of this
 server's own logs by design — request logging is suppressed entirely — but logs
 and history are outside the server's control. For a home LAN behind a trusted
-router this is acceptable; for anything else, use the `Authorization` header
-instead (as the desktop dashboard does) and let the event stream retry until the
-client can use a header, or use a reverse proxy that translates headers to
-cookies or other session tokens.
+router this is acceptable; for anything else, keep the port off the internet and
+put a reverse proxy in front of it.
+
+There is no way to opt the browser dashboard out of this. `EventSource` cannot
+set headers, so `static/app.js` must use the query parameter; that is the
+constraint the capability exists to satisfy, not a default that can be tightened.
+Clients that *can* set headers already do — `rb3dashboard/serverclient.py` and
+the `tools/servercheck` utilities all send `Authorization: Bearer`. The exposure
+is therefore limited to browser sessions, and the mitigation is network
+placement rather than a client-side setting.
 
 ### Token rotation
 

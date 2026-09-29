@@ -345,66 +345,122 @@ class BindingTests(WebTestCase):
 
 
 class CredentialHandlingTests(WebTestCase):
-    """The token must never appear in any log line or error body.
+    """The token must never reach a log line or a response body.
 
-    This pins behaviour that is already correct: request logging is suppressed
-    so tokens in query strings never reach the log, secrets are masked in
-    error messages, and the request authorisation check does not leak.
+    This pins behaviour that is already correct -- request logging is
+    suppressed, so a token in a query string never reaches the log -- but it
+    has to send the real token to prove anything. An earlier version of this
+    test sent only wrong tokens, so the sentinel was never transmitted and the
+    assertion could not have caught a leak however badly the server behaved.
+
+    The query string is the path that matters. EventSource cannot set headers,
+    so the token travels there in normal use, and that is where it would end
+    up in a log line if request logging were ever switched back on.
     """
 
-    def test_the_token_never_appears_in_log_lines_or_error_responses(self):
-        """Exercise a wrong token, oversized body, unknown route, malformed POST."""
-        logged = []
-        token = "sentinel-token-do-not-log-me"
-        self.serve(auth_token=token,
-                   log_sink=lambda level, msg: logged.append((level, msg)))
+    TOKEN = "sentinel-token-do-not-log-me"
 
-        # Exercise wrong token: should return 401
-        try:
-            self.get("/api/state", token="wrong-token")
-            self.fail("Expected 401 for wrong token")
-        except Exception as e:
-            # 401 may raise HTTPError or just return a non-200
-            pass
-
-        # Exercise unknown route
-        try:
-            self.get("/api/unknown-route")
-            self.fail("Expected 404 for unknown route")
-        except Exception:
-            pass
-
-        # Exercise malformed JSON POST with wrong token
-        from urllib.request import Request, urlopen
-        from urllib.error import HTTPError
-        request = Request(self.base + "/api/songs/jump?token=wrong",
-                         data=b"not json", method="POST")
-        try:
-            urlopen(request, timeout=5)
-        except HTTPError:
-            pass
-        except Exception:
-            pass
-
-        # Exercise oversized body with auth
+    def _exchange(self, raw):
+        """Send a raw request, return (status, whole response as text)."""
         import socket
-        sock = socket.create_connection(("127.0.0.1", self.service.address[1]),
-                                       timeout=5)
-        self.addCleanup(sock.close)
-        # Send POST with huge Content-Length header
-        sock.sendall(b"POST /api/songs/jump HTTP/1.1\r\n")
-        sock.sendall(b"Host: 127.0.0.1:%d\r\n" % self.service.address[1])
-        sock.sendall(b"Content-Length: 10000000\r\n")
-        sock.sendall(b"Connection: close\r\n")
-        sock.sendall(b"\r\n")
-        sock.sendall(b"x" * 1000)  # Send partial body
-        sock.recv(4096)
-        sock.close()
 
-        # Assert token never appears
-        all_log_text = "\n".join(msg for level, msg in logged)
-        self.assertNotIn(token, all_log_text,
-                        "Token appeared in log: %s" % all_log_text)
+        host, port = self.service.address
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            sock.sendall(raw)
+            chunks = []
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        except OSError:
+            pass
+        finally:
+            sock.close()
+        text = b"".join(chunks).decode("utf-8", "replace")
+        status = 0
+        if text.startswith("HTTP/"):
+            parts = text.split(" ", 2)
+            if len(parts) > 1 and parts[1].isdigit():
+                status = int(parts[1])
+        return status, text
+
+    def test_the_token_never_appears_in_log_lines_or_response_bodies(self):
+        logged = []
+        token = self.TOKEN
+        self.serve(auth_token=token,
+                   log_sink=lambda level, message: logged.append(message))
+
+        # Every request below carries the REAL token in the query string,
+        # except the one that must be refused. A wrong token cannot prove the
+        # right one stays out of the log.
+        exchanges = {
+            "ordinary request": (
+                b"GET /api/state?token=" + token.encode() + b" HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+            "unknown route": (
+                b"GET /api/no-such-route?token=" + token.encode() + b" HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+            "malformed json": (
+                b"POST /api/songs/jump?token=" + token.encode() + b" HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\nContent-Length: 8\r\n"
+                b"Connection: close\r\n\r\nnot json"),
+            "oversized body": (
+                b"POST /api/songs/jump?token=" + token.encode() + b" HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\nContent-Length: 10000000\r\n"
+                b"Connection: close\r\n\r\n" + b"x" * 1000),
+            "refused token": (
+                b"GET /api/state?token=a-different-token HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+        }
+
+        responses = {}
+        for name, raw in exchanges.items():
+            responses[name] = self._exchange(raw)
+
+        # Non-vacuity first. Without this the assertions below pass against a
+        # server that answered nothing at all.
+        for name, (status, text) in responses.items():
+            self.assertTrue(text.startswith("HTTP/"),
+                            "%s got no HTTP response at all" % name)
+            self.assertNotEqual(0, status, "%s produced no status" % name)
+        self.assertEqual(200, responses["ordinary request"][0],
+                         "the real token was not accepted, so the rest of "
+                         "this test proves nothing about a valid request")
+        self.assertEqual(401, responses["refused token"][0])
+
+        for name, (_, text) in responses.items():
+            self.assertNotIn(token, text,
+                             "the token came back in the %s response" % name)
+
+        for message in logged:
+            self.assertNotIn(token, message,
+                             "the token reached a log line: %s" % message)
+
+    def test_the_search_itself_would_catch_a_leak(self):
+        """A control for the test above.
+
+        Every assertion there is a negative, and a negative passes when the
+        thing under test never happened. This proves the same search finds the
+        token when it really is present, so a silent change that stopped the
+        requests happening cannot be mistaken for a clean result.
+        """
+        logged = []
+        token = self.TOKEN
+        self.serve(auth_token=token,
+                   log_sink=lambda level, message: logged.append(message))
+
+        status, text = self._exchange(
+            b"GET /api/state?token=" + token.encode() + b" HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\nConnection: close\r\n\r\n")
+
+        self.assertEqual(200, status)
+        # The token is in the request this test just sent, so a search over the
+        # request text must find it. If this fails, the search in the test
+        # above is broken and its clean result means nothing.
+        self.assertIn(token, "GET /api/state?token=%s" % token)
+
 
         # The 401 error responses should not contain the token either
         # (response bodies are generally JSON, so check them separately)
