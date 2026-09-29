@@ -1,12 +1,14 @@
 """What abandoned, slow and storming browser tabs cost this server."""
 
+import os
 import sys
 from pathlib import Path
 import unittest
 
-# Discovery with `-s tests` puts this directory on sys.path, but
-# `python -m unittest tests.test_reliability_streams` does not. Both commands
-# appear in the plan, so reach the sibling helper explicitly.
+# `tests` is not a package, so the dotted form of this module does not exist
+# and every command in the plan uses `discover -s tests`, which already puts
+# this directory on sys.path. The insert is belt-and-braces for a direct
+# `python tests/test_reliability_streams.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from reliability_support import Sampler, peak_rss_bytes, thread_count
@@ -35,6 +37,22 @@ class MeasurementTests(unittest.TestCase):
 
         if value is not None:
             self.assertGreater(value, 1024 * 1024)
+
+    def test_peak_rss_is_measurable_on_every_platform_we_run_on(self):
+        """The test above passes when peak_rss_bytes() is simply broken.
+
+        It did: a ctypes handle defect made the Windows branch return None,
+        and `if value is not None` waved it through. `None` is the honest
+        answer for a platform that cannot say, but nt and posix both can, so
+        on those two it is a defect rather than an answer.
+        """
+        if os.name not in ("nt", "posix"):
+            self.skipTest("peak RSS is unmeasured on %s" % os.name)
+
+        self.assertIsNotNone(
+            peak_rss_bytes(),
+            "peak_rss_bytes() returned None on %s, which can measure it"
+            % os.name)
 
     def test_the_sampler_reports_a_thread_delta(self):
         import threading

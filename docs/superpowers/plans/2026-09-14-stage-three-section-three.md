@@ -165,9 +165,9 @@ Create `Dashboard/tests/reliability_support.py`. Requirements:
 - `Sampler` records both at `__enter__` and `__exit__`, exposing deltas. An `rss_delta` of `None` when either sample is `None`.
 - `serve_application(case, **kwargs)` builds a `ServerApplication` with `web_host="127.0.0.1"`, `web_port=0`, a `tempfile.TemporaryDirectory` data dir, `stagekit_enabled=False` unless overridden, starts it, and returns it with its base URL. It registers cleanup on the `TestCase` passed as the first argument.
 
-  **The fixed-port problem, which this plan originally missed.** `ServerApplication.start()` binds **UDP 21070 and 21071** unconditionally (`listener.py:164`, and `ListenerService.start` raises on bind failure, `server.py:63-75`). `web_port=0` solves nothing there. That collides head-on with this plan's own constraint that tests must not take fixed ports, and it behaves differently by platform: `SO_REUSEADDR` (`listener.py:162`) lets a second bind succeed on Windows and fail on Linux CI, so a green run here proves less than it looks like it does.
+  **The fixed-port problem, which this plan originally missed — and then overstated.** `ServerApplication.start()` binds **UDP 21070** unconditionally (`listener.py:164`; `ListenerService.start` raises on bind failure, `server.py:63-77`), and `web_port=0` does nothing for it. It behaves differently by platform: `SO_REUSEADDR` (`listener.py:162`) lets a second bind succeed on Windows and fail on Linux CI, so a green run on the workstation proves less than it appears to. **21071 is not at risk**: it is `TELEMETRY_PORT`, bound by `StageKitTransport` (`stagekit.py:97`), which `ServerApplication` only constructs when `stagekit_enabled=True` (`server.py:257-258`) — and that defaults to `False`.
 
-  Resolve it in this task, before any test depends on it. Preferred: give `serve_application` a stubbed listener so no UDP socket is opened at all — none of Tasks 2 through 9 exercises the UDP path, and a helper that does not bind cannot collide. If that proves invasive, fall back to the skip pattern in `test_servercheck_probe.py`, and **say in your report which you chose and what it costs in coverage.** A helper that silently takes a machine-wide port is not acceptable either way.
+  **Resolved in Task 1: `serve_application` defaults `listener_factory=StubListener`.** This needed no production change. `listener_factory` is already a public constructor parameter (`server.py:145`, used at `server.py:220`), and `test_runtime_server.py:10` has used a `FakeListener` through it since before this plan — an established pattern, not a new one. Nothing from Task 2 onward asks for the UDP path, so the coverage cost is zero here; `test_listener.py`, `test_protocol.py` and `test_servercheck_probe.py` continue to cover real datagrams. The stub still occupies one blocked thread exactly as the real listener does, so thread baselines are undistorted. **Later tasks should not re-litigate this.**
 - `open_stream(...)` opens `/api/events` and returns an object exposing the raw socket, `read_line()`, `stop_reading()` (stop draining without closing) and `shutdown_write()`. Task 2 needs both of the last two: `stop_reading` alone leaves a reader that is merely slow, while `shutdown_write` is a reader that is actually gone.
 
 Keep it small. This is scaffolding for tests, not a library.
@@ -274,7 +274,7 @@ Two additions to Task 1's `reliability_support` are needed here:
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd Dashboard && python -m unittest tests.test_reliability_streams -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_reliability_streams.py" -v`
 
 Expected — predictions from measurement, not from reading the code:
 - `test_a_closed_stream_is_reaped_promptly` FAILS; the reap takes ~15s against a 5s timeout.
@@ -312,7 +312,7 @@ And the helper. An SSE client sends nothing after its request, so anything reada
 
 - [ ] **Step 4: Run them to verify they pass**
 
-Run: `cd Dashboard && python -m unittest tests.test_reliability_streams -v`
+Run: `cd Dashboard && python -m unittest discover -s tests -p "test_reliability_streams.py" -v`
 Expected: PASS, and fast — the reap should now be governed by `poll_interval`, not by `HEARTBEAT_SECONDS`.
 
 - [ ] **Step 5: Re-measure and record**
