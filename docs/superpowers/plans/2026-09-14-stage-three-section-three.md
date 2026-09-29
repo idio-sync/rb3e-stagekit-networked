@@ -6,7 +6,7 @@
 
 **Architecture:** Each item is a failing test first, then a fix, then a regression test. No item may be closed by reasoning: where a measurement contradicts this plan's expectation, the measurement wins and the fix changes. Most scenarios drive a real `ServerApplication` over loopback sockets; the two that need a real broker or a real container are marked and deferred to CI.
 
-**A deliberate departure from how Sections 1 and 2 were planned.** Those plans handed the implementer literal code. Tasks 1 and 2 here do the same, because their shape is known. **Tasks 3 through 8 state what each test must establish and leave the assertions to the implementer**, because their numbers do not exist yet — a thread-delta tolerance, a drop count at saturation, or what a killed server leaves in a WAL file are all things this plan would be *fabricating* if it wrote them as code. Each of those tasks therefore opens by measuring and recording, and only then asserting. Where a task does name a number (Task 3's tolerance of 5 threads), it says where the number came from and forbids raising it to make a test pass.
+**A deliberate departure from how Sections 1 and 2 were planned.** Those plans handed the implementer literal code. Tasks 1 through 3 here do the same, because their shape is known. **Tasks 4 through 9 state what each test must establish and leave the assertions to the implementer**, because their numbers do not exist yet — a thread-delta tolerance, a drop count at saturation, or what a killed server leaves in a WAL file are all things this plan would be *fabricating* if it wrote them as code. Each of those tasks therefore opens by measuring and recording, and only then asserting. Where a task does name a number (Task 4's thread-delta tolerance), it says where the number came from and forbids raising it to make a test pass.
 
 **Tech Stack:** Python 3.11 standard library, `unittest`. No new dependency. Measurement uses `resource` on POSIX and `ctypes`/`psutil`-free equivalents on Windows — see Task 1.
 
@@ -27,7 +27,7 @@ This plan implements **Section 3** of the spec. Sections 1 and 2 Tasks 1-4 are m
 - **The desktop application is untouched:** `Dashboard/dashboard.py`, `Dashboard/rb3dashboard/settings.py`, `Dashboard/rb3dashboard/stagekit.py`, and every desktop test.
 - **Ports fixed:** UDP 21070 events and lighting, UDP 21071 discovery and telemetry, TCP 8321 dashboard.
 - **Secrets never printed.** `auth_token` and `mqtt_password` render as `<set>` / `<unset>`.
-- **Suite budget: 150 seconds.** It is 99s at `f5a4496` against a 120s ceiling, and this plan adds load tests. Raising the ceiling is deliberate; exceeding *it* is not. Every task reports the runtime, and any task that adds more than 10 seconds must justify it.
+- **Suite budget: 150 seconds, and a per-task allowance.** The same tree on the same workstation measured 83.182s and 99.455s on two runs days apart — a 19% spread with no code change between them. A single wall-clock ceiling is therefore a weak instrument, and a task that "passes the budget" on a quiet machine can fail on a loaded CI runner. So: the ceiling is 150s, **and** every task states its own second-cost before it is written and reports the actual after. A task exceeding its own allowance by more than 5s must say why in its report, even when the total is still under 150s. Task 2 exists partly to remove the wall-clock waiting that made this plan want a bigger number in the first place — prefer deleting a sleep to buying headroom.
 - **Tests must not bind fixed ports where they can avoid it.** Use `web_port=0`. Where UDP 21070/21071 are unavoidable, skip when the port is owned elsewhere — `test_servercheck_probe.py` has the established pattern.
 - **Commit author:** `idio-sync <jedivoodoo@gmail.com>` (repo-local git config).
 - **Do not push.**
@@ -38,8 +38,10 @@ Stated here so no task re-derives it, and so a task that finds otherwise knows i
 
 | Behaviour | Current state |
 | --- | --- |
-| Stalled SSE reader | Dropped after ~30s. `BaseHTTPRequestHandler.wbufsize` is 0, so `wfile` is a `_SocketWriter` calling `sendall` on a connection `StreamRequestHandler.setup` put into timeout mode with `self.timeout`. `TimeoutError` subclasses `OSError`, which `_stream` already catches. **Verified by measurement in Section 1 planning.** |
-| Concurrent stream cap | **None.** `ThreadingHTTPServer` with `daemon_threads = True` spawns a thread per connection with no bound. |
+| Stalled SSE reader, idle server | **Never dropped.** Measured 2026-09-29: +1 handler thread for all 90 one-second polls. The write deadline only fires when `sendall` blocks, which needs the socket buffers full; an idle stream sends a ~14-byte heartbeat every 15s that the kernel swallows instantly. This is the abandoned-tab case, and it is an unfixed defect — see Task 2. |
+| Stalled SSE reader, server under load | Dropped at ~30-31s, matching `timeout = 30.0` at `api.py:80`. `BaseHTTPRequestHandler.wbufsize` is 0, so `wfile` is a `_SocketWriter` calling `sendall` on a connection `StreamRequestHandler.setup` put into timeout mode with `self.timeout`; `TimeoutError` subclasses `OSError`, which `_stream` already catches. Measured with a writer pushing 5 KB every 50ms against a 4096-byte client `SO_RCVBUF`. **The Section 1 measurement that produced the flat "~30s" claim was taken under load and its condition was never written down.** |
+| Handler reap after client close | **~15s**, not prompt. Measured: 5 closed streams returned to baseline in 15.02s; 100 sequential connect/close cycles took 0.08s and left +100 threads, reaped 16.02s later. `HEARTBEAT_SECONDS = 15.0` is the driver — the handler only learns the peer is gone when its next heartbeat write fails. Task 2 fixes this. |
+| Concurrent stream cap | **None.** `ThreadingHTTPServer` with `daemon_threads = True` spawns a thread per connection with no bound. Confirmed 2026-09-29: no match for `max_streams`, `Semaphore` or `BoundedSemaphore` anywhere in `rb3dashboard`; the only limits are `MAX_BODY_BYTES` and `MAX_DRAIN_BYTES`. |
 | Write deadline | Exists at 30s, but incidental — it is the keep-alive *read* timeout doing double duty, never chosen deliberately, and never logged when it fires. |
 | Dispatcher queue | Bounded at `queue_capacity` (default 1000), counts `accepted`/`dropped`/`refused`. Drops the newest on overflow. |
 | Outbound webhook queue | Bounded at `webhook_capacity` (default 100), same counters, drops the newest, retries with interruptible backoff. |
@@ -51,18 +53,22 @@ Stated here so no task re-derives it, and so a task that finds otherwise knows i
 
 | File | Responsibility | Tasks |
 | --- | --- | --- |
-| `Dashboard/tests/test_reliability_streams.py` (new) | Slow, abandoned and storming stream clients. | 1, 2 |
-| `Dashboard/rb3dashboard/runtime/web/service.py` | Stream concurrency cap; deliberate write deadline. | 2 |
-| `Dashboard/rb3dashboard/runtime/web/api.py` | Stream admission and its 503; deadline logging. | 2 |
-| `Dashboard/rb3dashboard/runtime/config.py` | New settings for the cap and the deadline. | 2 |
-| `Dashboard/tests/test_reliability_queues.py` (new) | Queue saturation and drop policy. | 3 |
-| `Dashboard/tests/test_reliability_devices.py` (new) | Device offline, forget, and return. | 4 |
-| `Dashboard/tests/test_reliability_shutdown.py` (new) | SIGTERM, SIGINT, unclean kill, data integrity after. | 5 |
-| `Dashboard/tests/test_reliability_integrations.py` (new) | Unavailable webhook and broker, and recovery. | 6 |
-| `Dashboard/rb3dashboard/runtime/web/api.py` | Readiness reporting. | 7 |
-| `docs/deployment.md` | Credential handling: the query token, `env_file`, rotation. | 8 |
-| `Dashboard/tools/servercheck/probe.py` | A credential-leak check, if Task 8 finds one worth pinning. | 8 |
-| `docs/superpowers/plans/2026-09-14-stage-three-section-three.md` | This plan; its measurements and gap ledger. | 9 |
+| `Dashboard/tests/reliability_support.py` (new) | Shared helpers: `serve_application`, `open_stream`, `get`, `Sampler`. | 1 |
+| `Dashboard/tests/test_reliability_streams.py` (new) | Slow, abandoned and storming stream clients. | 1, 2, 3 |
+| `Dashboard/rb3dashboard/runtime/web/api.py` | Prompt peer-disconnect detection in `_stream`; stream admission and its 503; deadline logging; readiness reporting. | 2, 3, 8 |
+| `Dashboard/rb3dashboard/runtime/web/service.py` | Stream concurrency cap; deliberate write deadline. | 3 |
+| `Dashboard/rb3dashboard/runtime/config.py` | New settings for the cap and the deadline. | 3 |
+| `Dashboard/rb3dashboard/runtime/server.py` | Threads the new settings from `ServerApplication` to `WebService`. **Without this the settings never arrive and `serve_application(**kwargs)` raises `TypeError`.** | 3 |
+| `Dashboard/tests/test_runtime_config.py` | Validation for the new settings. | 3 |
+| `Dashboard/tests/test_reliability_queues.py` (new) | Queue saturation and drop policy. | 4 |
+| `Dashboard/tests/test_reliability_devices.py` (new) | Device offline, forget, and return. | 5 |
+| `Dashboard/tests/test_reliability_shutdown.py` (new) | SIGTERM, SIGINT, unclean kill, data integrity after. | 6 |
+| `Dashboard/tests/test_reliability_integrations.py` (new) | Unavailable webhook and broker, and recovery. | 7 |
+| `.github/workflows/server-container.yml` | The broker-restart step currently asserts only that the container still runs; Task 7 decides what else it must assert. | 7 |
+| `docs/deployment.md` | The new settings; credential handling: the query token, `env_file`, rotation. | 3, 9 |
+| `Dashboard/tools/servercheck/probe.py` | A credential-leak check, if Task 9 finds one worth pinning. | 9 |
+| `docs/superpowers/plans/2026-09-14-stage-three-section-three.md` | This plan; its measurement table. | 10 |
+| `docs/superpowers/plans/2026-09-13-stage-three.md` | The Stage 3 gap ledger. **Create the section if it is not there — Section 2 Task 5 never ran, so it may not exist yet.** | 10 |
 
 ---
 
@@ -79,14 +85,15 @@ Every later task asserts something about resource use. Without a baseline those 
 - Produces, in `reliability_support.py`. **Task 2 calls every one of these, so the signatures are binding, not illustrative:**
   - `thread_count() -> int` — live threads in this process
   - `peak_rss_bytes() -> int | None` — peak resident set in bytes, or `None` where the platform cannot say
-  - `class Sampler` — context manager recording thread count and RSS at entry and exit, exposing `.threads_delta: int` and `.rss_delta: int | None`
-  - `serve_application(case, **kwargs) -> (application, base_url)` — a started `ServerApplication` on `web_host="127.0.0.1"`, `web_port=0`, with a temp data dir. Takes the `TestCase` first so it can register `addCleanup` for both the server and the directory. `**kwargs` pass through to `ServerApplication`.
+  - `class Sampler` — context manager recording thread count and RSS at entry and exit, exposing `.threads_delta: int`, `.rss_delta: int | None`, and `.wait_for_baseline(timeout: float) -> bool`, which polls until the thread count returns to the entry baseline. **Prefer `wait_for_baseline` to `threads_delta` in any assertion.** Daemon threads are reaped asynchronously, so an instantaneous delta is a race; a deadline is not.
+  - `serve_application(case, **kwargs) -> (application, base_url)` — a started `ServerApplication` on `web_host="127.0.0.1"`, `web_port=0`, with a temp data dir. Takes the `TestCase` first so it can register `addCleanup` for both the server and the directory. `**kwargs` pass through to `ServerApplication`. **This signature is used verbatim throughout the plan; there is no no-argument variant.**
   - `get(url, token=None) -> (status: int, body: bytes)` — one plain HTTP request; an HTTP error is a status, not a raise
   - `open_stream(base_url, token=None, expect_status=200) -> StreamClient` — opens `/api/events`. When the server answers with something other than `expect_status`, the client returns carrying that status rather than raising, so a test can assert a 503.
   - `class StreamClient` with:
     - `.status: int` — the response status
     - `.body: bytes` — the body, for a non-200 response
     - `.read_line() -> bytes` — one SSE line
+    - `.shutdown_write()` — `socket.shutdown(SHUT_WR)`, leaving the connection half-closed and still open for reading. This is the abandoned tab: the peer is gone without a reset.
     - `.stop_reading()` — stop draining the socket without closing it. This is the abandoned tab.
     - `.wait_until_dropped(timeout) -> bool` — whether the server closed the connection within the timeout
     - `.close()`
@@ -156,8 +163,12 @@ Create `Dashboard/tests/reliability_support.py`. Requirements:
 - `thread_count()` is `threading.active_count()`.
 - `peak_rss_bytes()` uses `resource.getrusage(resource.RUSAGE_SELF).ru_maxrss` on POSIX — **note the unit differs by platform**: kilobytes on Linux, bytes on macOS. Normalise to bytes and say which you assumed. On Windows, use `ctypes` against `GetProcessMemoryInfo` if you can do it in a few lines; if not, **return `None` rather than guessing**, and make every caller treat `None` as "not measurable here" rather than zero. A fabricated number is worse than an absent one.
 - `Sampler` records both at `__enter__` and `__exit__`, exposing deltas. An `rss_delta` of `None` when either sample is `None`.
-- `serve_application(**kwargs)` builds a `ServerApplication` with `web_host="127.0.0.1"`, `web_port=0`, a `tempfile.TemporaryDirectory` data dir, `stagekit_enabled=False` unless overridden, starts it, and returns it with its base URL. It must register cleanup with the calling test case — take the `TestCase` as the first argument so it can use `addCleanup`.
-- `open_stream(...)` opens `/api/events` and returns an object exposing the raw socket, a `read_line()`, and a `stop_reading()` that stops draining without closing — that is the "abandoned tab" the next task needs.
+- `serve_application(case, **kwargs)` builds a `ServerApplication` with `web_host="127.0.0.1"`, `web_port=0`, a `tempfile.TemporaryDirectory` data dir, `stagekit_enabled=False` unless overridden, starts it, and returns it with its base URL. It registers cleanup on the `TestCase` passed as the first argument.
+
+  **The fixed-port problem, which this plan originally missed.** `ServerApplication.start()` binds **UDP 21070 and 21071** unconditionally (`listener.py:164`, and `ListenerService.start` raises on bind failure, `server.py:63-75`). `web_port=0` solves nothing there. That collides head-on with this plan's own constraint that tests must not take fixed ports, and it behaves differently by platform: `SO_REUSEADDR` (`listener.py:162`) lets a second bind succeed on Windows and fail on Linux CI, so a green run here proves less than it looks like it does.
+
+  Resolve it in this task, before any test depends on it. Preferred: give `serve_application` a stubbed listener so no UDP socket is opened at all — none of Tasks 2 through 9 exercises the UDP path, and a helper that does not bind cannot collide. If that proves invasive, fall back to the skip pattern in `test_servercheck_probe.py`, and **say in your report which you chose and what it costs in coverage.** A helper that silently takes a machine-wide port is not acceptable either way.
+- `open_stream(...)` opens `/api/events` and returns an object exposing the raw socket, `read_line()`, `stop_reading()` (stop draining without closing) and `shutdown_write()`. Task 2 needs both of the last two: `stop_reading` alone leaves a reader that is merely slow, while `shutdown_write` is a reader that is actually gone.
 
 Keep it small. This is scaffolding for tests, not a library.
 
@@ -186,11 +197,147 @@ git commit -m "test: add reliability measurement support"
 
 ---
 
-### Task 2: Slow and abandoned event stream clients
+### Task 2: Notice a client that has gone away
 
-The spec's measured baseline: a stalled reader is already dropped after about 30 seconds, by the handler's socket timeout doing double duty. The two real gaps are that **nothing caps concurrent streams**, and that the deadline is accidental — never chosen, never logged.
+**This task did not exist when the plan was written.** It was added after the plan's headline claim was measured and found false. Everything downstream — the cap, the storm test, the thread-delta tolerance, and most of the suite budget increase — depends on it, so it goes first.
 
-A living room produces this constantly: a phone tab left open, a laptop that sleeps mid-song, a browser that reconnects on wake.
+**What was measured, 2026-09-29:**
+
+| Scenario | Result |
+| --- | --- |
+| Idle server, reader stops reading, connection left open | Handler thread alive at 90s. Never dropped. |
+| Loaded server (5 KB every 50ms, 4096-byte client `SO_RCVBUF`) | Dropped at ~30-31s, matching `timeout = 30.0`. |
+| 5 streams closed client-side | Threads back to baseline after **15.02s**. |
+| 100 sequential connect/close cycles | Storm took 0.08s, left **+100 threads**, reaped 16.02s later. |
+
+The cause is one line of `_stream`'s design. The loop already waits in slices (`state.wait_for_change(since, timeout=min(self.poll_interval, self.heartbeat))`, `api.py:409-410`), but it only ever *writes*. A peer that closed is invisible until the next heartbeat write fails, so the floor on noticing is `HEARTBEAT_SECONDS = 15.0` — and on an idle server with a stalled-but-open reader, the write never fails at all, so the floor is infinite.
+
+This is the abandoned phone tab. It is a real defect, not a behaviour to pin.
+
+**Files:**
+- Modify: `Dashboard/tests/test_reliability_streams.py`, `Dashboard/tests/reliability_support.py`
+- Modify: `Dashboard/rb3dashboard/runtime/web/api.py`
+
+**Interfaces:**
+- Consumes: Task 1's `reliability_support`.
+- Produces: nothing new in config. This is a bug fix, not a setting. Resist making the detection interval configurable — `poll_interval` already governs it.
+
+**Evidence environment:** the development workstation. Re-measure on Linux in CI before trusting the numbers cross-platform.
+
+**Second-cost allowance:** 6s. These tests replace roughly 45s of wall-clock waiting that the original Tasks 2 and 3 would have spent.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `Dashboard/tests/test_reliability_streams.py`:
+
+```python
+class DepartedClientTests(unittest.TestCase):
+    """A browser tab that goes away must stop costing a thread promptly."""
+
+    def test_a_closed_stream_is_reaped_promptly(self):
+        """15s was the heartbeat noticing, not the server noticing."""
+        application, base = serve_application(self)
+        with Sampler() as sampler:
+            client = open_stream(base)
+            client.close()
+            reaped = sampler.wait_for_baseline(timeout=5.0)
+
+        self.assertTrue(reaped,
+                        "a closed stream still held its thread after 5s")
+
+    def test_a_stalled_reader_on_an_idle_server_is_dropped(self):
+        """Measured before this task: never dropped, not dropped at 30s."""
+        application, base = serve_application(self)
+        client = open_stream(base)
+        self.addCleanup(client.close)
+        client.stop_reading()
+        client.shutdown_write()
+
+        self.assertTrue(client.wait_until_dropped(timeout=5.0),
+                        "an idle server held a departed reader indefinitely")
+
+    def test_a_reconnect_storm_leaves_no_threads_behind(self):
+        """100 cycles measured +100 threads before this task."""
+        application, base = serve_application(self)
+        with Sampler() as sampler:
+            for _ in range(100):
+                open_stream(base).close()
+            reaped = sampler.wait_for_baseline(timeout=10.0)
+
+        self.assertTrue(reaped, "the storm leaked threads")
+```
+
+Two additions to Task 1's `reliability_support` are needed here:
+
+- `Sampler.wait_for_baseline(timeout)` — poll `threading.active_count()` until it returns to the baseline captured at `__enter__`; return `True` on success, `False` on timeout. **Poll to a deadline; never assert an instantaneous delta.** `ThreadingHTTPServer` with `daemon_threads` joins nothing, so thread count is a lagging indicator by design, and a fixed tolerance sampled at one moment is a race rather than a threshold. This replaces the thread-delta tolerance of 5 that the plan originally proposed for Task 4.
+- `StreamClient.shutdown_write()` — `socket.shutdown(SHUT_WR)`, leaving the socket half-closed and still open for reading. This is the abandoned tab: the peer is gone but the connection is not reset.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `cd Dashboard && python -m unittest tests.test_reliability_streams -v`
+
+Expected — predictions from measurement, not from reading the code:
+- `test_a_closed_stream_is_reaped_promptly` FAILS; the reap takes ~15s against a 5s timeout.
+- `test_a_stalled_reader_on_an_idle_server_is_dropped` FAILS; it is never dropped.
+- `test_a_reconnect_storm_leaves_no_threads_behind` FAILS; ~16s to reap.
+
+If any of them passes, stop and tell me. It means the measurement does not hold on your machine and this task needs re-grounding before any fix.
+
+- [ ] **Step 3: Implement detection**
+
+In `_stream`'s wait loop (`api.py:400-414`), after `state.wait_for_change` returns and before the heartbeat check:
+
+```python
+                if self._peer_departed():
+                    return None
+```
+
+And the helper. An SSE client sends nothing after its request, so anything readable is EOF or a reset — never real data:
+
+```python
+    def _peer_departed(self):
+        """True when the client has gone. An SSE peer never sends, so readable
+        means EOF or reset — and a half-closed socket stays readable, which is
+        exactly the abandoned-tab case the heartbeat could not see."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            if not readable:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
+```
+
+`MSG_PEEK` matters: without it a stray byte is consumed and the connection left in an odd state. It is available on Windows and POSIX alike. Import `select` and `socket` at module scope if they are not already there.
+
+- [ ] **Step 4: Run them to verify they pass**
+
+Run: `cd Dashboard && python -m unittest tests.test_reliability_streams -v`
+Expected: PASS, and fast — the reap should now be governed by `poll_interval`, not by `HEARTBEAT_SECONDS`.
+
+- [ ] **Step 5: Re-measure and record**
+
+Repeat all four scenarios from the table above and record the new numbers beside the old. State the new reap time explicitly: Task 3's cap is only safe if a slot comes back in well under a second.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `cd Dashboard && python -m unittest discover -s tests`
+Expected: OK. Report the runtime against the measured 83-99s band, not against a single remembered number.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add Dashboard/tests/test_reliability_streams.py Dashboard/tests/reliability_support.py Dashboard/rb3dashboard/runtime/web/api.py
+git commit -m "fix: notice an event-stream client that has gone away"
+```
+
+---
+
+### Task 3: Slow and abandoned event stream clients
+
+Task 2 made the server notice a client that *left*. This task bounds what happens when clients *stay*: **nothing caps concurrent streams**, and the write deadline is accidental — never chosen, never logged, and (as Task 2 measured) only ever fires under load.
+
+**Do not start this task until Task 2 is green.** A cap whose slots take fifteen seconds to come back is a slow denial of service, and `test_a_closed_stream_frees_its_slot` below cannot pass without it.
 
 **Files:**
 - Modify: `Dashboard/tests/test_reliability_streams.py`
@@ -216,16 +363,6 @@ Add to `Dashboard/tests/test_reliability_streams.py`:
 ```python
 class AbandonedStreamTests(unittest.TestCase):
     """A tab left open on a sleeping phone must not cost the server forever."""
-
-    def test_a_stalled_reader_is_dropped(self):
-        """The deadline exists; this pins it so it cannot vanish in a refactor."""
-        application, base = serve_application(self, stream_write_timeout=2.0)
-        client = open_stream(base)
-        self.addCleanup(client.close)
-        client.stop_reading()
-
-        self.assertTrue(client.wait_until_dropped(timeout=15.0),
-                        "the server held a stalled stream open indefinitely")
 
     def test_streams_beyond_the_cap_are_refused_not_accepted(self):
         """Accepting a connection it cannot serve is worse than refusing it."""
@@ -274,7 +411,7 @@ class AbandonedStreamTests(unittest.TestCase):
 - [ ] **Step 3: Run them to verify they fail**
 
 Run: `cd Dashboard && python -m unittest discover -s tests -p "test_reliability_streams.py" -v`
-Expected: the cap tests FAIL (every stream is accepted). `test_a_stalled_reader_is_dropped` may already pass — that is expected and fine; it is a regression pin for behaviour that exists.
+Expected: all four FAIL, because no cap exists — confirmed by grep, see the measured table. None should pass at this point. If one does, stop and say so.
 
 - [ ] **Step 4: Add the settings**
 
@@ -292,13 +429,21 @@ In `Dashboard/rb3dashboard/runtime/config.py`, add to `_FIELDS`:
 
 Add validation to `_validate`: both must be greater than zero, with the message style the neighbouring rules use. Add them to `application_kwargs()`.
 
+**Then thread them through `server.py`, which this plan's first draft forgot entirely.** `ServerApplication.__init__` (`server.py:143-180`) does not accept these names, and its `WebService` construction (`server.py:271-275`) passes only host, port, token and log sink. Until both are changed, `serve_application(self, max_event_streams=2)` raises `TypeError` and the settings never reach the service. Add the parameters to `ServerApplication`, store them, and pass them to `WebService`.
+
 - [ ] **Step 5: Implement admission**
 
 The cap belongs where the streams are counted, not where they are served. In `Dashboard/rb3dashboard/runtime/web/service.py`, give the service a counter — a `threading.Semaphore(max_event_streams)` or an explicit count under a lock — and hand it to the handler class the same way `auth_token` and `heartbeat` are already passed.
 
 In `api.py`'s `_stream`, acquire a slot **before** sending the 200. On failure send a 503 with a JSON body saying the server is already serving its maximum number of streams and how many that is. Release the slot in a `finally` so every exit path frees it — an early return, a broken pipe, and a shutdown all count.
 
-Set the socket write deadline explicitly from `stream_write_timeout` rather than inheriting the handler's read timeout, and log once when it fires, at warning level, naming the client address. A deadline nobody can see firing is how this was invisible in the first place.
+Set `Retry-After` on the 503. A browser `EventSource` reconnects on its own and will hammer a saturated server without one; the neighbouring 429 path already sets it (`api.py:360-370`), so follow that. A small number of seconds is right — this is a household, not a public API.
+
+**Record, do not solve, the fairness question.** The cap is global, so one client can hold every slot and lock the dashboard out. Behind a token on a LAN that is an acceptable trade, but it is a decision, so write it down in `docs/deployment.md` beside the setting rather than leaving it implied.
+
+Set the socket write deadline explicitly from `stream_write_timeout` rather than inheriting the handler's read timeout, and log when it fires, at warning level, naming the client address. A deadline nobody can see firing is how this was invisible in the first place.
+
+**Rate-limit that log.** "Once" per handler is once per connection, and a storm of stalled clients then produces a storm of warnings — a log flood dressed up as observability. Log at most once per client address per minute, or count and summarise. Say which you chose.
 
 - [ ] **Step 6: Run them to verify they pass**
 
@@ -321,13 +466,13 @@ Expected: OK. Five tests added, plus config tests for the two new settings. Repo
 - [ ] **Step 10: Commit**
 
 ```bash
-git add Dashboard/tests/test_reliability_streams.py Dashboard/rb3dashboard/runtime/web/service.py Dashboard/rb3dashboard/runtime/web/api.py Dashboard/rb3dashboard/runtime/config.py Dashboard/tests/test_runtime_config.py docs/deployment.md
+git add Dashboard/tests/test_reliability_streams.py Dashboard/rb3dashboard/runtime/web/service.py Dashboard/rb3dashboard/runtime/web/api.py Dashboard/rb3dashboard/runtime/config.py Dashboard/rb3dashboard/runtime/server.py Dashboard/tests/test_runtime_config.py docs/deployment.md
 git commit -m "feat: bound concurrent event streams"
 ```
 
 ---
 
-### Task 3: Reconnect storms and queue saturation
+### Task 4: Reconnect storms and queue saturation
 
 A browser reconnects its `EventSource` automatically. A laptop waking from sleep, or a flaky wifi link, produces a burst of connect-disconnect cycles. Separately, a console sending faster than the dispatcher drains is what the bounded queue exists for — this task proves the bound holds and the counters tell the truth.
 
@@ -336,7 +481,7 @@ A browser reconnects its `EventSource` automatically. A laptop waking from sleep
 - Create: `Dashboard/tests/test_reliability_queues.py`
 
 **Interfaces:**
-- Consumes: Task 1's support, Task 2's cap.
+- Consumes: Task 1's support, Task 2's disconnect detection, Task 3's cap.
 - Produces: nothing new. This task is measurement and assertion; any fix it triggers gets its own commit.
 
 **Evidence environment:** the development workstation.
@@ -349,19 +494,6 @@ Add to `Dashboard/tests/test_reliability_streams.py`:
 class ReconnectStormTests(unittest.TestCase):
     """EventSource reconnects on its own. A sleeping laptop produces bursts."""
 
-    def test_repeated_connect_and_disconnect_leaves_no_threads_behind(self):
-        application, base = serve_application(self)
-        # Warm up first: the first connection creates machinery that would
-        # otherwise be counted as a leak.
-        open_stream(base).close()
-
-        with Sampler() as sample:
-            for _ in range(100):
-                open_stream(base).close()
-
-        self.assertLessEqual(sample.threads_delta, 5,
-                             "threads accumulated across 100 reconnects")
-
     def test_a_storm_leaves_the_server_answering(self):
         application, base = serve_application(self)
         for _ in range(100):
@@ -372,13 +504,15 @@ class ReconnectStormTests(unittest.TestCase):
         self.assertEqual(status, 200)
 ```
 
-The tolerance of 5 is deliberate slack for daemon threads that have not yet been reaped — `ThreadingHTTPServer` joins nothing. **If the measurement shows a real leak, that is a finding: report it, and the fix becomes its own task.** Do not raise the tolerance to make the test pass.
+**The thread-leak half of this task moved to Task 2**, where it is a failing test against a measured defect rather than a tolerance invented here. The original draft asserted `threads_delta <= 5` after 100 reconnects; the measured delta was **+100**, so that test could never have passed, and no tolerance would have made it honest. What remains here is the part Task 2 does not cover: that a server which has just weathered a storm still answers.
+
+Note the interaction with Task 3's cap: 100 *sequential* cycles never exceed a cap of 32, because each connection closes before the next opens — but only once Task 2 makes the close prompt. Before Task 2, the 33rd connection of this loop receives a 503.
 
 - [ ] **Step 2: Run it and record what happens**
 
 Run: `cd Dashboard && python -m unittest discover -s tests -p "test_reliability_streams.py" -v`
 
-Record the actual `threads_delta` in your report whether it passes or fails.
+Record the result in your report whether it passes or fails. Thread accounting for the storm belongs in Task 2's report, not here.
 
 - [ ] **Step 3: Write the queue saturation tests**
 
@@ -417,7 +551,7 @@ git commit -m "test: cover reconnect storms and queue saturation"
 
 ---
 
-### Task 4: Device expiry and recovery
+### Task 5: Device expiry and recovery
 
 A Pico loses wifi, or is unplugged mid-session, or comes back after a router reboot. The state machine is offline-after then forget-after, driven by the maintenance loop. This task proves each transition and, more importantly, that a returning device is recognised rather than duplicated.
 
@@ -464,7 +598,7 @@ git commit -m "test: cover device expiry, forgetting, and return"
 
 ---
 
-### Task 5: Process termination and data integrity
+### Task 6: Process termination and data integrity
 
 The NAS reboots. The container is replaced. Someone pulls the plug mid-song. What matters is that the SQLite history is intact afterwards, and that a clean stop is actually clean.
 
@@ -509,7 +643,7 @@ git commit -m "test: cover termination and history integrity"
 
 ---
 
-### Task 6: Unavailable integrations
+### Task 7: Unavailable integrations
 
 Home Assistant goes down. The broker restarts. The webhook URL is wrong. None of these are reasons for the lights to stop working — the spec is explicit that Home Assistant is an integration, not the reason this process exists.
 
@@ -553,7 +687,7 @@ git commit -m "test: survive unavailable integrations"
 
 ---
 
-### Task 7: Health and readiness, assessed rather than assumed
+### Task 8: Health and readiness, assessed rather than assumed
 
 `/api/health` reports `status`, `running`, `owns_discovery` and `version`, without a token. `/api/integrations` carries the counters behind the token. Whether that split is right for a container health check and for diagnosing a misbehaving deployment is a question this task answers **with the evidence Tasks 2-6 produced**, not with an opinion.
 
@@ -617,7 +751,7 @@ Adjust the message if your conclusion differs.
 
 ---
 
-### Task 8: Credential handling
+### Task 9: Credential handling
 
 The spec asks for this explicitly and Section 1 did not cover it. Parts are already sound and need only pinning; two open questions need answers rather than silence.
 
@@ -626,7 +760,7 @@ The spec asks for this explicitly and Section 1 did not cover it. Parts are alre
 - Possibly modify: `Dashboard/tools/servercheck/probe.py`
 
 **Interfaces:**
-- Produces: possibly a `check_no_token_in_logs` probe check, if Task 8 finds one worth pinning.
+- Produces: possibly a `check_no_token_in_logs` probe check, if Task 9 finds one worth pinning.
 
 **Evidence environment:** the development workstation.
 
@@ -662,7 +796,7 @@ git commit -m "test: keep the token out of logs and error bodies"
 
 ---
 
-### Task 9: Record the measurements and the gaps
+### Task 10: Record the measurements and the gaps
 
 **Files:**
 - Modify: this plan
@@ -678,7 +812,7 @@ One line each: what broke, how it was found, the commit that fixed it.
 
 - [ ] **Step 3: Update the Stage 3 gap ledger**
 
-In `docs/superpowers/plans/2026-09-13-stage-three.md`, add what Section 3 leaves unverified. At minimum, carried from earlier sections:
+In `docs/superpowers/plans/2026-09-13-stage-three.md`, add what Section 3 leaves unverified. **Create the ledger section if it is not there** — Section 2 Task 5 never ran, so it may never have been written. At minimum, carried from earlier sections:
 
 - A real Mosquitto restart is CI-only; no broker has been contacted from this workstation.
 - SIGTERM's clean exit is POSIX-only and unverified here.
@@ -697,15 +831,16 @@ git commit -m "docs: record Stage 3 Section 3 measurements and gaps"
 
 ## Section 3 completion criteria
 
-1. `cd Dashboard && python -m unittest discover -s tests` reports OK, **under 150 seconds**, with no failures.
+1. `cd Dashboard && python -m unittest discover -s tests` reports OK, **under 150 seconds**, with no failures — and every task has reported its own second-cost against its stated allowance.
 2. Every scenario in the spec's Section 3 has either a passing test or a recorded reason it cannot be tested here: slow and abandoned streams, reconnect storms, queue saturation, unavailable integrations, broker restart, device expiry and recovery, process termination.
-3. Concurrent event streams are bounded, the bound is configurable, exceeding it returns 503 rather than an accepted connection, and a closed stream frees its slot.
-4. The stream write deadline is a named setting, not a side effect of the keep-alive timeout, and it logs when it fires.
-5. Peak RSS, thread count and response times are recorded for the resting server and under each load, with the platform stated.
-6. Every defect found is fixed with a regression test, or recorded in the gap ledger with the reason it was not.
-7. The token appears in no log line and no error body, proven by test.
-8. The health-versus-diagnostics question is answered in writing, and whatever was implemented follows from that answer.
-9. `git status` clean; nothing pushed.
+3. A departed client is noticed within `poll_interval` rather than within `HEARTBEAT_SECONDS`, proven by a test that failed before Task 2 and passes after, for both a closed socket and a half-closed one.
+4. Concurrent event streams are bounded, the bound is configurable, exceeding it returns 503 with a `Retry-After` rather than an accepted connection, and a closed stream frees its slot.
+5. The stream write deadline is a named setting, not a side effect of the keep-alive timeout, and it logs when it fires, rate-limited.
+6. Peak RSS, thread count and response times are recorded for the resting server and under each load, with the platform stated.
+7. Every defect found is fixed with a regression test, or recorded in the gap ledger with the reason it was not. **A measurement recorded in place of an assertion must appear in Task 10's table with its number and name its reason class — platform, environment, or genuinely non-deterministic.** "Recorded in the ledger" without one of those is not a closed task.
+8. The token appears in no log line and no error body, proven by test.
+9. The health-versus-diagnostics question is answered in writing, and whatever was implemented follows from that answer.
+10. `git status` clean; nothing pushed.
 
 ## What Section 3 will not prove
 
