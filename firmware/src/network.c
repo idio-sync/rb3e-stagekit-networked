@@ -12,6 +12,9 @@
 #include "lwip/udp.h"
 #include "lwip/pbuf.h"
 #include "lwip/ip_addr.h"
+#include "lwip/dhcp.h"
+#include "lwip/autoip.h"
+#include "lwip/prot/autoip.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -177,11 +180,36 @@ static void wifi_link_callback(struct netif *netif)
     }
 }
 
+static const char* ip_source(struct netif *netif)
+{
+    if (dhcp_supplied_address(netif)) {
+        return "dhcp";
+    }
+    if (autoip_supplied_address(netif)) {
+        return "link-local";
+    }
+    return "none";
+}
+
 static void wifi_status_callback(struct netif *netif)
 {
+    // lwIP 2.2.1 never stops AutoIP when DHCP binds. If a lease arrives
+    // while AutoIP is still probing, its ACD finishes later and
+    // autoip_bind() overwrites the DHCP address with 169.254.x.x. This
+    // runs inside netif_set_addr() from dhcp_bind(), after the state is
+    // BOUND, so stop AutoIP and its ACD here and let DHCP's address win.
+    // AutoIP restarts by itself if DHCP later falls back to DISCOVER.
+    struct autoip *autoip = netif_autoip_data(netif);
+    if (dhcp_supplied_address(netif) && autoip != NULL &&
+        autoip->state != AUTOIP_STATE_OFF) {
+        printf("Network: DHCP lease arrived, stopping link-local fallback\n");
+        autoip_stop(netif);
+        acd_stop(&autoip->acd);
+    }
+
     if (netif_is_up(netif)) {
-        printf("Network: Interface up, IP: %s\n",
-               ip4addr_ntoa(netif_ip4_addr(netif)));
+        printf("Network: Interface up, IP: %s (%s)\n",
+               ip4addr_ntoa(netif_ip4_addr(netif)), ip_source(netif));
     } else {
         printf("Network: Interface down\n");
     }
@@ -272,7 +300,9 @@ bool network_connect_wifi(void)
     // Poll for connection with watchdog updates
     // This prevents the watchdog from firing during long connects
     printf("Network: Waiting for connection...\n");
+    absolute_time_t start = get_absolute_time();
     absolute_time_t timeout = make_timeout_time_ms(WIFI_CONNECT_TIMEOUT_MS);
+    int64_t link_up_ms = -1;
     int last_status = -99;
     int poll_count = 0;
 
@@ -297,6 +327,9 @@ bool network_connect_wifi(void)
             printf("Network: Status changed to %d\n", status);
             last_status = status;
         }
+        if (link_up_ms < 0 && (status == CYW43_LINK_NOIP || status == CYW43_LINK_UP)) {
+            link_up_ms = absolute_time_diff_us(start, get_absolute_time()) / 1000;
+        }
 
         // Print periodic status every 5 seconds (500 iterations * 10ms = 5s)
         if (++poll_count % 500 == 0) {
@@ -307,9 +340,13 @@ bool network_connect_wifi(void)
             // Connected successfully with IP!
             wifi_fail_reason = WIFI_FAIL_NONE;
             cyw43_wifi_get_rssi(&cyw43_state, &net_stats.wifi_rssi);
-            printf("Network: Connected! IP=%s RSSI=%d dBm\n",
+            printf("Network: Connected! IP=%s (%s) RSSI=%d dBm\n",
                    ip4addr_ntoa(netif_ip4_addr(netif_default)),
-                   net_stats.wifi_rssi);
+                   ip_source(netif_default), net_stats.wifi_rssi);
+            printf("Network: Link up after %ld ms, address after %ld ms (timeout %d ms)\n",
+                   (long)link_up_ms,
+                   (long)(absolute_time_diff_us(start, get_absolute_time()) / 1000),
+                   WIFI_CONNECT_TIMEOUT_MS);
             net_state = NETWORK_STATE_CONNECTED;
             return true;
         } else if (status == CYW43_LINK_NONET) {
@@ -480,11 +517,13 @@ void network_send_telemetry(bool usb_connected)
         "\"name\":\"Pico %02x:%02x\","
         "\"usb_status\":\"%s\","
         "\"wifi_signal\":%d,"
+        "\"ip_source\":\"%s\","
         "\"uptime\":%lu}",
         mac_str,
         mac_address[4], mac_address[5],
         usb_connected ? "Connected" : "Disconnected",
         net_stats.wifi_rssi,
+        network_get_ip_source(),
         to_ms_since_boot(get_absolute_time()) / 1000
     );
 
@@ -567,6 +606,14 @@ char* network_get_ip_string(char *buffer, size_t len)
         snprintf(buffer, len, "0.0.0.0");
     }
     return buffer;
+}
+
+const char* network_get_ip_source(void)
+{
+    if (netif_default != NULL && netif_is_up(netif_default)) {
+        return ip_source(netif_default);
+    }
+    return "none";
 }
 
 int32_t network_get_rssi(void)

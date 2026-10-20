@@ -129,6 +129,8 @@ Download the pre-built firmware from the [Releases page](../../releases/latest):
 4.  Enter the WiFi SSID and password of the network you want the Stage Kit device to connect to.
 5.  Click **Save**. The Pico will reboot and connect to your WiFi network.
 
+**Playing on a Steam Deck with band3?** The kits can join the Wi-Fi hotspot band3 runs on the Deck. Enter the hotspot's SSID and password in step 4. The hotspot has no DHCP server, so the Pico gives itself a link-local address (`169.254.x.x`) about 10 seconds after joining. That is expected, and band3 reaches the kits at that address.
+
 #### Step 3: Connect Hardware
 1.  Plug the Stage Kit into the Pico using the OTG cable.
 2.  Power on the Pico and it will start listening for RB3E network events on your network.
@@ -366,6 +368,11 @@ statistics without time fields retain their play counts and start time totals at
 * It cannot connect to WiFi. Re-flash the firmware to enter setup mode and reconfigure credentials.
 * Ensure the network is 2.4GHz (Pico W does not support 5GHz).
 * Check that the SSID and password were entered correctly during setup.
+
+**Pico shows a `169.254.x.x` address?**
+* It found no DHCP server, so it gave itself a link-local address. That is normal on band3's Steam Deck hotspot, and the kits work there.
+* On a home network it means the router did not answer DHCP. Check that the router's DHCP server is on. The Pico keeps asking (once a minute after the first few tries) and switches to the router's address when it answers.
+* The serial log says where the address came from: `Connected! IP=... (dhcp)` or `(link-local)`. Telemetry reports the same in `ip_source`.
 
 **Can't connect to the StageKit-Setup network?**
 * The AP password is **`rockband`**.

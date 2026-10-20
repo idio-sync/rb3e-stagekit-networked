@@ -300,7 +300,7 @@ int main(void)
     if (wifi_is_connected) {
         char ip_str[16];
         network_get_ip_string(ip_str, sizeof(ip_str));
-        printf("SUCCESS! IP address: %s\n", ip_str);
+        printf("SUCCESS! IP address: %s (%s)\n", ip_str, network_get_ip_source());
         printf("RSSI: %d dBm\n", network_get_rssi());
         
         // Victory blink: 2 quick blinks

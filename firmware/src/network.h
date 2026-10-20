@@ -21,7 +21,10 @@ extern "C" {
 //--------------------------------------------------------------------
 
 #define TELEMETRY_INTERVAL_MS   5000    // Send telemetry every 5 seconds
-#define WIFI_CONNECT_TIMEOUT_MS 15000   // WiFi connection timeout (must be < watchdog * 2)
+// WiFi connection timeout (must be < watchdog * 2). Covers scan, join
+// and getting an address; a link-local address can take up to 10.8 s
+// after link up (see LWIP_DHCP_AUTOIP_COOP_TRIES in lwipopts.h).
+#define WIFI_CONNECT_TIMEOUT_MS 15500
 #define WIFI_RETRY_DELAY_MS     3000    // Delay between connection retries
 #define WIFI_MAX_RETRIES        3       // Max retries before giving up on boot
 
@@ -149,6 +152,13 @@ const network_stats_t* network_get_stats(void);
  * @return Pointer to buffer
  */
 char* network_get_ip_string(char *buffer, size_t len);
+
+/**
+ * Get where the WiFi IP address came from
+ *
+ * @return "dhcp", "link-local" (RFC 3927 169.254.x.x), or "none"
+ */
+const char* network_get_ip_source(void);
 
 /**
  * Get WiFi RSSI (signal strength)
